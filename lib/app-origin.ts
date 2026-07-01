@@ -13,6 +13,20 @@ export function resolveRequestOrigin(request: Request): string {
     return resolveRequestAwareOrigin(originFromRequestHeaders(request) ?? safeRequestUrlOrigin(request.url))
 }
 
+/**
+ * The origin the browser actually used for this request (forwarded host/proto,
+ * falling back to the request URL), WITHOUT the "prefer configured public
+ * origin" override that {@link resolveRequestOrigin} applies. Use this when a
+ * value must match the document's real same-origin — e.g. a path-scoped
+ * `connect-src` in a Content-Security-Policy — so LAN / Tailscale-funnel /
+ * public access all resolve to the origin the client is on. Mismatches here
+ * fail closed (a request is blocked), never open, so a spoofed Host header can
+ * only break the app for its own viewer, not widen access.
+ */
+export function resolveBrowserOrigin(request: Request): string {
+    return originFromRequestHeaders(request) ?? safeRequestUrlOrigin(request.url) ?? DEFAULT_APP_ORIGIN
+}
+
 export function resolveAppOrigin(candidate?: string | null): string {
     for (const key of PUBLIC_ORIGIN_ENV_KEYS) {
         const origin = normalizeOrigin(getEnvValue(key), false)

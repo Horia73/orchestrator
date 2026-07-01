@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { Readable } from 'stream'
 
+import { resolveBrowserOrigin } from '@/lib/app-origin'
 import { getPublishedAppShare } from '@/lib/published-apps/shares'
 import { runWithProfileContext } from '@/lib/profiles/context'
 import { getCurrentProfileFromRequest } from '@/lib/profiles/server'
@@ -68,39 +69,57 @@ async function servePublishedApp(
   const params = await context.params
   const slug = params.slug
   if (!isValidSlug(slug)) return textResponse('Invalid published app slug.', 400)
+  const requestedPath = params.path ?? []
+  // The origin the browser is actually on (duckdns / LAN / Tailscale funnel), so
+  // the app's scoped CSP connect-src matches its own same-origin asset fetches.
+  const browserOrigin = resolveBrowserOrigin(request)
 
   const current = getCurrentProfileFromRequest(request)
+
+  // Authenticated viewer: serve their own copy first (covers private, un-shared
+  // apps). If they don't have a copy, fall through to shared-owner resolution so
+  // a published+shared app opened under a DIFFERENT profile still works instead
+  // of 404ing against the wrong per-profile workspace.
   if (current) {
-    return runWithProfileContext(
+    const own = runWithProfileContext(
       { profileId: current.profile.id, role: current.profile.role },
-      () => servePublishedAppFromProfile(current.profile.id, slug, params.path ?? [], headOnly, false),
+      () => tryServePublishedAppFromProfile(current.profile.id, slug, requestedPath, headOnly, false, browserOrigin),
     )
+    if (own) return own
   }
 
+  // Shared-owner resolution: covers both the public (no-cookie) funnel path and
+  // an authenticated viewer who is not the app's owner. getPublishedAppShare
+  // only returns ENABLED shares, so this never exposes a private, un-shared app.
   const share = getPublishedAppShare(slug)
   if (!share) {
-    return textResponse('Profile required.', 401)
+    return current
+      ? textResponse('Published app not found.', 404)
+      : textResponse('Profile required.', 401)
   }
   const owner = getProfile(share.profileId)
   if (!owner || owner.disabledAt) {
     return textResponse('Published app not found.', 404)
   }
 
-  return runWithProfileContext({ profileId: owner.id, role: owner.role }, () => {
-    return servePublishedAppFromProfile(owner.id, slug, params.path ?? [], headOnly, true)
-  })
+  const served = runWithProfileContext(
+    { profileId: owner.id, role: owner.role },
+    () => tryServePublishedAppFromProfile(owner.id, slug, requestedPath, headOnly, true, browserOrigin),
+  )
+  return served ?? textResponse('Published app not found.', 404)
 }
 
-function servePublishedAppFromProfile(
+function tryServePublishedAppFromProfile(
   profileId: string,
   slug: string,
   requestedPath: string[],
   headOnly: boolean,
   publicShare: boolean,
-): Response {
+  browserOrigin: string,
+): Response | null {
   const root = path.join(runtimePathsForProfile(profileId).agentWorkspaceDir, 'published-apps', slug)
   const resolved = resolvePublishedFile(root, requestedPath)
-  if (!resolved) return textResponse('Published app not found.', 404)
+  if (!resolved) return null
 
   const stat = fs.statSync(/* turbopackIgnore: true */ resolved.filePath)
   const ext = path.extname(resolved.filePath).toLowerCase()
@@ -114,7 +133,7 @@ function servePublishedAppFromProfile(
   })
   if (publicShare) headers.set('X-Orchestrator-Published-App-Share', 'tailscale-funnel')
   if (ext === '.html' || ext === '.htm') {
-    headers.set('Content-Security-Policy', publishedAppCsp())
+    headers.set('Content-Security-Policy', publishedAppCsp(browserOrigin, slug))
   }
 
   const body = headOnly
@@ -164,14 +183,23 @@ function resolveExistingFile(rootReal: string, candidate: string): string | null
   return null
 }
 
-function publishedAppCsp(): string {
+function publishedAppCsp(browserOrigin: string, slug: string): string {
+  // Let a self-contained static app fetch ONLY its own vendored assets — WASM
+  // cores, OCR/model/language data, JSON — from its own published path, plus
+  // blob:/data:. Scoping connect-src to `<origin>/published-apps/<slug>/`
+  // (instead of 'self') means the app can never reach the Orchestrator API or
+  // another profile's app with the viewer's session cookie. A wrong/spoofed
+  // origin only fails closed (fetch blocked), so this cannot widen access.
+  // 'wasm-unsafe-eval' permits WebAssembly.compile/instantiate (tesseract.js,
+  // sql.js, pdf.js, onnxruntime-web, duckdb-wasm, …) without enabling eval().
+  const selfAssets = `${browserOrigin}/published-apps/${slug}/`
   return [
     "default-src 'self' data: blob:",
-    "script-src 'self' 'unsafe-inline' blob:",
+    "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:",
     "style-src 'self' 'unsafe-inline' data: https://fonts.googleapis.com",
     "img-src 'self' data: blob: https: http:",
     "font-src 'self' data: https://fonts.gstatic.com",
-    "connect-src 'none'",
+    `connect-src ${selfAssets} blob: data:`,
     "media-src 'self' data: blob: https: http:",
     "worker-src 'self' blob:",
     "manifest-src 'self'",
