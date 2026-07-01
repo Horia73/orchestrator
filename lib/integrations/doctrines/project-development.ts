@@ -42,6 +42,8 @@ Runtime topology matters. In Docker installs, Orchestrator usually runs from \`/
 Use \`npm run project-run:run -- status|publish-static|commit|rebase|push|cleanup\` for explicit run actions. \`start|stop|restart|logs|preview\` are only for runs that were explicitly prepared with managed preview metadata, not the default standalone-project path. Do not cleanup a run until you have either published/pushed/deployed what the user needs or confirmed the run can be discarded.
 
 When calling \`delegate_to\` for coder, pass the returned \`repoDir\` as \`cwd\` so the CLI process starts inside the isolated project repo.
+
+Capability walls. The project-run helpers run via the shell. If the active profile cannot run them — member profiles have no shell, and some steps are admin-only — STOP and tell the user plainly that this needs an admin profile (or that an admin must run the build/publish), then hand off cleanly. Do NOT read Orchestrator's own source code to reverse-engineer the flow, and do NOT fabricate a workaround (serving an app from \`files/\`, hand-rolling a static server, copying build output around by hand, or publishing under a different profile without saying so). Surfacing the blocker is the correct outcome; improvising around a permission or capability boundary is not.
 </project_development_policy>
 
 <coder_handoff_policy>
