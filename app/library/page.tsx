@@ -34,9 +34,8 @@ import { useCurrentProfile } from "@/components/profiles/use-profiles"
 /**
  * /library — single hub for all "things you've generated" across the app.
  *
- * Tabs along the top let you switch between Workouts (live, fully wired),
- * Recipes and Maps (placeholders until those domains ship history backends).
- * Adding a new tab later is a one-line addition.
+ * Tabs along the top start with Artifacts, then domain-specific generated
+ * outputs and attachment libraries. Adding a new tab later is a one-line addition.
  *
  * The active tab is mirrored to the URL via `?tab=workouts`, so deep
  * links work (sidebar can link to specific tabs; bookmarks survive).
@@ -63,10 +62,10 @@ type TabDefinition = {
 }
 
 const TAB_DEFS: TabDefinition[] = [
+  { key: "artifacts", label: "Artifacts", icon: Shapes },
   { key: "workouts", label: "Workouts", icon: Dumbbell },
   { key: "recipes", label: "Recipes", icon: ChefHat },
   { key: "maps", label: "Maps", icon: MapPinned },
-  { key: "artifacts", label: "Artifacts", icon: Shapes },
   { key: "places", label: "Places", icon: LocateFixed },
   { key: "media", label: "Media", icon: ImageIcon },
   { key: "audio", label: "Audio", icon: Music },
@@ -273,6 +272,14 @@ function LibraryView() {
           )}
         >
           <LibraryTabPanel
+            value="artifacts"
+            active={displayedForRender}
+            mounted={mountedTabs.has("artifacts")}
+          >
+            <ArtifactsTab />
+          </LibraryTabPanel>
+
+          <LibraryTabPanel
             value="workouts"
             active={displayedForRender}
             mounted={mountedTabs.has("workouts")}
@@ -294,14 +301,6 @@ function LibraryView() {
             mounted={mountedTabs.has("maps")}
           >
             <MapsTab />
-          </LibraryTabPanel>
-
-          <LibraryTabPanel
-            value="artifacts"
-            active={displayedForRender}
-            mounted={mountedTabs.has("artifacts")}
-          >
-            <ArtifactsTab />
           </LibraryTabPanel>
 
           <LibraryTabPanel
