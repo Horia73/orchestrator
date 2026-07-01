@@ -115,6 +115,7 @@ export function getControlDb(): Database.Database {
   ensureDefaultAdminProfile(db)
   migrateLegacyMemberProfileDefaults(db)
   migrateMemberBasicSettingsAccess(db)
+  restoreMemberApiKeySharingAfterHaDecouple(db)
   return db
 }
 
@@ -586,6 +587,12 @@ function initializeControlSchema(database: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_profile_webhook_slugs_profile
       ON profile_webhook_slugs(profileId, updatedAt DESC);
+
+    CREATE TABLE IF NOT EXISTS control_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updatedAt INTEGER NOT NULL
+    );
   `)
 }
 
@@ -620,6 +627,53 @@ function ensureDefaultAdminProfile(database: Database.Database): void {
       now,
       now
     )
+}
+
+// Home Assistant credentials no longer ride the shared provider-key inheritance
+// (they moved to a per-profile private store), so the `allowedProviderApiKeys`
+// wildcard is safe again. Restore full admin API-key sharing (`["*"]`) for
+// member profiles that were narrowed by the interim HA-leak mitigation. Runs
+// exactly once (guarded by a control_meta marker) so it never clobbers an
+// intentional narrowing an admin sets later.
+function restoreMemberApiKeySharingAfterHaDecouple(
+  database: Database.Database
+): void {
+  const MARKER = "ha_env_decouple_restore_sharing_v1"
+  const already = database
+    .prepare(`SELECT 1 FROM control_meta WHERE key = ?`)
+    .get(MARKER)
+  if (already) return
+
+  const rows = database
+    .prepare(`SELECT id, permissions FROM profiles WHERE role = 'member'`)
+    .all() as Array<{ id: string; permissions: string }>
+  const update = database.prepare(
+    `UPDATE profiles SET permissions = ?, updatedAt = ? WHERE id = ?`
+  )
+  const now = Date.now()
+  for (const row of rows) {
+    let perms: Record<string, unknown>
+    try {
+      const parsed = row.permissions ? JSON.parse(row.permissions) : null
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue
+      perms = parsed as Record<string, unknown>
+    } catch {
+      continue
+    }
+    if (perms.inheritAdminApiKeys !== true) continue
+    const allowed = Array.isArray(perms.allowedProviderApiKeys)
+      ? (perms.allowedProviderApiKeys as unknown[])
+      : []
+    if (allowed.includes("*")) continue
+    perms.allowedProviderApiKeys = ["*"]
+    update.run(JSON.stringify(perms), now, row.id)
+  }
+
+  database
+    .prepare(
+      `INSERT OR IGNORE INTO control_meta (key, value, updatedAt) VALUES (?, ?, ?)`
+    )
+    .run(MARKER, "applied", now)
 }
 
 function migrateLegacyMemberProfileDefaults(database: Database.Database): void {

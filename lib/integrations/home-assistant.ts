@@ -3,7 +3,6 @@ import path from 'path'
 import { randomUUID } from 'crypto'
 import WebSocket from 'ws'
 
-import { getEnvValue } from '@/lib/config'
 import { activeRuntimePaths, runtimePathsForProfile } from '@/lib/runtime-paths'
 import { getActiveProfileId, runWithProfileContext } from '@/lib/profiles/context'
 import { getProfile } from '@/lib/profiles/store'
@@ -54,11 +53,6 @@ const READ_ONLY_CAPABILITIES = [
     'Automation, script, and scene inventory from entity states and activity logs',
     'Action mode with direct light/cover/climate/notify calls and confirmation-gated service calls for every other domain',
 ] as const
-
-interface EnvLookup {
-    value: string | null
-    key: string | null
-}
 
 interface HomeAssistantConfig {
     baseUrl: string | null
@@ -387,12 +381,11 @@ export async function saveHomeAssistantConfig(input: HomeAssistantConfigInput): 
     if (!token) throw new Error(`Missing Home Assistant token: ${formatEnvChoice(TOKEN_ENV_KEYS)}`)
 
     const normalizedUrl = normalizeBaseUrl(baseUrl)
-    patchWorkspaceEnv({
-        HOME_ASSISTANT_URL: normalizedUrl,
-        HOME_ASSISTANT_TOKEN: token,
-    })
-    process.env.HOME_ASSISTANT_URL = normalizedUrl
-    process.env.HOME_ASSISTANT_TOKEN = token
+    // Persist to the active profile's private store, and strip any legacy copies
+    // from the workspace env file so the credentials never ride the shared
+    // provider-key inheritance (allowedProviderApiKeys) into other profiles.
+    writeStoredHomeAssistantConfig(normalizedUrl, token)
+    patchWorkspaceEnv({})
     const connection = ensureHomeAssistantConnectionForProfile(getActiveProfileId())
     setPreferredIntegrationConnection({
         profileId: getActiveProfileId(),
@@ -405,8 +398,8 @@ export async function saveHomeAssistantConfig(input: HomeAssistantConfigInput): 
 }
 
 export async function disconnectHomeAssistant(): Promise<HomeAssistantIntegrationStatus> {
+    deleteStoredHomeAssistantConfig()
     patchWorkspaceEnv({})
-    for (const key of [...URL_ENV_KEYS, ...TOKEN_ENV_KEYS]) delete process.env[key]
     return getHomeAssistantIntegrationStatus(false)
 }
 
@@ -1377,31 +1370,114 @@ function actionAuditPathForProfile(profileId: string): string {
     return path.join(runtimePathsForProfile(profileId).privateStateDir, 'home-assistant-action-audit.jsonl')
 }
 
+interface StoredHomeAssistantConfig {
+    baseUrl?: string
+    token?: string
+}
+
+function homeAssistantConfigFilePath(): string {
+    return path.join(activeRuntimePaths().privateStateDir, 'auth', 'home-assistant.json')
+}
+
+function readStoredHomeAssistantConfig(): StoredHomeAssistantConfig | null {
+    try {
+        const filePath = homeAssistantConfigFilePath()
+        if (!fs.existsSync(filePath)) return null
+        const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as unknown
+        return isRecord(parsed) ? parsed as StoredHomeAssistantConfig : null
+    } catch {
+        return null
+    }
+}
+
+function writeStoredHomeAssistantConfig(baseUrl: string, token: string): void {
+    const filePath = homeAssistantConfigFilePath()
+    fs.mkdirSync(path.dirname(filePath), { recursive: true })
+    try { fs.chmodSync(path.dirname(filePath), 0o700) } catch { /* best effort */ }
+    const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`
+    fs.writeFileSync(tmp, `${JSON.stringify({ baseUrl, token }, null, 2)}\n`, { encoding: 'utf-8', mode: 0o600 })
+    try { fs.chmodSync(tmp, 0o600) } catch { /* best effort */ }
+    fs.renameSync(tmp, filePath)
+}
+
+function deleteStoredHomeAssistantConfig(): void {
+    try { fs.rmSync(homeAssistantConfigFilePath(), { force: true }) } catch { /* best effort */ }
+}
+
+function readOwnWorkspaceHomeAssistantEnv(): Record<string, string> {
+    try {
+        const filePath = activeRuntimePaths().workspaceEnvPath
+        if (!fs.existsSync(filePath)) return {}
+        // parseEnvAssignments already filters to accepted Home Assistant keys.
+        return parseEnvAssignments(fs.readFileSync(filePath, 'utf-8'))
+    } catch {
+        return {}
+    }
+}
+
+// Home Assistant credentials are a per-profile integration secret. They are
+// resolved ONLY from the active profile's private store (or, for backward
+// compatibility, the profile's OWN workspace env file) — never via the shared
+// getEnvValue() path. Reading them through getEnvValue would let member profiles
+// inherit the admin's Home Assistant URL/token through allowedProviderApiKeys
+// ("*"), which is a cross-profile credential leak. Resolution is owner-scoped
+// because callers wrap this in runWithProfileContext(ownerProfileId, ...).
 function getHomeAssistantEnvConfig(): HomeAssistantConfig {
-    const baseUrlLookup = firstEnv(URL_ENV_KEYS)
-    const tokenLookup = firstEnv(TOKEN_ENV_KEYS)
+    const stored = readStoredHomeAssistantConfig()
+    let rawBaseUrl = cleanConfigValue(stored?.baseUrl)
+    let rawToken = cleanConfigValue(stored?.token)
+    let baseUrlKey: string | null = rawBaseUrl ? 'home-assistant.json' : null
+    let tokenKey: string | null = rawToken ? 'home-assistant.json' : null
+
+    if (!rawBaseUrl || !rawToken) {
+        const own = readOwnWorkspaceHomeAssistantEnv()
+        if (!rawBaseUrl) {
+            for (const key of URL_ENV_KEYS) {
+                const value = cleanConfigValue(own[key])
+                if (value) { rawBaseUrl = value; baseUrlKey = key; break }
+            }
+        }
+        if (!rawToken) {
+            for (const key of TOKEN_ENV_KEYS) {
+                const value = cleanConfigValue(own[key])
+                if (value) { rawToken = value; tokenKey = key; break }
+            }
+        }
+        // Lazily migrate legacy own-env credentials into the private store and
+        // strip them from the workspace env file, so integration secrets stop
+        // living next to the shared provider keys.
+        if (!stored && rawBaseUrl && rawToken) {
+            try {
+                writeStoredHomeAssistantConfig(normalizeBaseUrl(rawBaseUrl), rawToken)
+                patchWorkspaceEnv({})
+                baseUrlKey = 'home-assistant.json'
+                tokenKey = 'home-assistant.json'
+            } catch {
+                // Best effort; fall through with the values already resolved.
+            }
+        }
+    }
+
     const missing: string[] = []
     let baseUrl: string | null = null
-
-    if (!baseUrlLookup.value) {
+    if (!rawBaseUrl) {
         missing.push(formatEnvChoice(URL_ENV_KEYS))
     } else {
         try {
-            baseUrl = normalizeBaseUrl(baseUrlLookup.value)
+            baseUrl = normalizeBaseUrl(rawBaseUrl)
         } catch (err) {
             missing.push(err instanceof Error ? err.message : 'valid HOME_ASSISTANT_URL')
         }
     }
-
-    if (!tokenLookup.value) missing.push(formatEnvChoice(TOKEN_ENV_KEYS))
+    if (!rawToken) missing.push(formatEnvChoice(TOKEN_ENV_KEYS))
 
     return {
         baseUrl,
-        token: tokenLookup.value,
+        token: rawToken || null,
         missing,
         envKeys: {
-            baseUrl: baseUrlLookup.key,
-            token: tokenLookup.key,
+            baseUrl: baseUrlKey,
+            token: tokenKey,
         },
     }
 }
@@ -1412,14 +1488,6 @@ function requireHomeAssistantConfig(): { baseUrl: string; token: string } {
         throw new Error(`Home Assistant is not configured. Missing: ${config.missing.join(', ')}`)
     }
     return { baseUrl: config.baseUrl, token: config.token }
-}
-
-function firstEnv(keys: string[]): EnvLookup {
-    for (const key of keys) {
-        const value = getEnvValue(key)
-        if (value) return { value, key }
-    }
-    return { value: null, key: null }
 }
 
 function firstDefinedEnvValue(values: Record<string, string>, keys: string[]): string {
