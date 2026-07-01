@@ -74,6 +74,7 @@ const CONVERSATION_ACTION_LONG_PRESS_MS = 520
 const CONVERSATION_ACTION_LONG_PRESS_MOVE_TOLERANCE = 12
 const CONVERSATION_ACTION_CLICK_SUPPRESSION_MS = 750
 const MOBILE_NAV_CLICK_SUPPRESSION_MS = 650
+const MOBILE_PROFILE_SWITCH_NAV_DELAY_MS = 220
 
 type WindowWithIdleCallback = Window & {
   requestIdleCallback?: (
@@ -898,9 +899,17 @@ export function AppSidebar() {
   )
 
   const handleSwitchProfile = React.useCallback(() => {
+    const href = `/profiles?next=${encodeURIComponent(pathname || "/")}`
     closeMobileSidebar()
-    router.push(`/profiles?next=${encodeURIComponent(pathname || "/")}`)
-  }, [closeMobileSidebar, pathname, router])
+    if (isMobile) {
+      window.setTimeout(
+        () => router.push(href),
+        MOBILE_PROFILE_SWITCH_NAV_DELAY_MS
+      )
+      return
+    }
+    router.push(href)
+  }, [closeMobileSidebar, isMobile, pathname, router])
 
   const handleProfileNotifications = React.useCallback(() => {
     setProfileMenuOpen(false)
@@ -1528,16 +1537,31 @@ export function AppSidebar() {
                   }}
                   className={`w-52 ${isMobile ? "z-[70] rounded-xl shadow-xl" : ""}`}
                 >
-                  <DropdownMenuItem onClick={handleSwitchProfile}>
+                  <DropdownMenuItem
+                    onSelect={(event) => {
+                      event.preventDefault()
+                      handleSwitchProfile()
+                    }}
+                  >
                     <UserRound className="mr-2 size-4" />
                     Switch profile
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={handleProfileNotifications}>
+                  <DropdownMenuItem
+                    onSelect={(event) => {
+                      event.preventDefault()
+                      handleProfileNotifications()
+                    }}
+                  >
                     <BellRing className="mr-2 size-4" />
                     Notifications
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={handleLogoutProfile}>
+                  <DropdownMenuItem
+                    onSelect={(event) => {
+                      event.preventDefault()
+                      handleLogoutProfile()
+                    }}
+                  >
                     <LogOut className="mr-2 size-4" />
                     Sign out
                   </DropdownMenuItem>
