@@ -61,6 +61,14 @@ try {
   assert.ok(fs.existsSync(metadataPath), 'published metadata exists')
   assert.match(fs.readFileSync(indexPath, 'utf-8'), /\/published-apps\/smoke-static\/assets\/app\.js/)
 
+  process.env.ORCHESTRATOR_STATE_DIR = path.resolve(result.path, '..', '..', '..')
+  const { listPublishedAppsForLibrary } = await import('@/lib/library/published-apps')
+  const publishedApps = listPublishedAppsForLibrary()
+  const libraryEntry = publishedApps.find((entry) => entry.slug === 'smoke-static')
+  assert.ok(libraryEntry, 'published app appears in Library index')
+  assert.equal(libraryEntry?.basePath, '/published-apps/smoke-static')
+  assert.equal(libraryEntry?.title, 'Smoke Static')
+
   console.log('smoke-project-publish: OK')
 } finally {
   fs.rmSync(tempRoot, { recursive: true, force: true })

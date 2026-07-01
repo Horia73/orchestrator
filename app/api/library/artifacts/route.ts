@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 
 import { listLatestArtifactsExcludingTypes } from '@/lib/artifacts/store'
 import { resolveAppForArtifact } from '@/lib/apps/store'
+import { listPublishedAppsForLibrary, type PublishedAppLibraryEntry } from '@/lib/library/published-apps'
 import { runWithRequestProfile } from "@/lib/profiles/server"
 
 /**
@@ -38,6 +39,8 @@ export interface LibraryArtifactRow {
     appSlug?: string
 }
 
+export type LibraryPublishedAppRow = PublishedAppLibraryEntry
+
 export async function GET(request: Request) {
   return runWithRequestProfile(request, async () => {
         const url = new URL(request.url)
@@ -59,6 +62,12 @@ export async function GET(request: Request) {
             appSlug: resolveAppForArtifact(r.id)?.slug,
         }))
 
-        return NextResponse.json({ artifacts, total: artifacts.length })
+        const publishedApps = listPublishedAppsForLibrary()
+
+        return NextResponse.json({
+            artifacts,
+            publishedApps,
+            total: artifacts.length,
+        })
   })
 }

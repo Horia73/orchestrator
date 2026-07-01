@@ -40,6 +40,16 @@ export function isPresentationFile(att: Pick<Attachment, "filename" | "mimeType"
     return m.includes("presentationml") || m === "application/vnd.ms-powerpoint"
 }
 
+/** HTML documents are previewable as pages, but still served as safe text from
+ *  the generic file API. Dedicated viewers decide whether to render a static
+ *  sandboxed page or show source. */
+export function isHtmlFile(att: Pick<Attachment, "filename" | "mimeType">): boolean {
+    const e = ext(att.filename)
+    if (e === "html" || e === "htm" || e === "xhtml") return true
+    const m = att.mimeType.toLowerCase()
+    return m === "text/html" || m === "application/xhtml+xml"
+}
+
 /** Extension → Shiki language id. Covers the source/markup/config files an
  *  assistant actually receives. Anything not listed renders as plain text. */
 const EXT_LANG: Record<string, string> = {
@@ -79,7 +89,7 @@ export function is3DModelFile(att: Pick<Attachment, "filename" | "mimeType">): b
 export function isCodeOrTextFile(att: Pick<Attachment, "filename" | "mimeType">): boolean {
     // Office OOXML containers are ZIPs whose MIME contains "xml" (openXMLformats)
     // — exclude them so they never fall into the code viewer as raw ZIP bytes.
-    if (isDocxFile(att) || isSpreadsheetFile(att) || isPresentationFile(att)) return false
+    if (isDocxFile(att) || isSpreadsheetFile(att) || isPresentationFile(att) || isHtmlFile(att)) return false
     const mime = att.mimeType.toLowerCase()
     if (mime.startsWith("text/")) return true
     if (mime.includes("json") || mime.includes("xml")) return true
@@ -93,6 +103,7 @@ export function isInAppPreviewable(att: Pick<Attachment, "filename" | "mimeType"
         isSpreadsheetFile(att) ||
         isPresentationFile(att) ||
         isDocxFile(att) ||
+        isHtmlFile(att) ||
         isSvgFile(att) ||
         is3DModelFile(att) ||
         isCodeOrTextFile(att)

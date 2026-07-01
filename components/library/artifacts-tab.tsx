@@ -8,6 +8,7 @@ import {
     FileCode2,
     FileText,
     Globe,
+    ExternalLink,
     Network,
     RefreshCw,
     Shapes,
@@ -19,11 +20,12 @@ import {
 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { appPath } from "@/lib/app-path"
 import { useAppEvent } from "@/hooks/use-app-events"
 import { LibraryEmptyState } from "./library-empty-state"
 import { LibrarySearchBar, matchesQuery } from "./search-bar"
 import { formatRelativeTime } from "./use-attachments"
-import type { LibraryArtifactRow } from "@/app/api/library/artifacts/route"
+import type { LibraryArtifactRow, LibraryPublishedAppRow } from "@/app/api/library/artifacts/route"
 import type { AppListItem } from "@/lib/apps/store"
 
 /**
@@ -34,6 +36,7 @@ import type { AppListItem } from "@/lib/apps/store"
 
 let cachedApps: AppListItem[] | null = null
 let cachedArtifacts: LibraryArtifactRow[] | null = null
+let cachedPublishedApps: LibraryPublishedAppRow[] | null = null
 
 const TYPE_META: Record<string, { label: string; icon: LucideIcon }> = {
     'text/markdown': { label: 'Markdown', icon: FileText },
@@ -56,6 +59,7 @@ function typeMeta(type: string): { label: string; icon: LucideIcon } {
 export function ArtifactsTab() {
     const [apps, setApps] = React.useState<AppListItem[] | null>(() => cachedApps)
     const [artifacts, setArtifacts] = React.useState<LibraryArtifactRow[] | null>(() => cachedArtifacts)
+    const [publishedApps, setPublishedApps] = React.useState<LibraryPublishedAppRow[] | null>(() => cachedPublishedApps)
     const [loading, setLoading] = React.useState(true)
     const [error, setError] = React.useState<string | null>(null)
     const [query, setQuery] = React.useState('')
@@ -72,11 +76,16 @@ export function ArtifactsTab() {
             if (!appsRes.ok) throw new Error(`HTTP ${appsRes.status}`)
             if (!artifactsRes.ok) throw new Error(`HTTP ${artifactsRes.status}`)
             const appsJson = await appsRes.json() as { apps: AppListItem[] }
-            const artifactsJson = await artifactsRes.json() as { artifacts: LibraryArtifactRow[] }
+            const artifactsJson = await artifactsRes.json() as {
+                artifacts: LibraryArtifactRow[]
+                publishedApps?: LibraryPublishedAppRow[]
+            }
             cachedApps = appsJson.apps
             cachedArtifacts = artifactsJson.artifacts
+            cachedPublishedApps = artifactsJson.publishedApps ?? []
             setApps(appsJson.apps)
             setArtifacts(artifactsJson.artifacts)
+            setPublishedApps(artifactsJson.publishedApps ?? [])
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e))
         } finally {
@@ -119,6 +128,12 @@ export function ArtifactsTab() {
         return apps.filter((a) => matchesQuery(query, a.title, a.slug, a.description))
     }, [apps, query])
 
+    const filteredPublishedApps = React.useMemo(() => {
+        if (!publishedApps) return null
+        if (!query) return publishedApps
+        return publishedApps.filter((a) => matchesQuery(query, a.title, a.slug, a.basePath, a.runId ?? ""))
+    }, [publishedApps, query])
+
     const filteredArtifacts = React.useMemo(() => {
         if (!artifacts) return null
         let rows = artifacts
@@ -127,14 +142,14 @@ export function ArtifactsTab() {
         return rows
     }, [artifacts, query, typeFilter])
 
-    const hasAnyData = (apps?.length ?? 0) > 0 || (artifacts?.length ?? 0) > 0
-    const initialLoading = apps === null && artifacts === null && loading
+    const hasAnyData = (apps?.length ?? 0) > 0 || (publishedApps?.length ?? 0) > 0 || (artifacts?.length ?? 0) > 0
+    const initialLoading = apps === null && publishedApps === null && artifacts === null && loading
 
     return (
         <div className="flex flex-col gap-4">
             <div className="flex flex-wrap items-end gap-3">
                 <p className="min-w-0 flex-1 text-sm text-muted-foreground">
-                    Aplicațiile tale interne și toate celelalte artefacte din conversații — documente, cod, pagini, diagrame.
+                    Aplicațiile interne, paginile publicate și celelalte artefacte din conversații — documente, cod, diagrame.
                 </p>
                 <button
                     type="button"
@@ -171,7 +186,7 @@ export function ArtifactsTab() {
                 <LibraryEmptyState
                     icon={Shapes}
                     title="Niciun artefact încă"
-                    description="Cere în chat un document, o pagină, un calculator sau orice mini-aplicație — apare aici automat."
+                    description="Cere în chat un document, o pagină publicată, un calculator sau orice mini-aplicație — apare aici automat."
                 />
             ) : (
                 <>
@@ -189,9 +204,23 @@ export function ArtifactsTab() {
                         </section>
                     ) : null}
 
+                    {filteredPublishedApps && filteredPublishedApps.length > 0 ? (
+                        <section className="flex flex-col gap-2">
+                            <h2 className="inline-flex items-center gap-1.5 text-[13px] font-semibold tracking-tight text-foreground">
+                                <Globe className="size-4 text-primary" strokeWidth={1.85} />
+                                Webpages
+                            </h2>
+                            <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                                {filteredPublishedApps.map((app) => (
+                                    <PublishedAppCard key={app.slug} app={app} />
+                                ))}
+                            </ul>
+                        </section>
+                    ) : null}
+
                     {artifacts && artifacts.length > 0 ? (
                         <section className="flex flex-col gap-2">
-                            {filteredApps && filteredApps.length > 0 ? (
+                            {((filteredApps?.length ?? 0) > 0 || (filteredPublishedApps?.length ?? 0) > 0) ? (
                                 <h2 className="text-[13px] font-semibold tracking-tight text-foreground">Artefacte</h2>
                             ) : null}
                             {presentTypes.length > 1 ? (
@@ -223,6 +252,41 @@ export function ArtifactsTab() {
                 </>
             )}
         </div>
+    )
+}
+
+function PublishedAppCard({ app }: { app: LibraryPublishedAppRow }) {
+    return (
+        <li>
+            <Link
+                href={appPath(app.basePath)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex w-full items-center gap-3 rounded-xl border border-border/70 bg-muted/25 px-3.5 py-3 text-left text-sm transition-colors hover:border-border hover:bg-muted/45"
+                title="Open published webpage"
+            >
+                <span className="flex size-10 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground shadow-[inset_0_0_0_1px_hsl(var(--border))]">
+                    <Globe className="size-5" strokeWidth={1.85} />
+                </span>
+                <span className="min-w-0 flex-1">
+                    <span className="flex min-w-0 items-center gap-1.5">
+                        <span className="truncate font-medium text-foreground">{app.title}</span>
+                        {app.funnelUrl ? (
+                            <span className="shrink-0 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10.5px] font-medium text-emerald-700 dark:text-emerald-300">
+                                Public
+                            </span>
+                        ) : null}
+                    </span>
+                    <span className="mt-0.5 flex min-w-0 items-center gap-1 text-[12px] text-muted-foreground">
+                        <span className="truncate">{app.basePath}</span>
+                        <ExternalLink className="size-3 shrink-0" />
+                    </span>
+                    <span className="mt-1 block text-[11.5px] text-muted-foreground/80">
+                        {formatRelativeTime(app.publishedAt)}
+                    </span>
+                </span>
+            </Link>
+        </li>
     )
 }
 

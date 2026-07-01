@@ -19,7 +19,9 @@ import {
   isPresentationFile,
   isSpreadsheetFile,
   isSvgFile,
+  isHtmlFile,
 } from "@/lib/preview-kinds"
+import { workspaceHtmlPreviewHref } from "@/lib/workspace-file-links"
 import type { Components } from "react-markdown"
 import type { Attachment } from "@/lib/types"
 
@@ -405,15 +407,7 @@ function workspacePreviewKind(filename: string, mimeType: string): Attachment["t
   const dot = filename.lastIndexOf(".")
   const ext = dot >= 0 ? filename.slice(dot + 1).toLowerCase() : ""
   const normalizedMime = mimeType.toLowerCase()
-  if (
-    ext === "html" ||
-    ext === "htm" ||
-    ext === "xhtml" ||
-    normalizedMime === "text/html" ||
-    normalizedMime === "application/xhtml+xml"
-  ) {
-    return null
-  }
+  if (isHtmlFile({ filename, mimeType: normalizedMime })) return "document"
   if (ext === "pdf" || mimeType === "application/pdf") return "pdf"
   if (isPresentationFile(att)) return "presentation"
   if (isSpreadsheetFile(att)) return "spreadsheet"
@@ -455,6 +449,11 @@ function WorkspaceFileCard({
   const dot = fileRef.filename.lastIndexOf(".")
   const ext = dot >= 0 ? fileRef.filename.slice(dot + 1).toUpperCase() : kind.toUpperCase()
   const open = () => {
+    const htmlPreviewUrl = workspaceHtmlPreviewHref({
+      filename: fileRef.filename,
+      mimeType: fileRef.mimeType || "application/octet-stream",
+      workspacePath: fileRef.filePath,
+    })
     onPreview({
       id: fileRef.filePath,
       filename: fileRef.filename,
@@ -463,10 +462,11 @@ function WorkspaceFileCard({
       type: kind,
       origin: "workspace",
       url: fileRef.downloadHref,
-      previewUrl:
+      previewUrl: htmlPreviewUrl ?? (
         kind === "presentation"
           ? appApiPath("/api/workspace/files/preview-pdf", { path: fileRef.filePath })
-          : undefined,
+          : undefined
+      ),
     })
   }
   return (
@@ -487,8 +487,8 @@ function WorkspaceFileCard({
 
 // Link renderer: a workspace document opens the in-app preview card when a
 // preview handler is available; everything else stays a normal link. HTML
-// deliverables deliberately stay links so the chat never turns them into an
-// embedded preview surface.
+// files render through a static sandboxed preview; interactive apps should be
+// published under /published-apps/<slug>/ instead.
 function MarkdownLink({ href, children }: { href?: string; children?: React.ReactNode }) {
   const onPreview = React.useContext(MarkdownImageClickContext)
   const fileRef = workspaceFileRef(href)

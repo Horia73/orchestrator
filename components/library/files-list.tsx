@@ -21,6 +21,7 @@ import {
 import { cn } from "@/lib/utils"
 import { FilePreviewModal } from "@/components/file-preview-modal"
 import { isInAppPreviewable } from "@/lib/preview-kinds"
+import { workspaceHtmlPreviewHref } from "@/lib/workspace-file-links"
 import type { Attachment } from "@/lib/types"
 import type { LibrarySelectionProps } from "./attachments-tab"
 import {
@@ -89,6 +90,11 @@ function FileRow({
   const { Icon, tint } = iconForAttachment(attachment)
   const previewable = isInAppPreviewable(attachment)
   const fileUrl = libraryItemUrl(attachment)
+  const htmlPreviewUrl =
+    attachment.source === "workspace"
+      ? workspaceHtmlPreviewHref(attachment)
+      : null
+  const openUrl = htmlPreviewUrl ?? fileUrl
   const chatHref =
     attachment.conversationId && attachment.messageId
       ? `/?chat=${encodeURIComponent(attachment.conversationId)}&msg=${encodeURIComponent(attachment.messageId)}`
@@ -138,7 +144,13 @@ function FileRow({
           {previewable && onPreview ? (
             <button
               type="button"
-              onClick={() => onPreview({ ...attachment, url: fileUrl })}
+              onClick={() =>
+                onPreview({
+                  ...attachment,
+                  url: fileUrl,
+                  previewUrl: htmlPreviewUrl ?? undefined,
+                })
+              }
               className="block w-full truncate text-left text-sm font-medium text-foreground hover:underline"
               title={`Preview ${attachment.filename}`}
             >
@@ -166,7 +178,13 @@ function FileRow({
           {previewable && onPreview ? (
             <button
               type="button"
-              onClick={() => onPreview({ ...attachment, url: fileUrl })}
+              onClick={() =>
+                onPreview({
+                  ...attachment,
+                  url: fileUrl,
+                  previewUrl: htmlPreviewUrl ?? undefined,
+                })
+              }
               title="Preview"
               aria-label="Preview"
               className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
@@ -175,7 +193,7 @@ function FileRow({
             </button>
           ) : null}
           <a
-            href={fileUrl}
+            href={openUrl}
             target="_blank"
             rel="noopener noreferrer"
             title="Open in new tab"

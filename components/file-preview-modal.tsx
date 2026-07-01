@@ -10,10 +10,11 @@ import { DocxViewer } from "@/components/office/docx-viewer"
 import { PptxViewer } from "@/components/office/pptx-viewer"
 import { SvgViewer } from "@/components/office/svg-viewer"
 import { CodeViewer } from "@/components/code-viewer"
+import { HtmlFileViewer } from "@/components/html-file-viewer"
 import { ViewerErrorBoundary } from "@/components/office/viewer-error-boundary"
 import { CadFileViewer } from "@/components/cad/cad-file-viewer"
 import { ImageAnnotationEditor } from "@/components/image-annotation-editor"
-import { isDocxFile, isSvgFile, isSpreadsheetFile, isPresentationFile, isCodeOrTextFile, is3DModelFile } from "@/lib/preview-kinds"
+import { isDocxFile, isSvgFile, isSpreadsheetFile, isPresentationFile, isCodeOrTextFile, is3DModelFile, isHtmlFile } from "@/lib/preview-kinds"
 import type { Attachment } from "@/lib/types"
 
 interface FilePreviewModalProps {
@@ -147,6 +148,16 @@ export function FilePreviewModal({ attachment, gallery, onSaveImage, onClose }: 
             <PptxViewer
                 previewUrl={active.previewUrl ?? appPath(`/api/uploads/${encodeURIComponent(active.id)}/preview-pdf`)}
                 downloadUrl={url}
+                filename={active.filename}
+                onClose={onClose}
+            />
+        )
+    }
+    if (isHtmlFile(active)) {
+        return framed(
+            <HtmlFileViewer
+                url={url}
+                previewUrl={active.previewUrl}
                 filename={active.filename}
                 onClose={onClose}
             />
