@@ -18,9 +18,6 @@ const previewBasePath = normalizePreviewBasePath(process.env.ORCHESTRATOR_PREVIE
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   ...(previewBasePath ? { basePath: previewBasePath, assetPrefix: previewBasePath } : {}),
-  // TEMP (local verification only, reverted before commit): isolate this
-  // session's dev server from another dev server sharing .next.
-  ...(process.env.NEXT_DIST_DIR ? { distDir: process.env.NEXT_DIST_DIR } : {}),
   // Lets other devices on the network (phone/tablet) load Next's dev resources
   // when `next dev -H 0.0.0.0` is reachable over LAN. Without this Next blocks
   // cross-origin dev requests and the app silently fails to boot on the phone.
