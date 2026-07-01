@@ -60,6 +60,7 @@ RUN apt-get update \
     ca-certificates \
     chromium \
     curl \
+    dnsutils \
     ffmpeg \
     git \
     g++ \
@@ -91,6 +92,8 @@ RUN apt-get update \
     libreoffice-core \
     qpdf \
     tesseract-ocr \
+    unzip \
+    zip \
     fonts-crosextra-carlito \
     fonts-crosextra-caladea \
   && rm -rf /var/lib/apt/lists/*

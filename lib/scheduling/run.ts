@@ -17,6 +17,8 @@ import type { ScheduledTask } from "./schema"
 import { describeSchedule } from "./compute"
 import {
   createInboxConversation,
+  discardScheduledRunConversation,
+  ensureScheduledRunConversation,
   getTaskState,
   recordTaskRun,
   setTaskState,
@@ -179,7 +181,21 @@ export async function runScheduledTask(
   // the snapshot module cannot refresh without an origin.
   const appOrigin = resolveAppOrigin()
 
+  // Set true once (and only if) the run surfaces and its placeholder row is
+  // promoted to a real inbox conversation; the finally uses it to decide whether
+  // to discard the hidden placeholder created below.
+  let surfacedToInbox = false
+
   try {
+  // Persist a hidden parent conversation row before the agent runs so any
+  // `delegate_to` sub-agent thread (agent_threads → conversations FK) can be
+  // created from within this scheduled/monitor run. It stays invisible until the
+  // run surfaces (then promoted to origin='inbox') or is discarded in `finally`.
+  ensureScheduledRunConversation({
+    id: conversationId,
+    taskId: task.id,
+    title: task.title,
+  })
   let ok = false
   let assistantContent: string
   let reasoning: ReasoningEntry[] | undefined
@@ -644,6 +660,8 @@ export async function runScheduledTask(
       messages: notificationSurface ? [assistantMsg] : [userMsg, assistantMsg],
       watchIds: watchIds.length > 0 ? watchIds : undefined,
     })
+    // The placeholder row is now a real inbox conversation — keep it in finally.
+    surfacedToInbox = true
     const persisted = persistArtifactsFromMessage({
       conversationId,
       messageId: assistantMsg.id,
@@ -685,6 +703,16 @@ export async function runScheduledTask(
   }
   } finally {
     clearAgentRun(runId)
+    // A silent run (or one that threw) never promoted its placeholder to an
+    // inbox item — drop the hidden row so scheduled runs don't accumulate empty
+    // conversations. No-op once promoted (scoped to origin='scheduled-run').
+    if (!surfacedToInbox) {
+      try {
+        discardScheduledRunConversation(conversationId)
+      } catch (err) {
+        console.warn("Failed to discard scheduled-run placeholder conversation:", err)
+      }
+    }
   }
 }
 

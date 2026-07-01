@@ -942,6 +942,54 @@ function isScheduledTriggerMessage(
   )
 }
 
+// A scheduled run mints its conversation id up front but only persists a real
+// `origin='inbox'` row IF it surfaces. Meanwhile the agent may `delegate_to` a
+// sub-agent, whose agent_threads row carries a FOREIGN KEY to conversations(id).
+// Without a parent row that INSERT fails ("FOREIGN KEY constraint failed"), so
+// scheduled/monitor runs could not delegate at all. We bridge that by writing a
+// hidden placeholder row for the run's lifetime: origin='scheduled-run' is
+// matched by neither the Inbox list (origin='inbox') nor chat recents
+// (origin IS NULL OR 'user'), so it stays invisible. If the run surfaces,
+// createInboxConversation() promotes this same row to origin='inbox'; if it
+// stays silent, discardScheduledRunConversation() removes it (CASCADE cleans up
+// any sub-agent threads/messages).
+const SCHEDULED_RUN_PLACEHOLDER_ORIGIN = "scheduled-run"
+
+/** Create the hidden parent conversation row a scheduled run needs so its
+ *  sub-agent delegations satisfy the agent_threads → conversations FK. Idempotent
+ *  and event-free (nothing observes a placeholder). */
+export function ensureScheduledRunConversation(args: {
+  id: string
+  taskId: string
+  title: string
+}): void {
+  const now = Date.now()
+  db.prepare(
+    `
+        INSERT OR IGNORE INTO conversations (
+          id, title, createdAt, updatedAt, origin, scheduledTaskId, readAt, messageCount
+        )
+        VALUES (@id, @title, @createdAt, @updatedAt, @origin, @taskId, NULL, 0)
+    `
+  ).run({
+    id: args.id,
+    title: args.title,
+    createdAt: now,
+    updatedAt: now,
+    origin: SCHEDULED_RUN_PLACEHOLDER_ORIGIN,
+    taskId: args.taskId,
+  })
+}
+
+/** Remove a scheduled run's placeholder row when the run stayed silent. Scoped
+ *  to origin='scheduled-run' so it can never delete a promoted inbox item or a
+ *  user conversation, even if ids collide. CASCADE clears child threads/messages. */
+export function discardScheduledRunConversation(id: string): void {
+  db.prepare(
+    `DELETE FROM conversations WHERE id = ? AND origin = ?`
+  ).run(id, SCHEDULED_RUN_PLACEHOLDER_ORIGIN)
+}
+
 export function createInboxConversation(args: {
   taskId: string
   title: string
@@ -970,6 +1018,15 @@ export function createInboxConversation(args: {
               @id, @title, @createdAt, @updatedAt, 'inbox', @taskId, NULL,
               @messageCount, @lastMessagePreview, @lastMessageAt, @monitorWatchIds
             )
+            ON CONFLICT(id) DO UPDATE SET
+              title = excluded.title,
+              updatedAt = excluded.updatedAt,
+              origin = 'inbox',
+              scheduledTaskId = excluded.scheduledTaskId,
+              messageCount = excluded.messageCount,
+              lastMessagePreview = excluded.lastMessagePreview,
+              lastMessageAt = excluded.lastMessageAt,
+              monitorWatchIds = excluded.monitorWatchIds
         `
     ).run({
       id: conversationId,

@@ -1,5 +1,13 @@
 {
   "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // The base config enables `incremental`, which makes `tsc --noEmit` write a
+    // .tsbuildinfo file into the project root. In the container the project root
+    // is /app, which is read-only for the runtime `node` user, so the standalone
+    // `npm run typecheck` fails with EACCES. This is a pure correctness check, so
+    // the incremental cache buys nothing here — turn it off to avoid the write.
+    "incremental": false
+  },
   "include": [
     "next-env.d.ts",
     "**/*.ts",
