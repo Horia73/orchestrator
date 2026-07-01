@@ -7,6 +7,7 @@ import {
     FileText, Loader2,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { usePreviewZoomGestures } from "@/hooks/use-preview-zoom-gestures"
 
 // ---------------------------------------------------------------------------
 // Chrome-style PDF Viewer. Pages are rendered to JPEG dataURLs sequentially and
@@ -114,30 +115,82 @@ export function PdfViewer({
         return () => container.removeEventListener("scroll", onScroll)
     }, [pages.length, activePage])
 
-    // Ctrl+scroll and pinch-to-zoom
+    // --- Anchored zoom -----------------------------------------------------
+    // Every zoom keeps one content point fixed under the gesture (cursor,
+    // pinch midpoint, or viewport center for the toolbar buttons). The anchor
+    // is remembered as a fraction of a reference page, and after React commits
+    // the new page widths a layout effect shifts the scroll position so that
+    // page-relative point lands back under the anchor. Measuring real
+    // geometry (instead of scaling scroll offsets) keeps it exact across the
+    // fits-viewport → overflows-viewport transition and the fixed page gaps.
+    const zoomRef = React.useRef(zoom)
     React.useEffect(() => {
+        zoomRef.current = zoom
+    }, [zoom])
+    const zoomAnchorRef = React.useRef<{ ax: number; ay: number; pageIndex: number; fx: number; fy: number } | null>(null)
+
+    const zoomAtPoint = React.useCallback((clientX: number, clientY: number, nextZoomRaw: number) => {
         const container = mainRef.current
-        if (!container) return
-        const onWheel = (e: WheelEvent) => {
-            if (e.ctrlKey || e.metaKey) {
-                e.preventDefault()
-                setZoom(prev => clampZoom(prev + -e.deltaY * 0.01))
-            }
+        const next = clampZoom(nextZoomRaw)
+        if (next === zoomRef.current) return
+        if (!container) { setZoom(next); return }
+        // Reference page: the one under the anchor, else the nearest row.
+        let pageIndex = -1
+        let bestDist = Infinity
+        for (let i = 0; i < pageRefs.current.length; i++) {
+            const el = pageRefs.current[i]
+            if (!el) continue
+            const r = el.getBoundingClientRect()
+            const d = clientY < r.top ? r.top - clientY : clientY > r.bottom ? clientY - r.bottom : 0
+            if (d < bestDist) { bestDist = d; pageIndex = i }
+            if (d === 0) break
         }
-        const onGestureChange = (e: Event) => {
-            e.preventDefault()
-            setZoom(prev => clampZoom(prev * (e as unknown as { scale: number }).scale))
+        const card = pageIndex >= 0 ? (pageRefs.current[pageIndex]?.firstElementChild as HTMLElement | null) : null
+        if (!card) { setZoom(next); return }
+        const containerRect = container.getBoundingClientRect()
+        const cardRect = card.getBoundingClientRect()
+        zoomAnchorRef.current = {
+            ax: clientX - containerRect.left,
+            ay: clientY - containerRect.top,
+            pageIndex,
+            fx: cardRect.width > 0 ? (clientX - cardRect.left) / cardRect.width : 0.5,
+            fy: cardRect.height > 0 ? (clientY - cardRect.top) / cardRect.height : 0.5,
         }
-        const onGestureStart = (e: Event) => e.preventDefault()
-        container.addEventListener("wheel", onWheel, { passive: false })
-        container.addEventListener("gesturestart", onGestureStart, { passive: false } as EventListenerOptions)
-        container.addEventListener("gesturechange", onGestureChange, { passive: false } as EventListenerOptions)
-        return () => {
-            container.removeEventListener("wheel", onWheel)
-            container.removeEventListener("gesturestart", onGestureStart)
-            container.removeEventListener("gesturechange", onGestureChange)
-        }
+        setZoom(next)
     }, [])
+
+    React.useLayoutEffect(() => {
+        const anchor = zoomAnchorRef.current
+        zoomAnchorRef.current = null
+        if (!anchor) return
+        const container = mainRef.current
+        const card = pageRefs.current[anchor.pageIndex]?.firstElementChild as HTMLElement | null
+        if (!container || !card) return
+        const containerRect = container.getBoundingClientRect()
+        const cardRect = card.getBoundingClientRect()
+        container.scrollLeft += cardRect.left - containerRect.left + anchor.fx * cardRect.width - anchor.ax
+        container.scrollTop += cardRect.top - containerRect.top + anchor.fy * cardRect.height - anchor.ay
+    }, [zoom])
+
+    const zoomStep = React.useCallback((delta: number) => {
+        const container = mainRef.current
+        if (!container) { setZoom(prev => clampZoom(prev + delta)); return }
+        const rect = container.getBoundingClientRect()
+        zoomAtPoint(rect.left + rect.width / 2, rect.top + rect.height / 2, zoomRef.current + delta)
+    }, [zoomAtPoint])
+
+    // Ctrl+scroll, trackpad pinch and touch pinch-to-zoom
+    usePreviewZoomGestures(mainRef, {
+        onZoomAt: React.useCallback((x: number, y: number, factor: number) => {
+            zoomAtPoint(x, y, zoomRef.current * factor)
+        }, [zoomAtPoint]),
+        onPinchPan: React.useCallback((dx: number, dy: number) => {
+            const container = mainRef.current
+            if (!container) return
+            container.scrollLeft -= dx
+            container.scrollTop -= dy
+        }, []),
+    })
 
     const scrollToPage = React.useCallback((index: number) => {
         const el = pageRefs.current[index]
@@ -241,7 +294,7 @@ export function PdfViewer({
 
                     <button
                         type="button"
-                        onClick={() => setZoom(prev => clampZoom(prev - 0.1))}
+                        onClick={() => zoomStep(-0.1)}
                         disabled={zoom <= MIN_ZOOM}
                         className={toolbarBtnCls}
                         aria-label="Zoom out"
@@ -254,7 +307,7 @@ export function PdfViewer({
                     </span>
                     <button
                         type="button"
-                        onClick={() => setZoom(prev => clampZoom(prev + 0.1))}
+                        onClick={() => zoomStep(0.1)}
                         disabled={zoom >= MAX_ZOOM}
                         className={toolbarBtnCls}
                         aria-label="Zoom in"
@@ -317,8 +370,12 @@ export function PdfViewer({
                     </div>
                 </aside>
 
-                {/* Main pages area */}
-                <div className="relative min-h-0 flex-1 bg-pdf-canvas">
+                {/* Main pages area. min-w-0 is load-bearing: without it, zoomed
+                    pages push their max-content width into this flex item's
+                    automatic minimum size — the scroll container then never
+                    overflows horizontally (the modal clips it instead) and the
+                    right side of a zoomed page becomes unreachable. */}
+                <div className="relative min-h-0 min-w-0 flex-1 bg-pdf-canvas">
                     <div ref={mainRef} className="h-full overflow-auto" style={{ overscrollBehavior: "contain" }}>
                         {loading && pages.length === 0 && (
                             <div className="flex h-full items-center justify-center text-sm text-pdf-text">

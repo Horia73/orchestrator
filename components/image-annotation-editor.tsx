@@ -11,6 +11,7 @@ import {
   Highlighter,
   Loader2,
   Minus,
+  MoreVertical,
   MousePointer2,
   PenLine,
   Plus,
@@ -25,11 +26,20 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { useIsMobile } from "@/hooks/use-mobile"
+import { usePreviewZoomGestures } from "@/hooks/use-preview-zoom-gestures"
 import { cn } from "@/lib/utils"
 
 type ShapeKind = "arrow" | "line" | "rectangle" | "ellipse"
@@ -438,12 +448,14 @@ function ToolButton({
   label,
   active,
   disabled,
+  size = "icon-sm",
   onClick,
   children,
 }: {
   label: string
   active?: boolean
   disabled?: boolean
+  size?: "icon" | "icon-sm"
   onClick: () => void
   children: React.ReactNode
 }) {
@@ -453,7 +465,7 @@ function ToolButton({
         <Button
           type="button"
           variant="ghost"
-          size="icon-sm"
+          size={size}
           disabled={disabled}
           aria-label={label}
           aria-pressed={active}
@@ -515,6 +527,7 @@ export function ImageAnnotationEditor({
   const imageRef = React.useRef<HTMLImageElement>(null)
   const canvasRef = React.useRef<HTMLCanvasElement>(null)
   const viewportRef = React.useRef<HTMLDivElement>(null)
+  const cardRef = React.useRef<HTMLDivElement>(null)
   const interactionRef = React.useRef<Interaction | null>(null)
   const previewRef = React.useRef<Preview>(null)
   const marksRef = React.useRef<AnnotationMark[]>([])
@@ -538,6 +551,8 @@ export function ImageAnnotationEditor({
   const [sendState, setSendState] = React.useState<"idle" | "sending" | "sent" | "error">("idle")
   const [exportError, setExportError] = React.useState<string | null>(null)
   const [sendError, setSendError] = React.useState<string | null>(null)
+  const [colorPickerOpen, setColorPickerOpen] = React.useState(false)
+  const isMobile = useIsMobile()
 
   const fitScale = React.useMemo(() => {
     if (imageSize.width <= 0 || imageSize.height <= 0 || viewportSize.width <= 0 || viewportSize.height <= 0) return 1
@@ -548,6 +563,17 @@ export function ImageAnnotationEditor({
   const displayScale = fitScale * zoom
   const displayWidth = imageSize.width > 0 ? Math.max(1, imageSize.width * displayScale) : undefined
   const displayHeight = imageSize.height > 0 ? Math.max(1, imageSize.height * displayScale) : undefined
+
+  // Large photos fit at a tiny scale, so a fixed zoom ceiling would never
+  // reach readable detail — always allow zooming up to ~2x native pixels.
+  const maxZoom = fitScale > 0 ? Math.max(MAX_ZOOM, 2 / fitScale) : MAX_ZOOM
+  const maxZoomRef = React.useRef(maxZoom)
+  const zoomRef = React.useRef(zoom)
+  React.useEffect(() => {
+    maxZoomRef.current = maxZoom
+    zoomRef.current = zoom
+  }, [maxZoom, zoom])
+  const zoomAnchorRef = React.useRef<{ ax: number; ay: number; fx: number; fy: number } | null>(null)
 
   const setSelection = React.useCallback((id: string | null) => {
     selectedIdRef.current = id
@@ -910,9 +936,76 @@ export function ImageAnnotationEditor({
     commit(marksRef.current.map(mark => (mark.id === interaction.targetId ? finalMark : mark)))
   }, [addMark, commit, drawAll])
 
-  const zoomBy = React.useCallback((delta: number) => {
-    setZoom(value => clamp(Number((value + delta).toFixed(2)), MIN_ZOOM, MAX_ZOOM))
+  // --- Anchored zoom -------------------------------------------------------
+  // Every zoom keeps one image point fixed under the gesture (cursor, pinch
+  // midpoint, or viewport center for buttons): the anchor is remembered as a
+  // fraction of the image card, and once React commits the resized layout a
+  // layout effect shifts the scroll position so that point lands back under
+  // the anchor. Measuring real geometry keeps it exact across the
+  // fits-viewport → overflows-viewport transition.
+  const zoomAtPoint = React.useCallback((clientX: number, clientY: number, nextZoomRaw: number) => {
+    const next = clamp(Number(nextZoomRaw.toFixed(3)), MIN_ZOOM, maxZoomRef.current)
+    if (next === zoomRef.current) return
+    const viewport = viewportRef.current
+    const card = cardRef.current
+    if (!viewport || !card) { setZoom(next); return }
+    const viewportRect = viewport.getBoundingClientRect()
+    const cardRect = card.getBoundingClientRect()
+    zoomAnchorRef.current = {
+      ax: clientX - viewportRect.left,
+      ay: clientY - viewportRect.top,
+      fx: cardRect.width > 0 ? (clientX - cardRect.left) / cardRect.width : 0.5,
+      fy: cardRect.height > 0 ? (clientY - cardRect.top) / cardRect.height : 0.5,
+    }
+    setZoom(next)
   }, [])
+
+  React.useLayoutEffect(() => {
+    const anchor = zoomAnchorRef.current
+    zoomAnchorRef.current = null
+    if (!anchor) return
+    const viewport = viewportRef.current
+    const card = cardRef.current
+    if (!viewport || !card) return
+    const viewportRect = viewport.getBoundingClientRect()
+    const cardRect = card.getBoundingClientRect()
+    viewport.scrollLeft += cardRect.left - viewportRect.left + anchor.fx * cardRect.width - anchor.ax
+    viewport.scrollTop += cardRect.top - viewportRect.top + anchor.fy * cardRect.height - anchor.ay
+  }, [zoom])
+
+  const zoomBy = React.useCallback((delta: number) => {
+    const viewport = viewportRef.current
+    if (!viewport) {
+      setZoom(value => clamp(Number((value + delta).toFixed(2)), MIN_ZOOM, maxZoomRef.current))
+      return
+    }
+    const rect = viewport.getBoundingClientRect()
+    zoomAtPoint(rect.left + rect.width / 2, rect.top + rect.height / 2, zoomRef.current + delta)
+  }, [zoomAtPoint])
+
+  // A second finger landing mid-stroke turns the gesture into a pinch: throw
+  // away the half-drawn mark instead of committing it.
+  const cancelPointerInteraction = React.useCallback(() => {
+    if (!interactionRef.current) return
+    interactionRef.current = null
+    previewRef.current = null
+    setIsPanning(false)
+    drawAll()
+  }, [drawAll])
+
+  // Ctrl+scroll, trackpad pinch and touch pinch-to-zoom on the image viewport.
+  usePreviewZoomGestures(viewportRef, {
+    onZoomAt: React.useCallback((x: number, y: number, factor: number) => {
+      zoomAtPoint(x, y, zoomRef.current * factor)
+    }, [zoomAtPoint]),
+    onPinchStart: cancelPointerInteraction,
+    onPinchPan: React.useCallback((dx: number, dy: number) => {
+      const viewport = viewportRef.current
+      if (!viewport) return
+      viewport.scrollLeft -= dx
+      viewport.scrollTop -= dy
+    }, []),
+  })
 
   const buildAnnotatedBlob = React.useCallback(async () => {
     const image = imageRef.current
@@ -996,131 +1089,268 @@ export function ImageAnnotationEditor({
             ? "cursor-text"
             : "cursor-crosshair"
 
+  const buttonSize = isMobile ? ("icon" as const) : ("icon-sm" as const)
+
+  const navigationGroup = (
+    <div className="flex shrink-0 items-center gap-1 rounded-lg border border-white/10 bg-white/[0.06] p-1">
+      <ToolButton label={toolLabel("select")} size={buttonSize} active={tool === "select"} onClick={() => chooseTool("select")}>
+        <MousePointer2 className="size-4" />
+      </ToolButton>
+      <ToolButton label={toolLabel("hand")} size={buttonSize} active={tool === "hand"} onClick={() => chooseTool("hand")}>
+        <Hand className="size-4" />
+      </ToolButton>
+      {hasSelection && (
+        <ToolButton label="Delete selection" size={buttonSize} onClick={deleteSelected}>
+          <Trash className="size-4" />
+        </ToolButton>
+      )}
+    </div>
+  )
+
+  const drawingToolsGroup = (
+    <div className="flex shrink-0 items-center gap-1 rounded-lg border border-white/10 bg-white/[0.06] p-1">
+      <ToolButton label={toolLabel("pen")} size={buttonSize} active={tool === "pen"} onClick={() => chooseTool("pen")}>
+        <PenLine className="size-4" />
+      </ToolButton>
+      <ToolButton label={toolLabel("highlighter")} size={buttonSize} active={tool === "highlighter"} onClick={() => chooseTool("highlighter")}>
+        <Highlighter className="size-4" />
+      </ToolButton>
+      <ToolButton label={toolLabel("eraser")} size={buttonSize} active={tool === "eraser"} onClick={() => chooseTool("eraser")}>
+        <Eraser className="size-4" />
+      </ToolButton>
+      <span className="mx-0.5 h-5 w-px bg-white/12" />
+      <ToolButton label={toolLabel("arrow")} size={buttonSize} active={tool === "arrow"} onClick={() => chooseTool("arrow")}>
+        <ArrowUpRight className="size-4" />
+      </ToolButton>
+      <ToolButton label={toolLabel("line")} size={buttonSize} active={tool === "line"} onClick={() => chooseTool("line")}>
+        <Slash className="size-4" />
+      </ToolButton>
+      <ToolButton label={toolLabel("rectangle")} size={buttonSize} active={tool === "rectangle"} onClick={() => chooseTool("rectangle")}>
+        <SquareIcon className="size-4" />
+      </ToolButton>
+      <ToolButton label={toolLabel("ellipse")} size={buttonSize} active={tool === "ellipse"} onClick={() => chooseTool("ellipse")}>
+        <Circle className="size-4" />
+      </ToolButton>
+      <span className="mx-0.5 h-5 w-px bg-white/12" />
+      <ToolButton label={toolLabel("text")} size={buttonSize} active={tool === "text"} onClick={() => chooseTool("text")}>
+        <Type className="size-4" />
+      </ToolButton>
+    </div>
+  )
+
+  const strokeSlider = (
+    <div className="flex h-9 shrink-0 items-center gap-2 rounded-lg border border-white/10 bg-white/[0.06] px-2 text-white/75">
+      <input
+        aria-label={tool === "text" ? "Text size" : "Brush size"}
+        type="range"
+        min={2}
+        max={32}
+        value={strokeSize}
+        onChange={(event) => setStrokeSize(Number(event.target.value))}
+        className={cn("h-2 accent-white", isMobile ? "w-20" : "w-24")}
+      />
+      <span className="w-6 text-right text-[11px] tabular-nums">{strokeSize}</span>
+    </div>
+  )
+
   return (
     <TooltipProvider>
       <div className="flex h-full min-h-0 w-full flex-col overflow-hidden">
-        <div className="flex shrink-0 flex-wrap items-center gap-2 border-y border-white/10 bg-black/35 px-2.5 py-2 backdrop-blur-md">
-          <div className="flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.06] p-1">
-            <ToolButton label={toolLabel("select")} active={tool === "select"} onClick={() => chooseTool("select")}>
-              <MousePointer2 className="size-4" />
-            </ToolButton>
-            <ToolButton label={toolLabel("hand")} active={tool === "hand"} onClick={() => chooseTool("hand")}>
-              <Hand className="size-4" />
-            </ToolButton>
-            {hasSelection && (
-              <ToolButton label="Delete selection" onClick={deleteSelected}>
-                <Trash className="size-4" />
-              </ToolButton>
-            )}
-          </div>
-
-          <div className="flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.06] p-1">
-            <ToolButton label={toolLabel("pen")} active={tool === "pen"} onClick={() => chooseTool("pen")}>
-              <PenLine className="size-4" />
-            </ToolButton>
-            <ToolButton label={toolLabel("highlighter")} active={tool === "highlighter"} onClick={() => chooseTool("highlighter")}>
-              <Highlighter className="size-4" />
-            </ToolButton>
-            <ToolButton label={toolLabel("eraser")} active={tool === "eraser"} onClick={() => chooseTool("eraser")}>
-              <Eraser className="size-4" />
-            </ToolButton>
-            <span className="mx-0.5 h-5 w-px bg-white/12" />
-            <ToolButton label={toolLabel("arrow")} active={tool === "arrow"} onClick={() => chooseTool("arrow")}>
-              <ArrowUpRight className="size-4" />
-            </ToolButton>
-            <ToolButton label={toolLabel("line")} active={tool === "line"} onClick={() => chooseTool("line")}>
-              <Slash className="size-4" />
-            </ToolButton>
-            <ToolButton label={toolLabel("rectangle")} active={tool === "rectangle"} onClick={() => chooseTool("rectangle")}>
-              <SquareIcon className="size-4" />
-            </ToolButton>
-            <ToolButton label={toolLabel("ellipse")} active={tool === "ellipse"} onClick={() => chooseTool("ellipse")}>
-              <Circle className="size-4" />
-            </ToolButton>
-            <span className="mx-0.5 h-5 w-px bg-white/12" />
-            <ToolButton label={toolLabel("text")} active={tool === "text"} onClick={() => chooseTool("text")}>
-              <Type className="size-4" />
-            </ToolButton>
-          </div>
-
-          <div className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.06] px-2 py-1.5">
-            {COLORS.map(swatch => (
-              <SwatchButton
-                key={swatch}
-                color={swatch}
-                active={swatch === color}
-                onClick={() => chooseColor(swatch)}
-              />
-            ))}
-          </div>
-
-          <div className="flex h-9 items-center gap-2 rounded-lg border border-white/10 bg-white/[0.06] px-2 text-white/75">
-            <input
-              aria-label={tool === "text" ? "Text size" : "Brush size"}
-              type="range"
-              min={2}
-              max={32}
-              value={strokeSize}
-              onChange={(event) => setStrokeSize(Number(event.target.value))}
-              className="h-2 w-24 accent-white"
-            />
-            <span className="w-6 text-right text-[11px] tabular-nums">{strokeSize}</span>
-          </div>
-
-          {tool === "text" && (
-            <input
-              aria-label="Annotation text"
-              value={textValue}
-              onChange={(event) => setTextValue(event.target.value)}
-              className="h-9 min-w-0 flex-1 rounded-lg border border-white/10 bg-white/[0.08] px-3 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/35 md:max-w-56"
-              placeholder="Text"
-            />
-          )}
-
-          <div className="ml-auto flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.06] p-1">
-            <ToolButton label="Undo" disabled={!canUndo} onClick={undo}>
-              <Undo2 className="size-4" />
-            </ToolButton>
-            <ToolButton label="Redo" disabled={!canRedo} onClick={redo}>
-              <Redo2 className="size-4" />
-            </ToolButton>
-            <ToolButton label="Clear" disabled={!hasMarks} onClick={clear}>
-              <Trash2 className="size-4" />
-            </ToolButton>
-            <span className="mx-1 h-5 w-px bg-white/12" />
-            <ToolButton label="Zoom out" onClick={() => zoomBy(-0.25)}>
-              <Minus className="size-4" />
-            </ToolButton>
-            <ToolButton label="Zoom in" onClick={() => zoomBy(0.25)}>
-              <Plus className="size-4" />
-            </ToolButton>
-            <ToolButton label="Download" onClick={handleDownload}>
-              <Download className="size-4" />
-            </ToolButton>
-            {onSave && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    disabled={saveState === "saving"}
-                    onClick={handleSave}
-                    className="h-7 gap-1.5 rounded-md px-2 text-white/80 hover:bg-white/12 hover:text-white disabled:opacity-50"
+        {isMobile ? (
+          // Phone layout: a fixed row with navigation / history / color +
+          // overflow actions, then a horizontally scrollable row of drawing
+          // tools — instead of the desktop toolbar wrapping into a jumble.
+          <div className="flex shrink-0 flex-col gap-1.5 border-y border-white/10 bg-black/35 px-2 py-1.5 backdrop-blur-md">
+            <div className="flex items-center gap-1.5">
+              {navigationGroup}
+              <div className="flex shrink-0 items-center gap-1 rounded-lg border border-white/10 bg-white/[0.06] p-1">
+                <ToolButton label="Undo" size={buttonSize} disabled={!canUndo} onClick={undo}>
+                  <Undo2 className="size-4" />
+                </ToolButton>
+                <ToolButton label="Redo" size={buttonSize} disabled={!canRedo} onClick={redo}>
+                  <Redo2 className="size-4" />
+                </ToolButton>
+              </div>
+              <div className="ml-auto flex shrink-0 items-center gap-1 rounded-lg border border-white/10 bg-white/[0.06] p-1">
+                <Popover open={colorPickerOpen} onOpenChange={setColorPickerOpen}>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label="Color"
+                      className="grid size-8 place-items-center rounded-md transition-colors hover:bg-white/12"
+                    >
+                      <span
+                        className="size-5 rounded-full border border-white/35"
+                        style={{ backgroundColor: color }}
+                      />
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    side="bottom"
+                    align="end"
+                    className="z-[140] w-auto rounded-xl border border-white/12 bg-neutral-950/92 p-2.5 shadow-2xl backdrop-blur-md"
                   >
-                    <Save className="size-4" />
-                    <span>{saveState === "saving" ? "Saving" : "Save"}</span>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" className="z-[140]">Save annotations</TooltipContent>
-              </Tooltip>
+                    <div className="grid grid-cols-4 gap-2.5">
+                      {COLORS.map(swatch => (
+                        <SwatchButton
+                          key={swatch}
+                          color={swatch}
+                          active={swatch === color}
+                          onClick={() => {
+                            chooseColor(swatch)
+                            setColorPickerOpen(false)
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label="More actions"
+                      className="text-white/72 hover:bg-white/12 hover:text-white"
+                    >
+                      <MoreVertical className="size-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    align="end"
+                    className="z-[140] w-44 border border-white/12 bg-neutral-950/92 text-white/85 backdrop-blur-md"
+                  >
+                    <DropdownMenuItem
+                      onSelect={(event) => { event.preventDefault(); zoomBy(0.25) }}
+                      className="focus:bg-white/12 focus:text-white"
+                    >
+                      <Plus />Zoom in
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={(event) => { event.preventDefault(); zoomBy(-0.25) }}
+                      className="focus:bg-white/12 focus:text-white"
+                    >
+                      <Minus />Zoom out
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      disabled={!hasMarks}
+                      onSelect={() => clear()}
+                      className="focus:bg-white/12 focus:text-white"
+                    >
+                      <Trash2 />Clear all
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={() => void handleDownload()}
+                      className="focus:bg-white/12 focus:text-white"
+                    >
+                      <Download />Download
+                    </DropdownMenuItem>
+                    {onSave && (
+                      <DropdownMenuItem
+                        disabled={saveState === "saving"}
+                        onSelect={() => void handleSave()}
+                        className="focus:bg-white/12 focus:text-white"
+                      >
+                        <Save />{saveState === "saving" ? "Saving…" : "Save annotations"}
+                      </DropdownMenuItem>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 overflow-x-auto">
+              {drawingToolsGroup}
+              {strokeSlider}
+            </div>
+            {tool === "text" && (
+              <input
+                aria-label="Annotation text"
+                value={textValue}
+                onChange={(event) => setTextValue(event.target.value)}
+                className="h-9 w-full rounded-lg border border-white/10 bg-white/[0.08] px-3 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/35"
+                placeholder="Text"
+              />
             )}
           </div>
-        </div>
+        ) : (
+          <div className="flex shrink-0 flex-wrap items-center gap-2 border-y border-white/10 bg-black/35 px-2.5 py-2 backdrop-blur-md">
+            {navigationGroup}
+
+            {drawingToolsGroup}
+
+            <div className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.06] px-2 py-1.5">
+              {COLORS.map(swatch => (
+                <SwatchButton
+                  key={swatch}
+                  color={swatch}
+                  active={swatch === color}
+                  onClick={() => chooseColor(swatch)}
+                />
+              ))}
+            </div>
+
+            {strokeSlider}
+
+            {tool === "text" && (
+              <input
+                aria-label="Annotation text"
+                value={textValue}
+                onChange={(event) => setTextValue(event.target.value)}
+                className="h-9 min-w-0 flex-1 rounded-lg border border-white/10 bg-white/[0.08] px-3 text-sm text-white outline-none placeholder:text-white/45 focus:border-white/35 md:max-w-56"
+                placeholder="Text"
+              />
+            )}
+
+            <div className="ml-auto flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.06] p-1">
+              <ToolButton label="Undo" disabled={!canUndo} onClick={undo}>
+                <Undo2 className="size-4" />
+              </ToolButton>
+              <ToolButton label="Redo" disabled={!canRedo} onClick={redo}>
+                <Redo2 className="size-4" />
+              </ToolButton>
+              <ToolButton label="Clear" disabled={!hasMarks} onClick={clear}>
+                <Trash2 className="size-4" />
+              </ToolButton>
+              <span className="mx-1 h-5 w-px bg-white/12" />
+              <ToolButton label="Zoom out" onClick={() => zoomBy(-0.25)}>
+                <Minus className="size-4" />
+              </ToolButton>
+              <ToolButton label="Zoom in" onClick={() => zoomBy(0.25)}>
+                <Plus className="size-4" />
+              </ToolButton>
+              <ToolButton label="Download" onClick={handleDownload}>
+                <Download className="size-4" />
+              </ToolButton>
+              {onSave && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={saveState === "saving"}
+                      onClick={handleSave}
+                      className="h-7 gap-1.5 rounded-md px-2 text-white/80 hover:bg-white/12 hover:text-white disabled:opacity-50"
+                    >
+                      <Save className="size-4" />
+                      <span>{saveState === "saving" ? "Saving" : "Save"}</span>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="z-[140]">Save annotations</TooltipContent>
+                </Tooltip>
+              )}
+            </div>
+          </div>
+        )}
 
         <div ref={viewportRef} className="relative min-h-0 flex-1 overflow-auto bg-black/25">
-          <div className="flex min-h-full min-w-full items-center justify-center p-3">
+          {/* w-max is load-bearing: with a plain min-w-full wrapper, a zoomed
+              image overflows a centered flexbox on BOTH sides and the left
+              half becomes unreachable (scroll coordinates cannot go negative). */}
+          <div className="flex min-h-full w-max min-w-full items-center justify-center p-3">
             <div
+              ref={cardRef}
               className="relative isolate overflow-hidden rounded-lg shadow-2xl ring-1 ring-white/15"
               style={displayWidth && displayHeight ? { width: displayWidth, height: displayHeight } : undefined}
             >

@@ -956,7 +956,7 @@ function InboxViewInner() {
           </div>
         ) : detail ? (
           <>
-            <header className="border-b border-border/60 bg-background dark:border-white/10">
+            <header className="border-b border-border/60 bg-background pt-[env(safe-area-inset-top)] dark:border-white/10">
               <div className="flex h-14 items-center gap-1 px-3 md:px-5">
                 <button
                   type="button"

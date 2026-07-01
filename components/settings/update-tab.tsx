@@ -228,10 +228,8 @@ function UpdateLogTerminal({ jobId }: { jobId: string }) {
   const userScrolledUpRef = React.useRef(false)
 
   React.useEffect(() => {
-    setLines([])
-    setConnection("connecting")
-
-    const source = new EventSource("/api/update/log")
+    let source: EventSource | null = null
+    let disposed = false
 
     const handleOpen = () => setConnection((c) => (c === "error" ? c : "live"))
     const handleReady = () => setConnection("live")
@@ -251,17 +249,37 @@ function UpdateLogTerminal({ jobId }: { jobId: string }) {
       setConnection("error")
     }
 
-    source.addEventListener("open", handleOpen)
-    source.addEventListener("ready", handleReady)
-    source.addEventListener("log", handleLog)
-    source.addEventListener("error", handleError)
+    const connect = () => {
+      if (disposed) return
+      source?.close()
+      // A fresh connection replays the catch-up tail from the bridge, so reset
+      // the buffer or a foreground reconnect would append duplicate lines.
+      setLines([])
+      setConnection("connecting")
+      const es = new EventSource("/api/update/log")
+      source = es
+      es.addEventListener("open", handleOpen)
+      es.addEventListener("ready", handleReady)
+      es.addEventListener("log", handleLog)
+      es.addEventListener("error", handleError)
+    }
+
+    connect()
+
+    // iOS Safari kills the SSE socket while the tab is backgrounded, and a
+    // CLOSED EventSource never retries on its own — reconnect on foreground.
+    const reconnectIfDead = () => {
+      if (document.visibilityState !== "visible") return
+      if (!source || source.readyState === EventSource.CLOSED) connect()
+    }
+    document.addEventListener("visibilitychange", reconnectIfDead)
+    window.addEventListener("focus", reconnectIfDead)
 
     return () => {
-      source.removeEventListener("open", handleOpen)
-      source.removeEventListener("ready", handleReady)
-      source.removeEventListener("log", handleLog)
-      source.removeEventListener("error", handleError)
-      source.close()
+      disposed = true
+      document.removeEventListener("visibilitychange", reconnectIfDead)
+      window.removeEventListener("focus", reconnectIfDead)
+      source?.close()
     }
   }, [jobId])
 

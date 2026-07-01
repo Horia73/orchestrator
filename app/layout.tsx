@@ -9,6 +9,7 @@ import { ChatStoreProvider } from "@/hooks/use-chat-store"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { NotificationPermissionPrompt } from "@/components/notification-permission-prompt"
 import { PreviewBasePathScript } from "@/components/preview-base-path-script"
+import { ProfileSessionGuard } from "@/components/profile-session-guard"
 import { ActiveWorkoutFloatingButton } from "@/components/workout/active-workout-floating-button"
 import { TransientScrollbarController } from "@/components/transient-scrollbar-controller"
 
@@ -145,6 +146,7 @@ export default async function RootLayout({
     >
       <body>
         <PreviewBasePathScript />
+        <ProfileSessionGuard />
         <TransientScrollbarController />
         <ThemeProvider>
           <TooltipProvider>

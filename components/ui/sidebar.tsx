@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { usePathname } from "next/navigation"
 import { cva, type VariantProps } from "class-variance-authority"
 import { Slot } from "radix-ui"
 
@@ -205,6 +206,62 @@ function MobileSidebarSwipeZone({
   )
 }
 
+const MOBILE_BACK_TRAP_KEY = "__orchBackTrap"
+
+function MobileBackGestureGuard() {
+  const { isMobile, setOpenMobile } = useSidebar()
+  const pathname = usePathname()
+  const [standalone, setStandalone] = React.useState(false)
+
+  React.useEffect(() => {
+    setStandalone(
+      window.matchMedia("(display-mode: standalone)").matches ||
+        (window.navigator as { standalone?: boolean }).standalone === true
+    )
+  }, [])
+
+  const active = isMobile && standalone
+
+  // The OS edge-swipe back gesture cannot be canceled from JS, so keep a
+  // same-URL sentinel entry beneath the current one: the gesture pops the
+  // sentinel (no visible navigation) and the popstate handler below turns it
+  // into "open the sidebar". Installed-PWA only — in a browser tab the back
+  // button/gesture must keep its native meaning.
+  React.useEffect(() => {
+    if (!active) return
+    const state = window.history.state
+    if (state && state[MOBILE_BACK_TRAP_KEY] === "top") return
+    window.history.replaceState(
+      { ...state, [MOBILE_BACK_TRAP_KEY]: "base" },
+      "",
+      window.location.href
+    )
+    window.history.pushState(
+      { ...state, [MOBILE_BACK_TRAP_KEY]: "top" },
+      "",
+      window.location.href
+    )
+  }, [active, pathname])
+
+  React.useEffect(() => {
+    if (!active) return
+    const handlePopState = () => {
+      const state = window.history.state
+      if (!state || state[MOBILE_BACK_TRAP_KEY] !== "base") return
+      window.history.pushState(
+        { ...state, [MOBILE_BACK_TRAP_KEY]: "top" },
+        "",
+        window.location.href
+      )
+      setOpenMobile(true)
+    }
+    window.addEventListener("popstate", handlePopState)
+    return () => window.removeEventListener("popstate", handlePopState)
+  }, [active, setOpenMobile])
+
+  return null
+}
+
 function SidebarProvider({
   defaultOpen = true,
   open: openProp,
@@ -296,6 +353,7 @@ function SidebarProvider({
         {...props}
       >
         {children}
+        <MobileBackGestureGuard />
         <MobileSidebarSwipeZone
           enabled={isMobile && !openMobile}
           onOpen={() => setOpenMobile(true)}

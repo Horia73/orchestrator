@@ -227,42 +227,73 @@ export function CliTerminal({ sessionId, onExit, onText, className }: CliTermina
         const term = termRef.current
         if (!term) return
 
-        const es = new EventSource(`/api/cli/${encodeURIComponent(sessionId)}/stream`)
-        es.addEventListener("open", () => setStatus("running"))
+        let es: EventSource | null = null
+        let disposed = false
+        let exited = false
 
-        es.addEventListener("message", e => {
-            try {
-                const ev = JSON.parse(e.data) as SessionEvent
-                if (ev.type === "data" && ev.data) {
-                    const bytes = base64ToUint8Array(ev.data)
-                    term.write(bytes)
-                    if (onText) {
-                        textBufferRef.current += new TextDecoder("utf-8", { fatal: false }).decode(bytes)
-                        // Cap so memory doesn't grow unbounded for long sessions.
-                        if (textBufferRef.current.length > 1_000_000) {
-                            textBufferRef.current = textBufferRef.current.slice(-500_000)
+        const connect = () => {
+            if (disposed || exited) return
+            es?.close()
+            // The stream replays the whole session buffer on connect, so start
+            // from a clean screen or reconnects would double the history.
+            term.reset()
+            textBufferRef.current = ""
+
+            const source = new EventSource(`/api/cli/${encodeURIComponent(sessionId)}/stream`)
+            es = source
+            source.addEventListener("open", () => setStatus("running"))
+
+            source.addEventListener("message", e => {
+                try {
+                    const ev = JSON.parse(e.data) as SessionEvent
+                    if (ev.type === "data" && ev.data) {
+                        const bytes = base64ToUint8Array(ev.data)
+                        term.write(bytes)
+                        if (onText) {
+                            textBufferRef.current += new TextDecoder("utf-8", { fatal: false }).decode(bytes)
+                            // Cap so memory doesn't grow unbounded for long sessions.
+                            if (textBufferRef.current.length > 1_000_000) {
+                                textBufferRef.current = textBufferRef.current.slice(-500_000)
+                            }
+                            onText(textBufferRef.current)
                         }
-                        onText(textBufferRef.current)
+                    } else if (ev.type === "error") {
+                        term.write(`\r\n\x1b[31m[error: ${ev.message ?? "unknown"}]\x1b[0m\r\n`)
+                    } else if (ev.type === "exit") {
+                        const code = ev.code ?? null
+                        exited = true
+                        setStatus("exited")
+                        setExitCode(code)
+                        onExit?.(code)
+                        term.write(`\r\n\x1b[2;90m── exit ${code ?? "?"}\x1b[0m\r\n`)
+                        source.close()
                     }
-                } else if (ev.type === "error") {
-                    term.write(`\r\n\x1b[31m[error: ${ev.message ?? "unknown"}]\x1b[0m\r\n`)
-                } else if (ev.type === "exit") {
-                    const code = ev.code ?? null
-                    setStatus("exited")
-                    setExitCode(code)
-                    onExit?.(code)
-                    term.write(`\r\n\x1b[2;90m── exit ${code ?? "?"}\x1b[0m\r\n`)
-                    es.close()
-                }
-            } catch { /* malformed */ }
-        })
+                } catch { /* malformed */ }
+            })
 
-        es.addEventListener("error", () => {
-            // EventSource auto-retries; only flag if we have no signal yet.
-            if (status === "connecting") setStatus("error")
-        })
+            source.addEventListener("error", () => {
+                // EventSource auto-retries; only flag if we have no signal yet.
+                setStatus(prev => (prev === "connecting" ? "error" : prev))
+            })
+        }
 
-        return () => { es.close() }
+        connect()
+
+        // iOS Safari kills the SSE socket while the tab is backgrounded, and a
+        // CLOSED EventSource never retries on its own — reconnect on foreground.
+        const reconnectIfDead = () => {
+            if (document.visibilityState !== "visible") return
+            if (!es || es.readyState === EventSource.CLOSED) connect()
+        }
+        document.addEventListener("visibilitychange", reconnectIfDead)
+        window.addEventListener("focus", reconnectIfDead)
+
+        return () => {
+            disposed = true
+            document.removeEventListener("visibilitychange", reconnectIfDead)
+            window.removeEventListener("focus", reconnectIfDead)
+            es?.close()
+        }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [sessionId])
 
