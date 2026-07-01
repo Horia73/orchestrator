@@ -120,7 +120,7 @@ const CLI_LABELS: Record<string, { name: string; description: string }> = {
     },
     "codex": {
         name: "Codex CLI",
-        description: "OpenAI subscription. Live from the same /wham/usage endpoint codex's /status polls.",
+        description: "OpenAI subscription. Live from Codex app-server rate limits, with the legacy usage endpoint as fallback.",
     },
 }
 

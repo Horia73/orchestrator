@@ -18,6 +18,9 @@ export interface PublishedAppLibraryEntry {
   updatedAt: number
   sizeBytes: number
   fileCount: number
+  shareUrl: string | null
+  shareAccess: 'tailscale-funnel' | 'public-origin' | null
+  /** Backward-compatible alias for older UI/code that expected Funnel-only links. */
   funnelUrl: string | null
 }
 
@@ -104,8 +107,9 @@ function summarizeDirectory(dir: string): { sizeBytes: number; fileCount: number
 }
 
 export function listPublishedAppsForLibrary(): PublishedAppLibraryEntry[] {
+  const runtimePaths = activeRuntimePaths()
   const root = path.join(
-    /* turbopackIgnore: true */ activeRuntimePaths().agentWorkspaceDir,
+    /* turbopackIgnore: true */ runtimePaths.agentWorkspaceDir,
     "published-apps"
   )
   let rootReal: string
@@ -146,7 +150,7 @@ export function listPublishedAppsForLibrary(): PublishedAppLibraryEntry[] {
 
     const publishedAt = dateMs(metadata?.publishedAt, stat.mtimeMs)
     const summary = summarizeDirectory(dirReal)
-    const share = getPublishedAppShare(slug)
+    const share = getPublishedAppShare(slug, { profileId: runtimePaths.profileId })
     out.push({
       slug,
       title: titleForSlug(slug),
@@ -158,6 +162,8 @@ export function listPublishedAppsForLibrary(): PublishedAppLibraryEntry[] {
       updatedAt: stat.mtimeMs,
       sizeBytes: summary.sizeBytes,
       fileCount: summary.fileCount,
+      shareUrl: share?.funnelUrl ?? null,
+      shareAccess: share?.access ?? null,
       funnelUrl: share?.funnelUrl ?? null,
     })
   }

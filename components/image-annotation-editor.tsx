@@ -2,12 +2,14 @@
 
 import * as React from "react"
 import {
+  ArrowUp,
   ArrowUpRight,
   Circle,
   Download,
   Eraser,
   Hand,
   Highlighter,
+  Loader2,
   Minus,
   MousePointer2,
   PenLine,
@@ -83,6 +85,9 @@ interface ImageAnnotationEditorProps {
   imageUrl: string
   filename: string
   onSave?: (file: File) => void | Promise<void>
+  onSend?: (file: File, message: string) => void | Promise<void>
+  sendDisabled?: boolean
+  sendDisabledMessage?: string
 }
 
 const COLORS = ["#f43f5e", "#f97316", "#facc15", "#22c55e", "#38bdf8", "#a855f7", "#ffffff", "#111827"]
@@ -499,7 +504,14 @@ function SwatchButton({
   )
 }
 
-export function ImageAnnotationEditor({ imageUrl, filename, onSave }: ImageAnnotationEditorProps) {
+export function ImageAnnotationEditor({
+  imageUrl,
+  filename,
+  onSave,
+  onSend,
+  sendDisabled = false,
+  sendDisabledMessage,
+}: ImageAnnotationEditorProps) {
   const imageRef = React.useRef<HTMLImageElement>(null)
   const canvasRef = React.useRef<HTMLCanvasElement>(null)
   const viewportRef = React.useRef<HTMLDivElement>(null)
@@ -522,7 +534,10 @@ export function ImageAnnotationEditor({ imageUrl, filename, onSave }: ImageAnnot
   const [isPanning, setIsPanning] = React.useState(false)
   const [textValue, setTextValue] = React.useState("Note")
   const [saveState, setSaveState] = React.useState<"idle" | "saving" | "saved" | "error">("idle")
+  const [sendText, setSendText] = React.useState("")
+  const [sendState, setSendState] = React.useState<"idle" | "sending" | "sent" | "error">("idle")
   const [exportError, setExportError] = React.useState<string | null>(null)
+  const [sendError, setSendError] = React.useState<string | null>(null)
 
   const fitScale = React.useMemo(() => {
     if (imageSize.width <= 0 || imageSize.height <= 0 || viewportSize.width <= 0 || viewportSize.height <= 0) return 1
@@ -620,7 +635,9 @@ export function ImageAnnotationEditor({ imageUrl, filename, onSave }: ImageAnnot
     marksRef.current = next
     setMarks(next)
     setSaveState("idle")
+    setSendState("idle")
     setExportError(null)
+    setSendError(null)
   }, [])
 
   const addMark = React.useCallback((mark: AnnotationMark) => {
@@ -949,6 +966,25 @@ export function ImageAnnotationEditor({ imageUrl, filename, onSave }: ImageAnnot
     }
   }, [buildAnnotatedBlob, filename, onSave])
 
+  const handleSend = React.useCallback(async () => {
+    if (!onSend || sendDisabled || sendState === "sending") return
+    try {
+      setSendState("sending")
+      setExportError(null)
+      setSendError(null)
+      const blob = await buildAnnotatedBlob()
+      const file = new File([blob], annotatedFilename(filename), { type: "image/png" })
+      await onSend(file, sendText.trim())
+      if (!mountedRef.current) return
+      setSendState("sent")
+      setSendText("")
+    } catch (error) {
+      if (!mountedRef.current) return
+      setSendState("error")
+      setSendError(error instanceof Error ? error.message : "Could not send this image.")
+    }
+  }, [buildAnnotatedBlob, filename, onSend, sendDisabled, sendState, sendText])
+
   const cursorClass =
     tool === "hand"
       ? isPanning ? "cursor-grabbing" : "cursor-grab"
@@ -1122,6 +1158,50 @@ export function ImageAnnotationEditor({ imageUrl, filename, onSave }: ImageAnnot
             </div>
           )}
         </div>
+
+        {onSend && (
+          <form
+            className="shrink-0 border-t border-white/10 bg-black/45 px-3 py-2 backdrop-blur-md"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void handleSend()
+            }}
+          >
+            <div className="mx-auto flex w-full max-w-3xl items-center gap-2 rounded-xl border border-white/12 bg-white/[0.08] px-2.5 py-2 shadow-[0_12px_28px_rgba(0,0,0,0.22)]">
+              <input
+                value={sendText}
+                onChange={(event) => {
+                  setSendText(event.target.value)
+                  if (sendState !== "sending") {
+                    setSendState("idle")
+                    setSendError(null)
+                  }
+                }}
+                disabled={sendState === "sending"}
+                placeholder="Add a message..."
+                className="h-9 min-w-0 flex-1 bg-transparent px-1 text-sm text-white outline-none placeholder:text-white/45 disabled:opacity-60"
+              />
+              <Button
+                type="submit"
+                size="icon-lg"
+                disabled={sendDisabled || sendState === "sending" || imageSize.width <= 0 || imageSize.height <= 0}
+                aria-label={sendDisabled ? sendDisabledMessage ?? "Cannot send right now" : "Send annotated image"}
+                className="size-9 rounded-[11px] bg-white text-black hover:bg-white/90 disabled:opacity-45"
+              >
+                {sendState === "sending" ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <ArrowUp className="size-[17px] stroke-[2.5]" />
+                )}
+              </Button>
+            </div>
+            {(sendError || (sendDisabled && sendDisabledMessage)) && (
+              <div className="mx-auto mt-1.5 max-w-3xl px-1 text-xs font-medium text-white/70">
+                {sendError ?? sendDisabledMessage}
+              </div>
+            )}
+          </form>
+        )}
       </div>
     </TooltipProvider>
   )

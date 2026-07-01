@@ -267,10 +267,13 @@ try {
   // Default destination: tmp/<name> with the upload's bytes intact.
   const copied = executeCopyUploadToWorkspace({ upload_id: doc.attachment.id })
   assert.equal(copied.success, true)
-  const copiedPath = (copied.data as { path: string }).path
-  assert.match(copiedPath, /^\/tmp\//)
+  const copiedData = copied.data as { path: string; workspace_path: string; display_path: string }
+  const copiedPath = copiedData.path
+  assert.match(copiedPath, /^tmp\//)
+  assert.equal(copiedData.workspace_path, copiedPath)
+  assert.match(copiedData.display_path, /^\/tmp\//)
   assert.equal(
-    fs.readFileSync(path.join(workspaceDir, copiedPath.replace(/^\//, '')), 'utf8'),
+    fs.readFileSync(path.join(workspaceDir, copiedPath), 'utf8'),
     'plain text'
   )
 

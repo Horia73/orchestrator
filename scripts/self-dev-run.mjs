@@ -889,9 +889,14 @@ function upsertPublishedAppShare(context, share) {
     ? current
     : { version: 1, shares: {} }
   const shares = state.shares && typeof state.shares === 'object' ? state.shares : {}
-  const existing = shares[share.slug] && typeof shares[share.slug] === 'object' ? shares[share.slug] : {}
+  const key = `${share.profileId}:${share.slug}`
+  const scopedExisting = shares[key] && typeof shares[key] === 'object' ? shares[key] : null
+  const legacyExisting = shares[share.slug] && typeof shares[share.slug] === 'object' ? shares[share.slug] : null
+  const existing = scopedExisting || (
+    legacyExisting?.profileId === share.profileId ? legacyExisting : {}
+  )
   const now = new Date().toISOString()
-  shares[share.slug] = {
+  shares[key] = {
     slug: share.slug,
     profileId: share.profileId,
     enabled: true,
@@ -900,6 +905,9 @@ function upsertPublishedAppShare(context, share) {
     funnelUrl: share.funnelUrl,
     createdAt: typeof existing.createdAt === 'string' ? existing.createdAt : now,
     updatedAt: now,
+  }
+  if (legacyExisting?.profileId === share.profileId) {
+    delete shares[share.slug]
   }
   writeJsonAtomic(statePath, {
     version: 1,

@@ -60,7 +60,7 @@ export async function GET(request: Request) {
             createdAt: r.createdAt,
             sizeBytes: Buffer.byteLength(r.content, 'utf8'),
             appSlug: resolveAppForArtifact(r.id)?.slug,
-        }))
+        })).filter((artifact) => !artifact.appSlug)
 
         const publishedApps = listPublishedAppsForLibrary()
 

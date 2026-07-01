@@ -121,6 +121,42 @@ export async function setAppFunnel(enable: boolean): Promise<SetFunnelResult> {
   }
 }
 
+export interface SetPublishedAppFunnelResult extends SetFunnelResult {
+  slug: string | null
+  path: string | null
+  funnelUrl: string | null
+}
+
+export async function setPublishedAppFunnel(
+  slug: string,
+  enable: boolean,
+): Promise<SetPublishedAppFunnelResult> {
+  const result = await callBridge('remote-access/published-app-funnel', {
+    method: 'POST',
+    body: { enable, slug },
+  })
+  if (!result) {
+    return {
+      ok: false,
+      tailscale: null,
+      error: NO_BRIDGE.error,
+      slug: null,
+      path: null,
+      funnelUrl: null,
+    }
+  }
+  const json = (result.json ?? {}) as Record<string, unknown>
+  return {
+    ok: result.ok && json.ok === true,
+    tailscale: tailscaleFromPayload(json),
+    error: result.ok ? null : (typeof json.error === 'string' ? json.error : `Bridge returned ${result.status}.`),
+    output: typeof json.output === 'string' ? json.output : undefined,
+    slug: typeof json.slug === 'string' ? json.slug : null,
+    path: typeof json.path === 'string' ? json.path : null,
+    funnelUrl: typeof json.funnelUrl === 'string' && json.funnelUrl ? json.funnelUrl : null,
+  }
+}
+
 export async function installTailscale(): Promise<SetFunnelResult> {
   const result = await callBridge('remote-access/install-tailscale', { method: 'POST', body: {} })
   if (!result) {

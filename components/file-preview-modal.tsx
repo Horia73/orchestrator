@@ -23,6 +23,9 @@ interface FilePreviewModalProps {
      *  image/video, the lightbox shows left/right gallery navigation. */
     gallery?: Attachment[]
     onSaveImage?: (attachment: Attachment, file: File) => void | Promise<void>
+    onSendImage?: (attachment: Attachment, file: File, message: string) => void | Promise<void>
+    sendImageDisabled?: boolean
+    sendImageDisabledMessage?: string
     onClose: () => void
 }
 
@@ -53,7 +56,15 @@ function ModalShell({ onClose, children }: { onClose: () => void; children: Reac
 // Modal
 // ---------------------------------------------------------------------------
 
-export function FilePreviewModal({ attachment, gallery, onSaveImage, onClose }: FilePreviewModalProps) {
+export function FilePreviewModal({
+    attachment,
+    gallery,
+    onSaveImage,
+    onSendImage,
+    sendImageDisabled,
+    sendImageDisabledMessage,
+    onClose,
+}: FilePreviewModalProps) {
     const isOpen = !!attachment
     const [mounted, setMounted] = React.useState(false)
 
@@ -214,6 +225,9 @@ export function FilePreviewModal({ attachment, gallery, onSaveImage, onClose }: 
                         imageUrl={url}
                         filename={active.filename}
                         onSave={onSaveImage ? (file) => onSaveImage(active, file) : undefined}
+                        onSend={onSendImage ? (file, message) => onSendImage(active, file, message) : undefined}
+                        sendDisabled={sendImageDisabled}
+                        sendDisabledMessage={sendImageDisabledMessage}
                     />
                 ) : active.type === "video" ? (
                     <video

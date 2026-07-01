@@ -232,14 +232,21 @@ function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
   // /api/workspace/files endpoint that download links use; otherwise the relative
   // src 404s against the chat route and the image silently shows as unavailable.
   // Uploads (`/api/uploads/<id>`) and absolute URLs fall through unchanged.
-  const workspaceSrc = workspaceDownloadHref(rawSrc)
+  const workspaceRef = workspaceFileRef(rawSrc)
+  const workspaceKind = workspaceRef
+    ? workspacePreviewKind(workspaceRef.filename, workspaceRef.mimeType)
+    : null
+  const workspaceSrc = workspaceRef?.downloadHref
   const imageSrc = workspaceSrc ?? (rawSrc ? appPath(rawSrc) : undefined)
   const isWhatsAppQr =
     typeof imageSrc === "string" &&
     imageSrc.includes("/api/integrations/whatsapp/qr")
 
   const uploadId = rawSrc?.match(UPLOAD_IMAGE_ID_RE)?.[1]
-  const canPreview = !!onPreview && !!uploadId && !isWhatsAppQr
+  const canPreviewUpload = !!uploadId
+  const canPreviewWorkspaceImage = !!workspaceRef && workspaceKind === "image"
+  const canPreview =
+    !!onPreview && (canPreviewUpload || canPreviewWorkspaceImage) && !isWhatsAppQr
 
   if (!imageSrc) return null
   if (failed) {
@@ -251,18 +258,31 @@ function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
   }
 
   const handleClick =
-    canPreview && uploadId
+    canPreview
       ? () => {
-          const id = decodeURIComponent(uploadId)
-          const ext = id.includes(".")
-            ? id.slice(id.lastIndexOf(".") + 1).toLowerCase()
-            : ""
+          if (uploadId) {
+            const id = decodeURIComponent(uploadId)
+            const ext = id.includes(".")
+              ? id.slice(id.lastIndexOf(".") + 1).toLowerCase()
+              : ""
+            onPreview?.({
+              id,
+              filename: alt || id,
+              mimeType: ext ? `image/${ext === "jpg" ? "jpeg" : ext}` : "image/*",
+              size: 0,
+              type: "image",
+            })
+            return
+          }
+          if (!workspaceRef || workspaceKind !== "image") return
           onPreview?.({
-            id,
-            filename: alt || id,
-            mimeType: ext ? `image/${ext === "jpg" ? "jpeg" : ext}` : "image/*",
+            id: workspaceRef.filePath,
+            filename: workspaceRef.filename,
+            mimeType: workspaceRef.mimeType || "image/*",
             size: 0,
             type: "image",
+            origin: "workspace",
+            url: workspaceRef.downloadHref,
           })
         }
       : undefined
@@ -364,12 +384,6 @@ function workspaceCandidatePath(href: string | undefined): string | null {
 
   if (!isWorkspacePath && !isRelativeWorkspaceFile) return null
   return candidate
-}
-
-function workspaceDownloadHref(href: string | undefined): string | undefined {
-  const candidate = workspaceCandidatePath(href)
-  if (candidate == null) return undefined
-  return appApiPath("/api/workspace/files", { path: candidate })
 }
 
 interface WorkspaceFileRef {

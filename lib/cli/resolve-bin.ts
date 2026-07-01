@@ -8,13 +8,15 @@ import { execFileSync } from 'child_process'
  *
  * Next.js inherits PATH from whatever shell launched it; in many setups that
  * misses common user-bin directories like ~/.local/bin or
- * ~/.npm-global/bin. We walk known fallback locations after the cheap PATH
- * lookup so spawn() never fails with `posix_spawnp failed` when the binary
- * exists but isn't on the inherited PATH.
+ * ~/.npm-global/bin. For the managed coding CLIs we prefer the app-managed npm
+ * prefix before PATH so stale nvm/global installs cannot shadow the binary that
+ * Settings -> Models installs and updates.
  *
  * Cached per-bin so repeated lookups don't shell out for `which` each time.
  */
 const cache = new Map<string, string>()
+
+const MANAGED_CLI_BINS = new Set(['claude', 'codex'])
 
 const FALLBACK_DIRS = [
     '.local/bin',
@@ -35,7 +37,27 @@ export function resolveBin(name: string): string {
     const cached = cache.get(name)
     if (cached) return cached
 
-    // Try the cheap shell lookup first.
+    const home = homedir()
+
+    const configuredOverride = configuredBinOverride(name)
+    if (configuredOverride && existsSync(/* turbopackIgnore: true */ configuredOverride)) {
+        cache.set(name, configuredOverride)
+        return configuredOverride
+    }
+
+    // For CLIs Orchestrator owns from Settings, check stable managed locations
+    // before PATH. A user shell may prepend old nvm/npm bins; letting those win
+    // makes status, usage, and app-server runs disagree across processes.
+    if (MANAGED_CLI_BINS.has(name)) {
+        for (const candidate of managedCliCandidates(name, home)) {
+            if (existsSync(/* turbopackIgnore: true */ candidate)) {
+                cache.set(name, candidate)
+                return candidate
+            }
+        }
+    }
+
+    // Try the cheap shell lookup.
     try {
         const out = execFileSync('which', [name], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
         if (out && existsSync(/* turbopackIgnore: true */ out)) {
@@ -45,7 +67,6 @@ export function resolveBin(name: string): string {
     } catch { /* not on PATH */ }
 
     // Fall back to user/system locations.
-    const home = homedir()
     const npmPrefix = npmGlobalPrefix(home)
     const userDirs = [
         join(/* turbopackIgnore: true */ npmPrefix, 'bin'),
@@ -90,7 +111,8 @@ export function augmentedEnv(extra?: Record<string, string | undefined>): NodeJS
         ...FALLBACK_GLOBALS,
     ]
     const currentPath = process.env.PATH ?? ''
-    const merged = [currentPath, ...dirs.filter(d => !currentPath.includes(d))].filter(Boolean).join(':')
+    const managedPrefix = dirs.filter(d => !pathHasDir(currentPath, d))
+    const merged = [...managedPrefix, currentPath].filter(Boolean).join(':')
 
     const env: NodeJS.ProcessEnv = {
         ...process.env,
@@ -104,4 +126,31 @@ export function augmentedEnv(extra?: Record<string, string | undefined>): NodeJS
 function npmGlobalPrefix(home: string): string {
     const configured = process.env.NPM_CONFIG_PREFIX?.trim()
     return configured || join(/* turbopackIgnore: true */ home, '.npm-global')
+}
+
+function configuredBinOverride(name: string): string | null {
+    const envName = name === 'codex'
+        ? 'ORCHESTRATOR_CODEX_BIN'
+        : name === 'claude'
+            ? 'ORCHESTRATOR_CLAUDE_BIN'
+            : null
+    if (!envName) return null
+    const value = process.env[envName]?.trim()
+    return value && isAbsolute(value) ? value : null
+}
+
+function managedCliCandidates(name: string, home: string): string[] {
+    const npmPrefix = npmGlobalPrefix(home)
+    const candidates = [
+        join(/* turbopackIgnore: true */ npmPrefix, 'bin', name),
+        join(/* turbopackIgnore: true */ home, '.npm-global', 'bin', name),
+    ]
+    if (name === 'codex') {
+        candidates.push('/Applications/Codex.app/Contents/Resources/codex')
+    }
+    return [...new Set(candidates)]
+}
+
+function pathHasDir(pathValue: string, dir: string): boolean {
+    return pathValue.split(':').some(part => part === dir)
 }

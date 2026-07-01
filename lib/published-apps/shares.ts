@@ -8,7 +8,7 @@ export interface PublishedAppShare {
   slug: string
   profileId: string
   enabled: boolean
-  access: 'tailscale-funnel'
+  access: 'tailscale-funnel' | 'public-origin'
   funnelPath: string
   funnelUrl: string | null
   createdAt: string
@@ -26,18 +26,92 @@ const SHARE_STATE_PATH = path.join(
   'published-app-shares.json',
 )
 
-export function getPublishedAppShare(slug: string): PublishedAppShare | null {
+export function getPublishedAppShare(
+  slug: string,
+  options: { profileId?: string | null } = {},
+): PublishedAppShare | null {
   if (!isValidPublishedAppSlug(slug)) return null
   const state = readShareState()
-  const raw = state.shares?.[slug]
-  if (!raw || typeof raw !== 'object') return null
-  const share = normalizeShare(raw)
-  if (!share || share.slug !== slug || !share.enabled) return null
+  const profileId = options.profileId ? normalizeProfileId(options.profileId) : null
+
+  if (profileId) {
+    const scoped = normalizeShare(state.shares?.[shareStateKey(profileId, slug)])
+    if (scoped?.slug === slug && scoped.profileId === profileId && scoped.enabled) {
+      return scoped
+    }
+
+    // Backward compatibility for shares written before the state was keyed by
+    // profile. Only reuse a legacy slug entry when it belongs to this profile.
+    const legacy = normalizeShare(state.shares?.[slug])
+    if (legacy?.slug === slug && legacy.profileId === profileId && legacy.enabled) {
+      return legacy
+    }
+    return null
+  }
+
+  const candidates = Object.values(state.shares ?? {})
+    .map(normalizeShare)
+    .filter((share): share is PublishedAppShare => Boolean(share?.enabled && share.slug === slug))
+  return candidates.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0] ?? null
+}
+
+export function upsertPublishedAppShare(args: {
+  slug: string
+  profileId: string
+  funnelPath?: string
+  funnelUrl: string
+  access?: PublishedAppShare['access']
+}): PublishedAppShare {
+  if (!isValidPublishedAppSlug(args.slug)) {
+    throw new Error('Invalid published app slug.')
+  }
+  const profileId = normalizeProfileId(args.profileId)
+  const funnelPath = args.funnelPath ?? `/published-apps/${args.slug}`
+  if (funnelPath !== `/published-apps/${args.slug}`) {
+    throw new Error('Invalid published app funnel path.')
+  }
+  const funnelUrl = args.funnelUrl.trim()
+  if (!funnelUrl) throw new Error('Published app share URL is required.')
+
+  const state = readShareState()
+  const shares = state.shares && typeof state.shares === 'object' ? { ...state.shares } : {}
+  const key = shareStateKey(profileId, args.slug)
+  const existing = normalizeShare(shares[key])
+    ?? matchingLegacyShare(shares, args.slug, profileId)
+  const now = new Date().toISOString()
+  const share: PublishedAppShare = {
+    slug: args.slug,
+    profileId,
+    enabled: true,
+    access: args.access ?? 'tailscale-funnel',
+    funnelPath,
+    funnelUrl,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  }
+
+  shares[key] = share
+
+  const legacy = normalizeShare(shares[args.slug])
+  if (legacy?.profileId === profileId) {
+    delete shares[args.slug]
+  }
+
+  writeShareState({
+    version: 1,
+    updatedAt: now,
+    shares,
+  })
+
   return share
 }
 
 export function isValidPublishedAppSlug(value: string): boolean {
   return /^[a-z0-9][a-z0-9-]{0,79}$/.test(value)
+}
+
+function shareStateKey(profileId: string, slug: string): string {
+  return `${profileId}:${slug}`
 }
 
 function readShareState(): PublishedAppShareState {
@@ -54,7 +128,24 @@ function readShareState(): PublishedAppShareState {
   }
 }
 
-function normalizeShare(raw: object): PublishedAppShare | null {
+function writeShareState(state: PublishedAppShareState): void {
+  fs.mkdirSync(/* turbopackIgnore: true */ path.dirname(SHARE_STATE_PATH), { recursive: true })
+  const tmp = `${SHARE_STATE_PATH}.${process.pid}.${Date.now()}.tmp`
+  fs.writeFileSync(/* turbopackIgnore: true */ tmp, `${JSON.stringify(state, null, 2)}\n`, 'utf-8')
+  fs.renameSync(/* turbopackIgnore: true */ tmp, SHARE_STATE_PATH)
+}
+
+function matchingLegacyShare(
+  shares: Record<string, unknown>,
+  slug: string,
+  profileId: string,
+): PublishedAppShare | null {
+  const legacy = normalizeShare(shares[slug])
+  return legacy?.slug === slug && legacy.profileId === profileId ? legacy : null
+}
+
+function normalizeShare(raw: unknown): PublishedAppShare | null {
+  if (!raw || typeof raw !== 'object') return null
   const r = raw as Record<string, unknown>
   const slug = typeof r.slug === 'string' ? r.slug.trim() : ''
   if (!isValidPublishedAppSlug(slug)) return null
@@ -80,7 +171,7 @@ function normalizeShare(raw: object): PublishedAppShare | null {
     slug,
     profileId,
     enabled: r.enabled === true,
-    access: 'tailscale-funnel',
+    access: r.access === 'public-origin' ? 'public-origin' : 'tailscale-funnel',
     funnelPath,
     funnelUrl: typeof r.funnelUrl === 'string' && r.funnelUrl.trim()
       ? r.funnelUrl.trim()

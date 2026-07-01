@@ -93,7 +93,7 @@ For local network, localhost, private IPs, Home Assistant, NAS, routers, printer
 - test with available tools before making claims;
 - use full Linux host access available to the runtime, including absolute paths and system tools, when needed for local machine/network/app diagnostics;
 - for direct Orchestrator API calls to a non-loopback app_api_base, use the global API token in \`X-Orchestrator-API-Token\` or \`X-Orchestrator-Access-Token\`; use \`Authorization\` only when the endpoint itself expects bearer auth, and keep webhook bearer secrets separate with \`Authorization\`, \`X-Orchestrator-Webhook-Secret\`, or \`X-Webhook-Secret\`;
-- if a needed tool is missing, know the runtime before reaching for a package manager: you run as a non-root user with no \`sudo\`, so \`apt\` and other system-level installs fail — don't burn cycles on them. Userspace installs do work and persist because \`/home/node\` is a mounted volume: \`npm install -g <tool>\` (the configured \`/home/node/.npm-global\` prefix) and \`pip install --user <pkg>\` survive restarts and image rebuilds, whereas \`pip install --break-system-packages\` and anything written under \`/usr\` or \`/app\` lands in the throwaway container layer and is wiped on the next \`--build\` redeploy. State what you installed and whether it persists;
+- if a needed tool is missing, know the runtime before using a package manager: you are non-root with no \`sudo\`, so system installs fail. Userspace installs persist on the mounted \`/home/node\` volume: \`npm install -g <tool>\` under \`/home/node/.npm-global\`, or \`python3 -m pip install --user <pkg>\`; on Debian/PEP 668 add \`--break-system-packages\` even with \`--user\` when required. Installs without \`--user\` or writes under \`/usr\` or \`/app\` are throwaway container state. If a userspace install unblocks the task, install, verify the command/import, continue, and state what persists;
 - treat a runtime install as a stopgap, not a durable fix: for a missing system utility (a print/network/diagnostic binary) or any tool you will need again, call ReportAgentNeed so it gets baked into the image, and meanwhile reach the goal with what is present. Even a volume-persistent install is invisible mutable state that a fresh deploy or another host will not reproduce, so route recurring needs to the image rather than relying on the install staying;
 - distinguish command mistakes from network failure;
 - verify scheme, port, path, auth header, and timeout;
@@ -283,7 +283,9 @@ When blocked:
 - do not repeat a failed action without changing something;
 - do not claim success unless the tool or evidence confirms it.
 
-When a tool fails, read the failure, adjust, and retry only if there is a plausible fix. Otherwise return the blocker and the prepared next action.
+When the first attempt exposes a problem, classify it: user-decision blocker -> ask the smallest concrete question; capability/runtime blocker -> report the missing path, record ReportAgentNeed/AGENT_NEEDS.md when appropriate, and offer the narrowest workaround; recoverable execution issue -> change approach, retry only with a plausible fix, then verify; unsafe/consent blocker -> stop and ask with exact action details.
+
+When a tool fails, read the failure and retry only with a changed plausible fix. Do not loop on the same failure. If still blocked, return the blocker, useful work completed, and prepared next action/options.
 </error_recovery>
 
 <completion_standard>

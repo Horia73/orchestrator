@@ -63,11 +63,30 @@ try {
 
   process.env.ORCHESTRATOR_STATE_DIR = path.resolve(result.path, '..', '..', '..')
   const { listPublishedAppsForLibrary } = await import('@/lib/library/published-apps')
+  const { getPublishedAppShare, upsertPublishedAppShare } = await import('@/lib/published-apps/shares')
   const publishedApps = listPublishedAppsForLibrary()
   const libraryEntry = publishedApps.find((entry) => entry.slug === 'smoke-static')
   assert.ok(libraryEntry, 'published app appears in Library index')
   assert.equal(libraryEntry?.basePath, '/published-apps/smoke-static')
   assert.equal(libraryEntry?.title, 'Smoke Static')
+
+  const shareUrl = 'https://example.com/published-apps/smoke-static/'
+  upsertPublishedAppShare({
+    slug: 'smoke-static',
+    profileId: 'admin_horia',
+    funnelPath: '/published-apps/smoke-static',
+    funnelUrl: shareUrl,
+    access: 'public-origin',
+  })
+  assert.equal(getPublishedAppShare('smoke-static', { profileId: 'admin_horia' })?.funnelUrl, shareUrl)
+  assert.equal(getPublishedAppShare('smoke-static', { profileId: 'member1' }), null)
+  const shareStatePath = path.join(process.env.ORCHESTRATOR_STATE_DIR, 'published-app-shares.json')
+  const shareState = JSON.parse(fs.readFileSync(shareStatePath, 'utf-8'))
+  assert.ok(shareState.shares['admin_horia:smoke-static'], 'share is keyed by profile and slug')
+  assert.equal(shareState.shares['smoke-static'], undefined, 'share is not written under a global slug key')
+  const libraryEntryWithShare = listPublishedAppsForLibrary().find((entry) => entry.slug === 'smoke-static')
+  assert.equal(libraryEntryWithShare?.shareUrl, shareUrl)
+  assert.equal(libraryEntryWithShare?.shareAccess, 'public-origin')
 
   console.log('smoke-project-publish: OK')
 } finally {

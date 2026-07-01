@@ -5,12 +5,16 @@ import Link from "next/link"
 import {
     AppWindow,
     Braces,
+    Check,
+    Copy,
     FileCode2,
     FileText,
     Globe,
     ExternalLink,
+    Loader2,
     Network,
     RefreshCw,
+    Share2,
     Shapes,
     Sigma,
     Table,
@@ -20,7 +24,8 @@ import {
 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
-import { appPath } from "@/lib/app-path"
+import { appApiPath, appPath } from "@/lib/app-path"
+import { copyTextToClipboard } from "@/lib/clipboard"
 import { useAppEvent } from "@/hooks/use-app-events"
 import { LibraryEmptyState } from "./library-empty-state"
 import { LibrarySearchBar, matchesQuery } from "./search-bar"
@@ -116,6 +121,20 @@ export function ArtifactsTab() {
         }
     }, [])
 
+    const updatePublishedAppShare = React.useCallback((
+        slug: string,
+        shareUrl: string,
+        shareAccess: LibraryPublishedAppRow['shareAccess'],
+    ) => {
+        setPublishedApps((current) => {
+            const next = (current ?? []).map((app) => app.slug === slug
+                ? { ...app, shareUrl, shareAccess, funnelUrl: shareUrl }
+                : app)
+            cachedPublishedApps = next
+            return next
+        })
+    }, [])
+
     const presentTypes = React.useMemo(() => {
         const seen = new Map<string, number>()
         for (const a of artifacts ?? []) seen.set(a.type, (seen.get(a.type) ?? 0) + 1)
@@ -131,7 +150,7 @@ export function ArtifactsTab() {
     const filteredPublishedApps = React.useMemo(() => {
         if (!publishedApps) return null
         if (!query) return publishedApps
-        return publishedApps.filter((a) => matchesQuery(query, a.title, a.slug, a.basePath, a.runId ?? ""))
+        return publishedApps.filter((a) => matchesQuery(query, a.title, a.slug, a.basePath, a.runId ?? "", a.shareUrl ?? ""))
     }, [publishedApps, query])
 
     const filteredArtifacts = React.useMemo(() => {
@@ -212,7 +231,12 @@ export function ArtifactsTab() {
                             </h2>
                             <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                                 {filteredPublishedApps.map((app) => (
-                                    <PublishedAppCard key={app.slug} app={app} />
+                                    <PublishedAppCard
+                                        key={app.slug}
+                                        app={app}
+                                        onShared={updatePublishedAppShare}
+                                        onError={setError}
+                                    />
                                 ))}
                             </ul>
                         </section>
@@ -255,14 +279,72 @@ export function ArtifactsTab() {
     )
 }
 
-function PublishedAppCard({ app }: { app: LibraryPublishedAppRow }) {
+function PublishedAppCard({
+    app,
+    onShared,
+    onError,
+}: {
+    app: LibraryPublishedAppRow
+    onShared: (slug: string, shareUrl: string, shareAccess: LibraryPublishedAppRow['shareAccess']) => void
+    onError: (message: string | null) => void
+}) {
+    const [sharing, setSharing] = React.useState(false)
+    const [copied, setCopied] = React.useState(false)
+    const shareUrl = app.shareUrl ?? app.funnelUrl
+    const shareTitle = shareUrl ? "Copiază linkul public" : "Creează link public"
+
+    const copyShareUrl = React.useCallback(async (url: string) => {
+        const ok = await copyTextToClipboard(url)
+        if (!ok) {
+            onError(`Linkul public este gata, dar nu l-am putut copia automat: ${url}`)
+            return
+        }
+        setCopied(true)
+        window.setTimeout(() => setCopied(false), 1400)
+    }, [onError])
+
+    const share = React.useCallback(async (event: React.MouseEvent<HTMLButtonElement>) => {
+        event.preventDefault()
+        event.stopPropagation()
+        if (sharing) return
+
+        if (shareUrl) {
+            await copyShareUrl(shareUrl)
+            return
+        }
+
+        setSharing(true)
+        onError(null)
+        try {
+            const res = await fetch(appApiPath(`/api/published-apps/${encodeURIComponent(app.slug)}/share`), {
+                method: "POST",
+            })
+            const json = await res.json().catch(() => null) as {
+                ok?: boolean
+                shareUrl?: string
+                shareAccess?: LibraryPublishedAppRow['shareAccess']
+                error?: string
+                output?: string
+            } | null
+            if (!res.ok || json?.ok !== true || !json.shareUrl) {
+                throw new Error(json?.error || json?.output || `HTTP ${res.status}`)
+            }
+            onShared(app.slug, json.shareUrl, json.shareAccess ?? "tailscale-funnel")
+            await copyShareUrl(json.shareUrl)
+        } catch (e) {
+            onError(e instanceof Error ? e.message : String(e))
+        } finally {
+            setSharing(false)
+        }
+    }, [app.slug, copyShareUrl, onError, onShared, shareUrl, sharing])
+
     return (
-        <li>
+        <li className="group relative">
             <Link
                 href={appPath(app.basePath)}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex w-full items-center gap-3 rounded-xl border border-border/70 bg-muted/25 px-3.5 py-3 text-left text-sm transition-colors hover:border-border hover:bg-muted/45"
+                className="flex w-full items-center gap-3 rounded-xl border border-border/70 bg-muted/25 px-3.5 py-3 pr-12 text-left text-sm transition-colors hover:border-border hover:bg-muted/45"
                 title="Open published webpage"
             >
                 <span className="flex size-10 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground shadow-[inset_0_0_0_1px_hsl(var(--border))]">
@@ -271,7 +353,7 @@ function PublishedAppCard({ app }: { app: LibraryPublishedAppRow }) {
                 <span className="min-w-0 flex-1">
                     <span className="flex min-w-0 items-center gap-1.5">
                         <span className="truncate font-medium text-foreground">{app.title}</span>
-                        {app.funnelUrl ? (
+                        {shareUrl ? (
                             <span className="shrink-0 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10.5px] font-medium text-emerald-700 dark:text-emerald-300">
                                 Public
                             </span>
@@ -286,6 +368,28 @@ function PublishedAppCard({ app }: { app: LibraryPublishedAppRow }) {
                     </span>
                 </span>
             </Link>
+            <button
+                type="button"
+                onClick={(event) => void share(event)}
+                disabled={sharing}
+                className={cn(
+                    "absolute right-2 top-2 inline-flex size-8 items-center justify-center rounded-md border border-border/60 bg-background/90 text-muted-foreground shadow-sm transition-colors",
+                    "hover:border-border hover:bg-muted hover:text-foreground",
+                    "disabled:cursor-default disabled:opacity-70",
+                )}
+                aria-label={`${shareTitle} pentru ${app.title}`}
+                title={shareTitle}
+            >
+                {sharing ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                ) : copied ? (
+                    <Check className="size-3.5 text-emerald-600" />
+                ) : shareUrl ? (
+                    <Copy className="size-3.5" />
+                ) : (
+                    <Share2 className="size-3.5" />
+                )}
+            </button>
         </li>
     )
 }

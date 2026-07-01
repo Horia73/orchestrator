@@ -42,6 +42,7 @@ export const copyUploadToWorkspaceTool: ToolDef = {
         'Copy an uploaded chat attachment into the agent workspace so you can work on its bytes.',
         'Uploads live OUTSIDE the workspace sandbox — Read/Write/Edit/Bash cannot reach them, and the original upload must never be edited in place. Call this FIRST whenever you need to edit, convert, resize, extract from, or run commands against an uploaded file of any type (audio, video, image, PDF, Office, archive, …).',
         'Pass the upload_id from the current message or find_past_uploads. The copy lands at dest_path (default tmp/<filename>) with a corrected file extension when the original name was missing or wrong; the original upload stays untouched.',
+        'The returned `path` is workspace-relative and can be used directly with Bash/Read/Write/Edit. `display_path` is only the UI-style display form.',
         'Files under tmp/ stay out of the Library; put a finished deliverable under files/ if the user should see it there.',
     ].join(' '),
     input_schema: {
@@ -92,10 +93,13 @@ export function executeCopyUploadToWorkspace(args: Record<string, unknown>): Too
         ensureParentDir(dest)
         fs.copyFileSync(sourcePath, dest, fs.constants.COPYFILE_EXCL)
         const size = fs.statSync(dest).size
+        const workspacePath = workspaceRelativePath(dest)
         return {
             success: true,
             data: {
-                path: displayPath(dest),
+                path: workspacePath,
+                workspace_path: workspacePath,
+                display_path: displayPath(dest),
                 upload_id: uploadId,
                 mimeType: typing.mimeType,
                 size,
@@ -208,4 +212,10 @@ function dedupeDestination(resolved: string): string | null {
         if (!fs.existsSync(candidate)) return candidate
     }
     return null
+}
+
+function workspaceRelativePath(resolved: string): string {
+    const root = path.resolve(/* turbopackIgnore: true */ activeRuntimePaths().agentWorkspaceDir)
+    const rel = path.relative(root, resolved)
+    return rel.split(path.sep).join('/')
 }

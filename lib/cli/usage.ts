@@ -11,10 +11,10 @@
  *     endpoint is heavily rate-limited from third parties, so we mirror what a
  *     human would do.
  *
- *   - codex → chatgpt.com/backend-api/wham/usage with the OAuth token from
- *     ~/.codex/auth.json (this is the endpoint codex's own `/status` panel
- *     polls every 60s; see codex-rs/backend-client/src/client.rs::
- *     get_rate_limits).
+ *   - codex → prefer `codex app-server`'s account/rateLimits/read JSON-RPC
+ *     method, which is the supported rich-client surface. Fall back to the
+ *     historical chatgpt.com/backend-api/wham/usage read only when app-server
+ *     is unavailable or too old.
  */
 import { spawn } from 'child_process'
 import { readFileSync, writeFileSync, renameSync, existsSync } from 'fs'
@@ -55,7 +55,7 @@ export interface CliQuotaSnapshot {
     /** Sonnet-specific 7-day window — Claude Code only. */
     weeklySonnet?: CliQuotaWindow
     /** Where this snapshot came from, surfaced for the UI's "source" line. */
-    source: 'api' | 'host-bridge' | 'log' | 'tui' | 'none'
+    source: 'app-server' | 'api' | 'host-bridge' | 'log' | 'tui' | 'none'
     /** Unix ms when the snapshot was captured. */
     fetchedAt: number
     /**
@@ -768,11 +768,12 @@ function sleep(ms: number): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Codex — chatgpt.com/backend-api/wham/usage (same endpoint codex /status polls)
+// Codex — app-server rate limits, with historical usage endpoint fallback
 // ---------------------------------------------------------------------------
 
 const USER_CODEX_AUTH_PATH = join(homedir(), '.codex', 'auth.json')
 const CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage'
+const CODEX_APP_SERVER_TIMEOUT_MS = 10_000
 const CODEX_USAGE_TIMEOUT_MS = 8_000
 const CODEX_AUTH_REFRESH_TIMEOUT_MS = 15_000
 
@@ -795,6 +796,21 @@ interface CodexUsageResponse {
         primary_window?: CodexUsageWindow
         secondary_window?: CodexUsageWindow
     }
+}
+
+interface CodexAppServerRateLimitWindow {
+    usedPercent?: number
+    windowDurationMins?: number | null
+    resetsAt?: number | null
+}
+
+interface CodexAppServerRateLimitSnapshot {
+    primary?: CodexAppServerRateLimitWindow | null
+    secondary?: CodexAppServerRateLimitWindow | null
+}
+
+interface CodexAppServerRateLimitsResponse {
+    rateLimits?: CodexAppServerRateLimitSnapshot | null
 }
 
 function readCodexAuth(): { token: string; accountId: string } | null {
@@ -836,6 +852,169 @@ function codexWindow(w: CodexUsageWindow | undefined): CliQuotaWindow | undefine
         ? w.limit_window_seconds
         : undefined
     return { usedPercent: w.used_percent, resetsAt, ...(windowSeconds ? { windowSeconds } : {}) }
+}
+
+function codexAppServerWindow(w: CodexAppServerRateLimitWindow | null | undefined): CliQuotaWindow | undefined {
+    if (!w || typeof w.usedPercent !== 'number') return undefined
+    const resetsAt = typeof w.resetsAt === 'number' ? w.resetsAt : 0
+    const windowSeconds = typeof w.windowDurationMins === 'number' && w.windowDurationMins > 0
+        ? Math.round(w.windowDurationMins * 60)
+        : undefined
+    return { usedPercent: w.usedPercent, resetsAt, ...(windowSeconds ? { windowSeconds } : {}) }
+}
+
+async function getCodexQuotaFromAppServer(): Promise<CliQuotaSnapshot> {
+    const fetchedAt = Date.now()
+    prepareCodexRuntimeHome()
+    const codexBin = resolveBin('codex')
+    if (codexBin === 'codex') {
+        return {
+            cliId: 'codex',
+            available: false,
+            error: 'Codex CLI is not installed.',
+            source: 'none',
+            fetchedAt,
+        }
+    }
+
+    return new Promise(resolve => {
+        let proc: ReturnType<typeof spawn>
+        let settled = false
+        let stdoutBuf = ''
+        let stderrBuf = ''
+
+        const finish = (snapshot: CliQuotaSnapshot) => {
+            if (settled) return
+            settled = true
+            clearTimeout(timer)
+            try { proc.kill('SIGTERM') } catch { /* ignore */ }
+            resolve(snapshot)
+        }
+
+        const fail = (error: string, source: CliQuotaSnapshot['source'] = 'app-server') => {
+            finish({
+                cliId: 'codex',
+                available: false,
+                error,
+                source,
+                fetchedAt,
+            })
+        }
+
+        const send = (message: Record<string, unknown>) => {
+            if (!proc.stdin || proc.stdin.destroyed) return
+            proc.stdin.write(`${JSON.stringify(message)}\n`)
+        }
+
+        const timer = setTimeout(() => {
+            try { proc.kill('SIGKILL') } catch { /* ignore */ }
+            fail('Timed out waiting for Codex app-server rate limits.')
+        }, CODEX_APP_SERVER_TIMEOUT_MS)
+
+        try {
+            proc = spawn(codexBin, [
+                'app-server',
+                '--listen', 'stdio://',
+                '-c', 'features.multi_agent=false',
+                '-c', 'features.apps=false',
+                '-c', 'features.plugins=false',
+                '-c', 'features.skills=false',
+            ], {
+                stdio: ['pipe', 'pipe', 'pipe'],
+                env: codexCliEnv({ DISABLE_TELEMETRY: '1' }),
+                cwd: activeRuntimePaths().agentWorkspaceDir,
+            })
+        } catch (err) {
+            clearTimeout(timer)
+            resolve({
+                cliId: 'codex',
+                available: false,
+                error: `Failed to spawn Codex app-server: ${err instanceof Error ? err.message : 'unknown error'}`,
+                source: 'none',
+                fetchedAt,
+            })
+            return
+        }
+
+        if (!proc.stdout || !proc.stderr) {
+            fail('Codex app-server did not expose stdio pipes.', 'none')
+            return
+        }
+
+        proc.stdout.setEncoding('utf8')
+        proc.stderr.setEncoding('utf8')
+        proc.stderr.on('data', chunk => {
+            stderrBuf += chunk.toString()
+            if (stderrBuf.length > 4000) stderrBuf = stderrBuf.slice(-4000)
+        })
+        proc.stdout.on('data', chunk => {
+            stdoutBuf += chunk.toString()
+            const lines = stdoutBuf.split('\n')
+            stdoutBuf = lines.pop() ?? ''
+            for (const line of lines) {
+                const trimmed = line.trim()
+                if (!trimmed) continue
+                let msg: Record<string, unknown>
+                try {
+                    msg = JSON.parse(trimmed) as Record<string, unknown>
+                } catch {
+                    continue
+                }
+
+                if (msg.id === 1) {
+                    send({ method: 'initialized', params: {} })
+                    send({ method: 'account/rateLimits/read', id: 2 })
+                    continue
+                }
+
+                if (msg.id !== 2) continue
+                const error = msg.error as { message?: unknown } | undefined
+                if (error) {
+                    fail(typeof error.message === 'string' ? error.message : 'Codex app-server rejected rate-limit read.')
+                    return
+                }
+                const result = msg.result as CodexAppServerRateLimitsResponse | undefined
+                const fiveHour = codexAppServerWindow(result?.rateLimits?.primary)
+                const weekly = codexAppServerWindow(result?.rateLimits?.secondary)
+                if (!fiveHour && !weekly) {
+                    fail('Codex app-server returned no rate-limit windows.')
+                    return
+                }
+                finish({
+                    cliId: 'codex',
+                    available: true,
+                    fiveHour,
+                    weekly,
+                    source: 'app-server',
+                    fetchedAt,
+                    dataTimestamp: fetchedAt,
+                })
+                return
+            }
+        })
+
+        proc.on('error', err => {
+            fail(`Codex app-server failed: ${err.message}`, 'none')
+        })
+        proc.on('exit', code => {
+            if (settled) return
+            const detail = stderrBuf.trim()
+            fail(
+                detail
+                    ? `Codex app-server exited with code ${code ?? 'unknown'}: ${detail}`
+                    : `Codex app-server exited with code ${code ?? 'unknown'} before returning rate limits.`
+            )
+        })
+
+        send({
+            method: 'initialize',
+            id: 1,
+            params: {
+                clientInfo: { name: 'orchestrator', title: 'Orchestrator', version: '0.0.1' },
+                capabilities: { experimentalApi: true },
+            },
+        })
+    })
 }
 
 async function refreshCodexAuth(): Promise<boolean> {
@@ -901,7 +1080,7 @@ async function fetchCodexUsage(auth: { token: string; accountId: string }): Prom
     }).finally(() => clearTimeout(timer))
 }
 
-async function getCodexQuota(): Promise<CliQuotaSnapshot> {
+async function getCodexQuotaFromUsageEndpoint(): Promise<CliQuotaSnapshot> {
     const fetchedAt = Date.now()
     let auth = readCodexAuth()
     if (!auth) {
@@ -975,6 +1154,21 @@ async function getCodexQuota(): Promise<CliQuotaSnapshot> {
             source: 'api',
             fetchedAt,
         }
+    }
+}
+
+async function getCodexQuota(): Promise<CliQuotaSnapshot> {
+    const appServer = await getCodexQuotaFromAppServer()
+    if (appServer.available) return appServer
+
+    const fallback = await getCodexQuotaFromUsageEndpoint()
+    if (fallback.available) return fallback
+
+    const appServerError = appServer.error ? `Codex app-server: ${appServer.error}` : null
+    const fallbackError = fallback.error ? `Fallback usage endpoint: ${fallback.error}` : null
+    return {
+        ...fallback,
+        error: [appServerError, fallbackError].filter(Boolean).join(' '),
     }
 }
 

@@ -68,13 +68,14 @@ import { CHAT_VIEW_SAVE_STATE_EVENT } from "@/lib/chat-view-state"
 import { LOADED_WHILE_HIDDEN } from "@/lib/loaded-while-hidden"
 import { SidebarTrigger, useSidebar } from "@/components/ui/sidebar"
 import { useChatStore } from "@/hooks/use-chat-store"
+import { uploadChatAttachments } from "@/hooks/chat-store-api"
 import { useMobileKeyboardInset } from "@/hooks/use-keyboard-inset"
 import { useServerConnection } from "@/hooks/use-server-connection"
 import { cn } from "@/lib/utils"
 import type { AgentCallReasoningEntry, Attachment } from "@/lib/types"
 
 export function ChatView() {
-  const { state, loadOlderMessages, loadMessageDetails, loadMessagesUntilPresent } =
+  const { state, loadOlderMessages, loadMessageDetails, loadMessagesUntilPresent, sendMessageToConversation } =
     useChatStore()
   const layoutContainerRef = React.useRef<HTMLDivElement>(null)
   const scrollContainerRef = React.useRef<HTMLDivElement>(null)
@@ -159,6 +160,25 @@ export function ChatView() {
       setPreviewGallery(gallery)
     },
     []
+  )
+  const closePreview = React.useCallback(() => {
+    setPreviewAttachment(null)
+    setPreviewGallery(undefined)
+  }, [])
+  const handleSendAnnotatedImage = React.useCallback(
+    async (_attachment: Attachment, file: File, message: string) => {
+      const attachments = await uploadChatAttachments([file])
+      if (!attachments?.length) throw new Error("Could not upload the annotated image.")
+      const sentConversationId = await sendMessageToConversation(
+        state.activeConversationId,
+        message,
+        undefined,
+        attachments
+      )
+      if (!sentConversationId) throw new Error("Wait for the current response to finish.")
+      closePreview()
+    },
+    [closePreview, sendMessageToConversation, state.activeConversationId]
   )
 
   React.useEffect(() => {
@@ -3160,7 +3180,10 @@ export function ChatView() {
         <FilePreviewModal
           attachment={previewAttachment}
           gallery={previewGallery}
-          onClose={() => setPreviewAttachment(null)}
+          onSendImage={handleSendAnnotatedImage}
+          sendImageDisabled={state.isStreaming}
+          sendImageDisabledMessage={state.isStreaming ? "Wait for the current response to finish." : undefined}
+          onClose={closePreview}
         />
       </div>
       </MarkdownImagePreviewProvider>

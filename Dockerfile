@@ -108,6 +108,7 @@ RUN apt-get update \
 RUN pip3 install --break-system-packages --no-cache-dir \
     defusedxml \
     markitdown[pptx] \
+    opencv-python-headless \
     pandas \
     pillow \
     pdf2image \
@@ -117,6 +118,7 @@ RUN pip3 install --break-system-packages --no-cache-dir \
     python-docx \
     openpyxl \
     reportlab \
+    scikit-image \
     python-pptx \
     pypdf
 
