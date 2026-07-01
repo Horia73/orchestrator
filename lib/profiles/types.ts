@@ -136,7 +136,7 @@ const MEMBER_SURFACE_DEFAULTS: Record<ProfileSurface, boolean> = {
 const MEMBER_TOOL_DEFAULTS: Record<ToolPermissionId, boolean> = {
   read_files: true,
   write_files: true,
-  shell: false,
+  shell: true,
   browser_agent: true,
   delegate_agents: true,
   web_access: true,
