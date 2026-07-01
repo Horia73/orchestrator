@@ -150,6 +150,15 @@ function strokeSizeLabelForTool(tool: AnnotationTool, strokeSize: number) {
   return effectiveStrokeSizeForTool(tool, strokeSize)
 }
 
+function pressureFromPointerEvent(
+  event: React.PointerEvent<HTMLCanvasElement>
+) {
+  if (event.pointerType === "pen" && event.pressure > 0) {
+    return event.pressure
+  }
+  return 1
+}
+
 function hexFromRgb(r: number, g: number, b: number) {
   return `#${[r, g, b].map((channel) => clamp(Math.round(channel), 0, 255).toString(16).padStart(2, "0")).join("")}`
 }
@@ -1030,7 +1039,7 @@ export function ImageAnnotationEditor({
           0,
           imageSize.height
         ),
-        pressure: event.pressure > 0 ? event.pressure : 0.75,
+        pressure: pressureFromPointerEvent(event),
       }
     },
     [imageSize.height, imageSize.width]
