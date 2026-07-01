@@ -21,13 +21,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Select } from "@/components/ui/select"
 import { MarkdownRenderer } from "@/components/markdown-renderer"
 import { ConfigInput, InlineNotice } from "@/components/settings/auth-shared"
 import type { NoticeTone } from "@/components/settings/auth-types"
 
 type SkillScope = "profile" | "global" | "bundled"
-type WritableSkillScope = Exclude<SkillScope, "bundled">
+type WritableSkillScope = "global"
 type CreateMode = "starter" | "paste" | "url"
 
 interface SkillEntry {
@@ -79,7 +78,6 @@ export function CustomSkillsCard() {
   const [newDescription, setNewDescription] = React.useState("")
   const [newContent, setNewContent] = React.useState("")
   const [sourceUrl, setSourceUrl] = React.useState("")
-  const [newScope, setNewScope] = React.useState<WritableSkillScope>("profile")
   const [selectedKey, setSelectedKey] = React.useState<string | null>(null)
   const [editorContent, setEditorContent] = React.useState("")
   const [editorDirty, setEditorDirty] = React.useState(false)
@@ -98,9 +96,6 @@ export function CustomSkillsCard() {
         throw new Error(responseError(json, `Skills load failed (${res.status})`))
       }
       setData(json)
-      if (json.writableScopes.length > 0 && !json.writableScopes.includes(newScope)) {
-        setNewScope(json.writableScopes[0])
-      }
     } catch (err) {
       setNotice({
         tone: "error",
@@ -109,7 +104,7 @@ export function CustomSkillsCard() {
     } finally {
       setLoading(false)
     }
-  }, [newScope])
+  }, [])
 
   React.useEffect(() => {
     void refresh()
@@ -188,7 +183,7 @@ export function CustomSkillsCard() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          scope: newScope,
+          scope: "global",
           id: newId.trim() || undefined,
           name: createMode === "starter" ? newName : undefined,
           description:
@@ -299,8 +294,8 @@ export function CustomSkillsCard() {
           </CardTitle>
           <CardDescription>
             Local workflow bundles exposed through Orchestrator&apos;s skill
-            tools. Bundled skills are read-only; custom skills live in profile
-            or global state.
+            tools. Bundled skills are read-only; custom skills live in shared
+            global state.
           </CardDescription>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -356,21 +351,9 @@ export function CustomSkillsCard() {
                   </button>
                 ))}
               </div>
-              <label className="grid w-full gap-1 sm:w-[180px]">
-                <span className="text-[11.5px] font-medium text-foreground/60">
-                  Scope
-                </span>
-                <Select
-                  value={newScope}
-                  onValueChange={(value) =>
-                    setNewScope(value as WritableSkillScope)
-                  }
-                  options={writableScopes.map((scope) => ({
-                    value: scope,
-                    label: SCOPE_LABELS[scope],
-                  }))}
-                />
-              </label>
+              <span className="rounded-md bg-emerald-500/10 px-2 py-1 text-[11.5px] font-medium text-emerald-700 dark:text-emerald-400">
+                Global
+              </span>
             </div>
 
             <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_180px]">
@@ -469,7 +452,7 @@ export function CustomSkillsCard() {
         {!canCreate && !loading && (
           <InlineNotice
             tone="warning"
-            text="This profile can use visible skills, but it cannot manage custom skills here."
+            text="Custom skills are global and admin-managed. This profile can use visible skills, but it cannot manage them here."
           />
         )}
 
@@ -616,7 +599,7 @@ export function CustomSkillsCard() {
                 </div>
               ) : (
                 <div className="flex min-h-[320px] items-center justify-center px-5 py-10 text-center text-[13px] text-foreground/45">
-                  Select a writable skill to edit its SKILL.md.
+                  Select a skill to preview or edit its SKILL.md.
                 </div>
               )}
             </div>

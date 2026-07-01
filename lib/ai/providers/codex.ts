@@ -126,6 +126,11 @@ interface RunCodexAppServerArgs {
 
 const APP_SERVER_SESSION_PREFIX = 'appserver:'
 const JSON_RPC_REQUEST_TIMEOUT_MS = 60_000
+const CODEX_RECONNECTING_NOTICE_RE = /^Reconnecting(?:\.{3}|…)\s+\d+\/\d+$/i
+
+export function isTransientCodexAppServerError(message: string): boolean {
+    return CODEX_RECONNECTING_NOTICE_RE.test(message.trim())
+}
 
 async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
     const {
@@ -569,6 +574,10 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                         : typeof params?.message === 'string'
                             ? params.message
                             : 'codex app-server error'
+                    if (isTransientCodexAppServerError(message)) {
+                        rememberDiagnostic(message)
+                        return
+                    }
                     fail(message)
                     return
                 }

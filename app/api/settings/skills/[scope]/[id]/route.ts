@@ -148,7 +148,7 @@ async function resolveWritableParams(
   const resolved = await params
   if (!isWritableSkillScope(resolved.scope)) {
     return NextResponse.json(
-      { error: "Only profile and global skills are editable." },
+      { error: "Only global custom skills are editable." },
       { status: 400, headers: JSON_HEADERS }
     )
   }
@@ -164,6 +164,9 @@ function canReadSkillScope(
   scope: RuntimeSkillScope
 ): boolean {
   if (scope === "bundled") return true
+  if (scope === "profile") {
+    return current.isAdmin || current.profile.permissions.tools.skills
+  }
   return canManageSkillScope(current, scope)
 }
 
@@ -171,6 +174,5 @@ function canManageSkillScope(
   current: CurrentProfile,
   scope: WritableSkillScope
 ): boolean {
-  if (scope === "global") return current.isAdmin
-  return current.isAdmin || current.profile.permissions.tools.skills
+  return scope === "global" && current.isAdmin
 }

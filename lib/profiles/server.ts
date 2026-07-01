@@ -401,7 +401,10 @@ function isAdminOnlyApiPath(pathname: string, method: string): boolean {
     pathname.startsWith("/api/logs") ||
     pathname.startsWith("/api/update") ||
     pathname.startsWith("/api/models") ||
-    pathname.startsWith("/api/cli")
+    // CLI session control (spawn/restart/input/stream/mcp-exec/…) stays
+    // admin-only, but the read-only shared subscription-quota snapshot is
+    // visible to any authenticated profile (chat popover + Usage tab).
+    (pathname.startsWith("/api/cli") && pathname !== "/api/cli/usage")
   )
 }
 

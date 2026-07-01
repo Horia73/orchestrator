@@ -73,7 +73,7 @@ function estimateSystemPromptTokens(origin: string, providerCaps: ProviderCaps):
 
 /** GET /api/chat/status - compact status payload for the chat input popover. */
 export async function GET(request: Request) {
-  return runWithRequestProfile(request, async (current) => {
+  return runWithRequestProfile(request, async () => {
         const origin = resolveRequestOrigin(request)
         const settings = resolveChatAgentSettings()
         const config = getConfig()
@@ -114,7 +114,10 @@ export async function GET(request: Request) {
                     ? `Model ${settings.model} is not available for ${providerDef?.name ?? settings.provider}.`
                     : readiness.unavailableReason,
             },
-            canViewCliQuotas: current.isAdmin,
+            // Shared host CLI subscription quota is a machine-level resource
+            // indicator, not per-profile private billing — any authenticated
+            // profile may view it (runWithRequestProfile already guarantees one).
+            canViewCliQuotas: true,
             systemPromptTokens,
         }, {
             headers: { 'Cache-Control': 'no-store' },

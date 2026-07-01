@@ -15,9 +15,11 @@ import { getToolExecutor } from "@/lib/ai/tools/executors/registry"
 import { getTool } from "@/lib/ai/tools/registry"
 import {
   findSkill,
+  isWritableSkillScope,
   listSkillFiles,
   listSkills,
   readSkillFile,
+  writableSkillRoots,
 } from "@/lib/skills/registry"
 import { buildSkillsIndex } from "@/lib/skills/prompt"
 
@@ -83,6 +85,13 @@ const EXPECTED_SKILLS = [
 async function main() {
   const skills = listSkills()
   assertNoProviderNativeSkillLeaks()
+  assert.deepStrictEqual(
+    writableSkillRoots().map((root) => root.scope),
+    ["global"],
+    "custom skills should only be writable in the global scope"
+  )
+  assert.strictEqual(isWritableSkillScope("global"), true, "global should be writable")
+  assert.strictEqual(isWritableSkillScope("profile"), false, "profile skills should be legacy read-only")
 
   for (const expected of EXPECTED_SKILLS) {
     const skill = findSkill(expected.id)
@@ -201,6 +210,10 @@ async function main() {
   assert.ok(
     promptIndex.includes("Do not read provider-native skill folders"),
     "prompt skills_index should forbid provider-native skill path probing"
+  )
+  assert.ok(
+    promptIndex.includes("Orchestrator global skills root"),
+    "prompt skills_index should route skill installs to the global root"
   )
   for (const expected of EXPECTED_SKILLS) {
     assert.ok(promptIndex.includes(expected.id), `prompt skills_index should mention ${expected.id}`)

@@ -1,5 +1,5 @@
 export type RuntimeSkillScope = "profile" | "global" | "bundled"
-export type WritableSkillScope = Exclude<RuntimeSkillScope, "bundled">
+export type WritableSkillScope = "global"
 
 export interface RuntimeSkill {
   id: string

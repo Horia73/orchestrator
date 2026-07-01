@@ -104,7 +104,7 @@ export function UsageTab() {
 
             {data && data.totals.requests > 0 && <UsageContent data={data} />}
 
-            {settings?.isAdmin && <CliQuotaSection />}
+            {settings && <CliQuotaSection />}
         </div>
     )
 }

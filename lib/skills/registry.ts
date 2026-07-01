@@ -47,11 +47,6 @@ export function skillRoots(): SkillRoot[] {
   const runtime = activeRuntimePaths()
   return [
     {
-      scope: "profile",
-      source: "active profile",
-      dir: path.join(runtime.privateStateDir, "skills"),
-    },
-    {
       scope: "global",
       source: "orchestrator state",
       dir: path.join(ORCHESTRATOR_STATE_DIR, "skills"),
@@ -60,6 +55,11 @@ export function skillRoots(): SkillRoot[] {
       scope: "bundled",
       source: "repository",
       dir: path.join(PROJECT_DIR, "skills"),
+    },
+    {
+      scope: "profile",
+      source: "active profile legacy state",
+      dir: path.join(runtime.privateStateDir, "skills"),
     },
   ]
 }
@@ -174,13 +174,7 @@ export function publicSkill(skill: RuntimeSkill) {
 }
 
 export function writableSkillRoots(): WritableSkillRoot[] {
-  const runtime = activeRuntimePaths()
   return [
-    {
-      scope: "profile",
-      source: "active profile",
-      dir: path.join(runtime.privateStateDir, "skills"),
-    },
     {
       scope: "global",
       source: "orchestrator state",
@@ -192,7 +186,7 @@ export function writableSkillRoots(): WritableSkillRoot[] {
 export function isWritableSkillScope(
   value: string
 ): value is WritableSkillScope {
-  return value === "profile" || value === "global"
+  return value === "global"
 }
 
 export function normalizeSkillId(value: string): string {
@@ -355,8 +349,8 @@ function findSkillEntry(
 }
 
 function skillScopeRank(scope: RuntimeSkillScope): number {
-  if (scope === "profile") return 0
-  if (scope === "global") return 1
+  if (scope === "global") return 0
+  if (scope === "bundled") return 1
   return 2
 }
 

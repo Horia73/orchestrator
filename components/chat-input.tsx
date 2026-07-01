@@ -280,15 +280,16 @@ export function ChatInput({
         setPreviewDraftAttachmentId(att.id)
         setPreviewAttachment(att.uploaded)
     }, [])
-    const handlePreviewSaveImage = React.useCallback(async (_attachment: Attachment, file: File) => {
-        if (!previewDraftAttachmentId) throw new Error("Attachment is no longer available.")
-        const uploaded = await replaceAttachmentFile(previewDraftAttachmentId, file)
-        if (uploaded) setPreviewAttachment(uploaded)
-    }, [previewDraftAttachmentId, replaceAttachmentFile])
     const closePreview = React.useCallback(() => {
         setPreviewAttachment(null)
         setPreviewDraftAttachmentId(null)
     }, [])
+    const handlePreviewSaveImage = React.useCallback(async (_attachment: Attachment, file: File) => {
+        if (!previewDraftAttachmentId) throw new Error("Attachment is no longer available.")
+        await replaceAttachmentFile(previewDraftAttachmentId, file)
+        closePreview()
+        window.requestAnimationFrame(() => focusWithoutViewportScroll(textareaRef.current))
+    }, [closePreview, previewDraftAttachmentId, replaceAttachmentFile])
 
     return (
         <>

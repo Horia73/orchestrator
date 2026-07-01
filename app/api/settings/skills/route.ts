@@ -43,7 +43,7 @@ export async function GET(request: Request) {
       {
         skills,
         writableScopes,
-        canManageProfileSkills: canManageSkillScope(current, "profile"),
+        canManageProfileSkills: false,
         canManageGlobalSkills: canManageSkillScope(current, "global"),
       },
       { headers: JSON_HEADERS }
@@ -77,10 +77,10 @@ async function createSkillFromRequest(
   const rawScope =
     "scope" in parsed && typeof parsed.scope === "string"
       ? parsed.scope
-      : "profile"
+      : "global"
   if (!isWritableSkillScope(rawScope)) {
     return NextResponse.json(
-      { error: "Skill scope must be profile or global." },
+      { error: "Custom skills are global; skill scope must be global." },
       { status: 400, headers: JSON_HEADERS }
     )
   }
@@ -214,6 +214,5 @@ export function canManageSkillScope(
   current: CurrentProfile,
   scope: WritableSkillScope
 ): boolean {
-  if (scope === "global") return current.isAdmin
-  return current.isAdmin || current.profile.permissions.tools.skills
+  return scope === "global" && current.isAdmin
 }

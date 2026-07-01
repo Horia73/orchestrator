@@ -3,15 +3,20 @@
 import * as React from "react"
 import {
   ArrowUpRight,
+  Circle,
   Download,
   Eraser,
+  Hand,
   Highlighter,
   Minus,
+  MousePointer2,
   PenLine,
   Plus,
   Redo2,
   Save,
+  Slash,
   Square as SquareIcon,
+  Trash,
   Trash2,
   Type,
   Undo2,
@@ -25,7 +30,18 @@ import {
 } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 
-type AnnotationTool = "pen" | "highlighter" | "eraser" | "arrow" | "rectangle" | "text"
+type ShapeKind = "arrow" | "line" | "rectangle" | "ellipse"
+type AnnotationTool =
+  | "select"
+  | "hand"
+  | "pen"
+  | "highlighter"
+  | "eraser"
+  | "arrow"
+  | "line"
+  | "rectangle"
+  | "ellipse"
+  | "text"
 
 interface Point {
   x: number
@@ -35,6 +51,7 @@ interface Point {
 
 interface PathMark {
   kind: "path"
+  id: string
   tool: "pen" | "highlighter" | "eraser"
   color: string
   size: number
@@ -43,7 +60,8 @@ interface PathMark {
 
 interface ShapeMark {
   kind: "shape"
-  shape: "arrow" | "rectangle"
+  id: string
+  shape: ShapeKind
   color: string
   size: number
   start: Point
@@ -52,6 +70,7 @@ interface ShapeMark {
 
 interface TextMark {
   kind: "text"
+  id: string
   color: string
   size: number
   point: Point
@@ -69,6 +88,29 @@ interface ImageAnnotationEditorProps {
 const COLORS = ["#f43f5e", "#f97316", "#facc15", "#22c55e", "#38bdf8", "#a855f7", "#ffffff", "#111827"]
 const MIN_ZOOM = 0.5
 const MAX_ZOOM = 3
+// Tolerances are expressed in screen pixels and converted to image pixels at use time,
+// so hit-testing feels the same regardless of zoom / fit scale.
+const HIT_TOLERANCE = 12
+const HANDLE_TOLERANCE = 13
+const HANDLE_SIZE = 9
+
+let markSequence = 0
+function nextMarkId() {
+  markSequence += 1
+  return `mark-${markSequence}`
+}
+
+let sharedMeasureCtx: CanvasRenderingContext2D | null = null
+function textFont(size: number) {
+  return `600 ${size}px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`
+}
+function measureTextWidth(text: string, size: number) {
+  if (typeof document === "undefined") return text.length * size * 0.6
+  if (!sharedMeasureCtx) sharedMeasureCtx = document.createElement("canvas").getContext("2d")
+  if (!sharedMeasureCtx) return text.length * size * 0.6
+  sharedMeasureCtx.font = textFont(size)
+  return sharedMeasureCtx.measureText(text).width
+}
 
 function annotatedFilename(filename: string) {
   const clean = filename.trim() || "image"
@@ -93,6 +135,135 @@ function downloadBlob(blob: Blob, filename: string) {
 
 function distance(a: Point, b: Point) {
   return Math.hypot(a.x - b.x, a.y - b.y)
+}
+
+function distanceToSegment(p: Point, a: Point, b: Point) {
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const lengthSquared = dx * dx + dy * dy
+  if (lengthSquared === 0) return Math.hypot(p.x - a.x, p.y - a.y)
+  const t = clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSquared, 0, 1)
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
+}
+
+interface Bounds {
+  minX: number
+  minY: number
+  maxX: number
+  maxY: number
+}
+
+function markBounds(mark: AnnotationMark): Bounds {
+  if (mark.kind === "path") {
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    for (const point of mark.points) {
+      if (point.x < minX) minX = point.x
+      if (point.y < minY) minY = point.y
+      if (point.x > maxX) maxX = point.x
+      if (point.y > maxY) maxY = point.y
+    }
+    if (!Number.isFinite(minX)) return { minX: 0, minY: 0, maxX: 0, maxY: 0 }
+    const radius = mark.size / 2
+    return { minX: minX - radius, minY: minY - radius, maxX: maxX + radius, maxY: maxY + radius }
+  }
+  if (mark.kind === "text") {
+    const width = measureTextWidth(mark.text, mark.size)
+    return {
+      minX: mark.point.x,
+      minY: mark.point.y - mark.size * 0.86,
+      maxX: mark.point.x + width,
+      maxY: mark.point.y + mark.size * 0.22,
+    }
+  }
+  return {
+    minX: Math.min(mark.start.x, mark.end.x),
+    minY: Math.min(mark.start.y, mark.end.y),
+    maxX: Math.max(mark.start.x, mark.end.x),
+    maxY: Math.max(mark.start.y, mark.end.y),
+  }
+}
+
+function hitTestMark(mark: AnnotationMark, p: Point, tolerance: number) {
+  if (mark.kind === "path") {
+    const reach = tolerance + mark.size / 2
+    if (mark.points.length === 1) return distance(mark.points[0], p) <= reach
+    for (let i = 1; i < mark.points.length; i += 1) {
+      if (distanceToSegment(p, mark.points[i - 1], mark.points[i]) <= reach) return true
+    }
+    return false
+  }
+  if (mark.kind === "shape" && (mark.shape === "line" || mark.shape === "arrow")) {
+    return distanceToSegment(p, mark.start, mark.end) <= tolerance + mark.size / 2
+  }
+  const b = markBounds(mark)
+  return p.x >= b.minX - tolerance && p.x <= b.maxX + tolerance && p.y >= b.minY - tolerance && p.y <= b.maxY + tolerance
+}
+
+interface HandleSpec {
+  id: string
+  x: number
+  y: number
+}
+
+function shapeHandles(mark: AnnotationMark): HandleSpec[] {
+  if (mark.kind !== "shape") return []
+  if (mark.shape === "line" || mark.shape === "arrow") {
+    return [
+      { id: "start", x: mark.start.x, y: mark.start.y },
+      { id: "end", x: mark.end.x, y: mark.end.y },
+    ]
+  }
+  const b = markBounds(mark)
+  return [
+    { id: "nw", x: b.minX, y: b.minY },
+    { id: "ne", x: b.maxX, y: b.minY },
+    { id: "sw", x: b.minX, y: b.maxY },
+    { id: "se", x: b.maxX, y: b.maxY },
+  ]
+}
+
+function handleAtPoint(mark: AnnotationMark, p: Point, tolerance: number): string | null {
+  for (const handle of shapeHandles(mark)) {
+    if (Math.abs(p.x - handle.x) <= tolerance && Math.abs(p.y - handle.y) <= tolerance) return handle.id
+  }
+  return null
+}
+
+function translateMark(mark: AnnotationMark, dx: number, dy: number): AnnotationMark {
+  if (mark.kind === "path") {
+    return { ...mark, points: mark.points.map(p => ({ x: p.x + dx, y: p.y + dy, pressure: p.pressure })) }
+  }
+  if (mark.kind === "shape") {
+    return {
+      ...mark,
+      start: { x: mark.start.x + dx, y: mark.start.y + dy, pressure: mark.start.pressure },
+      end: { x: mark.end.x + dx, y: mark.end.y + dy, pressure: mark.end.pressure },
+    }
+  }
+  return { ...mark, point: { x: mark.point.x + dx, y: mark.point.y + dy, pressure: mark.point.pressure } }
+}
+
+function resizeShapeMark(mark: ShapeMark, handle: string, p: Point): ShapeMark {
+  if (mark.shape === "line" || mark.shape === "arrow") {
+    if (handle === "start") return { ...mark, start: { x: p.x, y: p.y, pressure: 1 } }
+    return { ...mark, end: { x: p.x, y: p.y, pressure: 1 } }
+  }
+  let minX = Math.min(mark.start.x, mark.end.x)
+  let maxX = Math.max(mark.start.x, mark.end.x)
+  let minY = Math.min(mark.start.y, mark.end.y)
+  let maxY = Math.max(mark.start.y, mark.end.y)
+  if (handle.includes("w")) minX = p.x
+  if (handle.includes("e")) maxX = p.x
+  if (handle.includes("n")) minY = p.y
+  if (handle.includes("s")) maxY = p.y
+  return {
+    ...mark,
+    start: { x: Math.min(minX, maxX), y: Math.min(minY, maxY), pressure: 1 },
+    end: { x: Math.max(minX, maxX), y: Math.max(minY, maxY), pressure: 1 },
+  }
 }
 
 function drawArrowHead(ctx: CanvasRenderingContext2D, start: Point, end: Point, size: number) {
@@ -156,6 +327,19 @@ function drawShapeMark(ctx: CanvasRenderingContext2D, mark: ShapeMark) {
     const width = Math.abs(mark.end.x - mark.start.x)
     const height = Math.abs(mark.end.y - mark.start.y)
     ctx.strokeRect(x, y, width, height)
+  } else if (mark.shape === "ellipse") {
+    const cx = (mark.start.x + mark.end.x) / 2
+    const cy = (mark.start.y + mark.end.y) / 2
+    const rx = Math.abs(mark.end.x - mark.start.x) / 2
+    const ry = Math.abs(mark.end.y - mark.start.y) / 2
+    ctx.beginPath()
+    ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2)
+    ctx.stroke()
+  } else if (mark.shape === "line") {
+    ctx.beginPath()
+    ctx.moveTo(mark.start.x, mark.start.y)
+    ctx.lineTo(mark.end.x, mark.end.y)
+    ctx.stroke()
   } else {
     ctx.beginPath()
     ctx.moveTo(mark.start.x, mark.start.y)
@@ -168,7 +352,7 @@ function drawShapeMark(ctx: CanvasRenderingContext2D, mark: ShapeMark) {
 
 function drawTextMark(ctx: CanvasRenderingContext2D, mark: TextMark) {
   ctx.save()
-  ctx.font = `600 ${mark.size}px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`
+  ctx.font = textFont(mark.size)
   ctx.lineJoin = "round"
   ctx.miterLimit = 2
   ctx.strokeStyle = "rgba(0,0,0,0.58)"
@@ -185,8 +369,35 @@ function drawMark(ctx: CanvasRenderingContext2D, mark: AnnotationMark) {
   else drawTextMark(ctx, mark)
 }
 
+function drawSelection(ctx: CanvasRenderingContext2D, mark: AnnotationMark, invScale: number) {
+  const b = markBounds(mark)
+  const pad = 4 * invScale
+  ctx.save()
+  ctx.strokeStyle = "rgba(56,189,248,0.95)"
+  ctx.lineWidth = 1.5 * invScale
+  ctx.setLineDash([6 * invScale, 4 * invScale])
+  ctx.strokeRect(b.minX - pad, b.minY - pad, b.maxX - b.minX + pad * 2, b.maxY - b.minY + pad * 2)
+  ctx.setLineDash([])
+
+  const handleSize = HANDLE_SIZE * invScale
+  for (const handle of shapeHandles(mark)) {
+    ctx.beginPath()
+    ctx.rect(handle.x - handleSize / 2, handle.y - handleSize / 2, handleSize, handleSize)
+    ctx.fillStyle = "#ffffff"
+    ctx.fill()
+    ctx.strokeStyle = "rgba(2,132,199,0.95)"
+    ctx.lineWidth = 1.5 * invScale
+    ctx.stroke()
+  }
+  ctx.restore()
+}
+
 function toolLabel(tool: AnnotationTool) {
   switch (tool) {
+    case "select":
+      return "Select / move"
+    case "hand":
+      return "Pan"
     case "pen":
       return "Pen"
     case "highlighter":
@@ -195,12 +406,28 @@ function toolLabel(tool: AnnotationTool) {
       return "Eraser"
     case "arrow":
       return "Arrow"
+    case "line":
+      return "Line"
     case "rectangle":
       return "Rectangle"
+    case "ellipse":
+      return "Ellipse"
     case "text":
       return "Text"
+    default:
+      return "Tool"
   }
 }
+
+// A single in-progress pointer interaction. Only one is active at a time.
+type Interaction =
+  | { kind: "draw"; pointerId: number; mark: AnnotationMark; moved: boolean }
+  | { kind: "pan"; pointerId: number; last: { x: number; y: number } }
+  | { kind: "move"; pointerId: number; targetId: string; original: AnnotationMark; start: Point; moved: boolean }
+  | { kind: "resize"; pointerId: number; targetId: string; original: ShapeMark; handle: string; moved: boolean }
+
+// What to overlay on top of the committed marks while an interaction is live.
+type Preview = { add: AnnotationMark } | { replaceId: string; mark: AnnotationMark } | null
 
 function ToolButton({
   label,
@@ -234,7 +461,7 @@ function ToolButton({
           {children}
         </Button>
       </TooltipTrigger>
-      <TooltipContent side="bottom">{label}</TooltipContent>
+      <TooltipContent side="bottom" className="z-[140]">{label}</TooltipContent>
     </Tooltip>
   )
 }
@@ -267,7 +494,7 @@ function SwatchButton({
           />
         </button>
       </TooltipTrigger>
-      <TooltipContent side="bottom">Color</TooltipContent>
+      <TooltipContent side="bottom" className="z-[140]">Color</TooltipContent>
     </Tooltip>
   )
 }
@@ -276,31 +503,70 @@ export function ImageAnnotationEditor({ imageUrl, filename, onSave }: ImageAnnot
   const imageRef = React.useRef<HTMLImageElement>(null)
   const canvasRef = React.useRef<HTMLCanvasElement>(null)
   const viewportRef = React.useRef<HTMLDivElement>(null)
-  const activePointerIdRef = React.useRef<number | null>(null)
-  const liveMarkRef = React.useRef<AnnotationMark | null>(null)
+  const interactionRef = React.useRef<Interaction | null>(null)
+  const previewRef = React.useRef<Preview>(null)
   const marksRef = React.useRef<AnnotationMark[]>([])
+  const selectedIdRef = React.useRef<string | null>(null)
+  const mountedRef = React.useRef(true)
 
   const [imageSize, setImageSize] = React.useState({ width: 0, height: 0 })
   const [viewportSize, setViewportSize] = React.useState({ width: 0, height: 0 })
   const [marks, setMarks] = React.useState<AnnotationMark[]>([])
-  const [redoStack, setRedoStack] = React.useState<AnnotationMark[]>([])
-  const [tool, setTool] = React.useState<AnnotationTool>("pen")
+  const [past, setPast] = React.useState<AnnotationMark[][]>([])
+  const [future, setFuture] = React.useState<AnnotationMark[][]>([])
+  const [selectedId, setSelectedIdState] = React.useState<string | null>(null)
+  const [tool, setTool] = React.useState<AnnotationTool>("select")
   const [color, setColor] = React.useState(COLORS[0])
   const [strokeSize, setStrokeSize] = React.useState(8)
   const [zoom, setZoom] = React.useState(1)
+  const [isPanning, setIsPanning] = React.useState(false)
   const [textValue, setTextValue] = React.useState("Note")
   const [saveState, setSaveState] = React.useState<"idle" | "saving" | "saved" | "error">("idle")
   const [exportError, setExportError] = React.useState<string | null>(null)
 
-  const drawAll = React.useCallback((liveMark: AnnotationMark | null = liveMarkRef.current) => {
+  const fitScale = React.useMemo(() => {
+    if (imageSize.width <= 0 || imageSize.height <= 0 || viewportSize.width <= 0 || viewportSize.height <= 0) return 1
+    const availableWidth = Math.max(1, viewportSize.width - 24)
+    const availableHeight = Math.max(1, viewportSize.height - 24)
+    return Math.min(availableWidth / imageSize.width, availableHeight / imageSize.height, 1)
+  }, [imageSize.height, imageSize.width, viewportSize.height, viewportSize.width])
+  const displayScale = fitScale * zoom
+  const displayWidth = imageSize.width > 0 ? Math.max(1, imageSize.width * displayScale) : undefined
+  const displayHeight = imageSize.height > 0 ? Math.max(1, imageSize.height * displayScale) : undefined
+
+  const setSelection = React.useCallback((id: string | null) => {
+    selectedIdRef.current = id
+    setSelectedIdState(id)
+  }, [])
+
+  const drawAll = React.useCallback(() => {
     const canvas = canvasRef.current
     if (!canvas || imageSize.width <= 0 || imageSize.height <= 0) return
     const ctx = canvas.getContext("2d")
     if (!ctx) return
     ctx.clearRect(0, 0, canvas.width, canvas.height)
-    for (const mark of marksRef.current) drawMark(ctx, mark)
-    if (liveMark) drawMark(ctx, liveMark)
-  }, [imageSize.height, imageSize.width])
+
+    const preview = previewRef.current
+    const list = marksRef.current
+    for (const mark of list) {
+      if (preview && "replaceId" in preview && preview.replaceId === mark.id) drawMark(ctx, preview.mark)
+      else drawMark(ctx, mark)
+    }
+    if (preview && "add" in preview) drawMark(ctx, preview.add)
+
+    if (tool === "select" && selectedId) {
+      let selected: AnnotationMark | null = list.find(mark => mark.id === selectedId) ?? null
+      if (preview && "replaceId" in preview && preview.replaceId === selectedId) selected = preview.mark
+      if (selected) drawSelection(ctx, selected, 1 / Math.max(0.0001, displayScale))
+    }
+  }, [displayScale, imageSize.height, imageSize.width, selectedId, tool])
+
+  React.useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   React.useEffect(() => {
     marksRef.current = marks
@@ -314,6 +580,16 @@ export function ImageAnnotationEditor({ imageUrl, filename, onSave }: ImageAnnot
     canvas.height = imageSize.height
     drawAll()
   }, [drawAll, imageSize.height, imageSize.width])
+
+  // Seed the size from an already-decoded image. Cached blob/upload URLs (and
+  // data URLs) can finish loading before React attaches the onLoad handler, in
+  // which case onLoad never fires and the editor would stay stuck at 0×0.
+  React.useEffect(() => {
+    const image = imageRef.current
+    if (image && image.complete && image.naturalWidth > 0) {
+      setImageSize({ width: image.naturalWidth, height: image.naturalHeight })
+    }
+  }, [imageUrl])
 
   React.useEffect(() => {
     const viewport = viewportRef.current
@@ -337,45 +613,101 @@ export function ImageAnnotationEditor({ imageUrl, filename, onSave }: ImageAnnot
     return () => observer.disconnect()
   }, [])
 
+  const commit = React.useCallback((next: AnnotationMark[]) => {
+    const prev = marksRef.current
+    setPast(stack => [...stack, prev])
+    setFuture([])
+    marksRef.current = next
+    setMarks(next)
+    setSaveState("idle")
+    setExportError(null)
+  }, [])
+
+  const addMark = React.useCallback((mark: AnnotationMark) => {
+    commit([...marksRef.current, mark])
+  }, [commit])
+
+  const undo = React.useCallback(() => {
+    setPast(stack => {
+      if (stack.length === 0) return stack
+      const prevState = stack[stack.length - 1]
+      setFuture(f => [...f, marksRef.current])
+      marksRef.current = prevState
+      setMarks(prevState)
+      setSelection(prevState.some(mark => mark.id === selectedIdRef.current) ? selectedIdRef.current : null)
+      return stack.slice(0, -1)
+    })
+    setSaveState("idle")
+  }, [setSelection])
+
+  const redo = React.useCallback(() => {
+    setFuture(stack => {
+      if (stack.length === 0) return stack
+      const nextState = stack[stack.length - 1]
+      setPast(p => [...p, marksRef.current])
+      marksRef.current = nextState
+      setMarks(nextState)
+      setSelection(nextState.some(mark => mark.id === selectedIdRef.current) ? selectedIdRef.current : null)
+      return stack.slice(0, -1)
+    })
+    setSaveState("idle")
+  }, [setSelection])
+
+  const clear = React.useCallback(() => {
+    if (marksRef.current.length === 0) return
+    commit([])
+    setSelection(null)
+  }, [commit, setSelection])
+
+  const deleteSelected = React.useCallback(() => {
+    const id = selectedIdRef.current
+    if (!id) return
+    commit(marksRef.current.filter(mark => mark.id !== id))
+    setSelection(null)
+  }, [commit, setSelection])
+
+  const chooseTool = React.useCallback((next: AnnotationTool) => {
+    setTool(next)
+    if (next !== "select") setSelection(null)
+  }, [setSelection])
+
+  const chooseColor = React.useCallback((next: string) => {
+    setColor(next)
+    const id = selectedIdRef.current
+    if (tool === "select" && id) {
+      commit(marksRef.current.map(mark => (mark.id === id ? { ...mark, color: next } : mark)))
+    }
+  }, [commit, tool])
+
   React.useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null
       if (target?.closest("input, textarea, [contenteditable='true']")) return
-      if (!event.metaKey && !event.ctrlKey) return
       const key = event.key.toLowerCase()
-      if (key !== "z" && key !== "y") return
-      event.preventDefault()
-      if (key === "z" && !event.shiftKey) {
-        setMarks(prev => {
-          const next = prev.slice(0, -1)
-          const undone = prev.at(-1)
-          if (undone) setRedoStack(stack => [...stack, undone])
-          return next
-        })
-      } else {
-        setRedoStack(prev => {
-          const restored = prev.at(-1)
-          if (restored) setMarks(current => [...current, restored])
-          return prev.slice(0, -1)
-        })
+      if ((event.metaKey || event.ctrlKey) && (key === "z" || key === "y")) {
+        event.preventDefault()
+        if (key === "z" && !event.shiftKey) undo()
+        else redo()
+        return
+      }
+      if (event.metaKey || event.ctrlKey) return
+      if (key === "delete" || key === "backspace") {
+        if (selectedIdRef.current) {
+          event.preventDefault()
+          deleteSelected()
+        }
+      } else if (key === "escape") {
+        if (selectedIdRef.current) setSelection(null)
       }
     }
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
-  }, [])
+  }, [deleteSelected, redo, setSelection, undo])
 
-  const fitScale = React.useMemo(() => {
-    if (imageSize.width <= 0 || imageSize.height <= 0 || viewportSize.width <= 0 || viewportSize.height <= 0) return 1
-    const availableWidth = Math.max(1, viewportSize.width - 24)
-    const availableHeight = Math.max(1, viewportSize.height - 24)
-    return Math.min(availableWidth / imageSize.width, availableHeight / imageSize.height, 1)
-  }, [imageSize.height, imageSize.width, viewportSize.height, viewportSize.width])
-  const displayScale = fitScale * zoom
-  const displayWidth = imageSize.width > 0 ? Math.max(1, imageSize.width * displayScale) : undefined
-  const displayHeight = imageSize.height > 0 ? Math.max(1, imageSize.height * displayScale) : undefined
-  const canUndo = marks.length > 0
-  const canRedo = redoStack.length > 0
+  const canUndo = past.length > 0
+  const canRedo = future.length > 0
   const hasMarks = marks.length > 0
+  const hasSelection = tool === "select" && selectedId !== null
 
   const pointFromEvent = React.useCallback((event: React.PointerEvent<HTMLCanvasElement>): Point | null => {
     const canvas = canvasRef.current
@@ -397,138 +729,169 @@ export function ImageAnnotationEditor({ imageUrl, filename, onSave }: ImageAnnot
     return imageSize.width / rect.width
   }, [imageSize.width])
 
-  const commitMark = React.useCallback((mark: AnnotationMark) => {
-    setSaveState("idle")
-    setExportError(null)
-    setRedoStack([])
-    setMarks(prev => {
-      const next = [...prev, mark]
-      marksRef.current = next
-      return next
-    })
-  }, [])
-
   const handlePointerDown = React.useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
     if (event.button !== 0 && event.pointerType === "mouse") return
     const point = pointFromEvent(event)
     if (!point) return
     event.preventDefault()
     event.currentTarget.setPointerCapture(event.pointerId)
+    const imageScale = screenToImageScale()
 
-    const scaledSize = strokeSize * screenToImageScale()
-    if (tool === "text") {
-      const text = textValue.trim()
-      if (!text) return
-      commitMark({
-        kind: "text",
-        color,
-        point,
-        size: Math.max(14, scaledSize * 2.4),
-        text,
-      })
+    if (tool === "hand") {
+      interactionRef.current = { kind: "pan", pointerId: event.pointerId, last: { x: event.clientX, y: event.clientY } }
+      setIsPanning(true)
       return
     }
 
-    activePointerIdRef.current = event.pointerId
-    if (tool === "arrow" || tool === "rectangle") {
-      liveMarkRef.current = {
-        kind: "shape",
-        shape: tool,
-        color,
-        size: Math.max(2, scaledSize),
-        start: point,
-        end: point,
+    if (tool === "select") {
+      const selected = selectedIdRef.current
+        ? marksRef.current.find(mark => mark.id === selectedIdRef.current) ?? null
+        : null
+      if (selected && selected.kind === "shape") {
+        const handle = handleAtPoint(selected, point, HANDLE_TOLERANCE * imageScale)
+        if (handle) {
+          interactionRef.current = { kind: "resize", pointerId: event.pointerId, targetId: selected.id, original: selected, handle, moved: false }
+          return
+        }
       }
+      const tolerance = HIT_TOLERANCE * imageScale
+      let hit: AnnotationMark | null = null
+      for (let i = marksRef.current.length - 1; i >= 0; i -= 1) {
+        if (hitTestMark(marksRef.current[i], point, tolerance)) {
+          hit = marksRef.current[i]
+          break
+        }
+      }
+      if (hit) {
+        setSelection(hit.id)
+        interactionRef.current = { kind: "move", pointerId: event.pointerId, targetId: hit.id, original: hit, start: point, moved: false }
+        return
+      }
+      // Empty space: drop the selection and pan the image (preserves drag-to-pan).
+      setSelection(null)
+      interactionRef.current = { kind: "pan", pointerId: event.pointerId, last: { x: event.clientX, y: event.clientY } }
+      setIsPanning(true)
+      return
+    }
+
+    const scaledSize = strokeSize * imageScale
+    if (tool === "text") {
+      const text = textValue.trim()
+      try {
+        event.currentTarget.releasePointerCapture(event.pointerId)
+      } catch {
+        // Pointer capture may already be released by the browser.
+      }
+      if (!text) return
+      addMark({ kind: "text", id: nextMarkId(), color, point, size: Math.max(14, scaledSize * 2.4), text })
+      return
+    }
+
+    let mark: AnnotationMark
+    if (tool === "arrow" || tool === "line" || tool === "rectangle" || tool === "ellipse") {
+      mark = { kind: "shape", id: nextMarkId(), shape: tool, color, size: Math.max(2, scaledSize), start: point, end: point }
     } else {
-      liveMarkRef.current = {
+      mark = {
         kind: "path",
+        id: nextMarkId(),
         tool,
         color,
         size: Math.max(2, tool === "eraser" ? scaledSize * 2.2 : scaledSize),
         points: [point],
       }
     }
+    interactionRef.current = { kind: "draw", pointerId: event.pointerId, mark, moved: false }
+    previewRef.current = { add: mark }
     drawAll()
-  }, [color, commitMark, drawAll, pointFromEvent, screenToImageScale, strokeSize, textValue, tool])
+  }, [addMark, color, drawAll, pointFromEvent, screenToImageScale, setSelection, strokeSize, textValue, tool])
 
   const handlePointerMove = React.useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
-    if (activePointerIdRef.current !== event.pointerId) return
-    const point = pointFromEvent(event)
-    const mark = liveMarkRef.current
-    if (!point || !mark) return
+    const interaction = interactionRef.current
+    if (!interaction || interaction.pointerId !== event.pointerId) return
     event.preventDefault()
-    if (mark.kind === "path") {
-      const last = mark.points.at(-1)
-      if (!last || distance(last, point) >= Math.max(1, mark.size * 0.18)) {
-        mark.points.push(point)
+
+    if (interaction.kind === "pan") {
+      const viewport = viewportRef.current
+      if (viewport) {
+        viewport.scrollLeft -= event.clientX - interaction.last.x
+        viewport.scrollTop -= event.clientY - interaction.last.y
+        interaction.last = { x: event.clientX, y: event.clientY }
       }
-    } else if (mark.kind === "shape") {
-      mark.end = point
+      return
     }
-    drawAll(mark)
+
+    const point = pointFromEvent(event)
+    if (!point) return
+
+    if (interaction.kind === "draw") {
+      const mark = interaction.mark
+      if (mark.kind === "path") {
+        const last = mark.points.at(-1)
+        if (!last || distance(last, point) >= Math.max(1, mark.size * 0.18)) mark.points.push(point)
+      } else if (mark.kind === "shape") {
+        mark.end = point
+      }
+      interaction.moved = true
+      previewRef.current = { add: mark }
+      drawAll()
+      return
+    }
+
+    if (interaction.kind === "move") {
+      const dx = point.x - interaction.start.x
+      const dy = point.y - interaction.start.y
+      if (dx !== 0 || dy !== 0) interaction.moved = true
+      previewRef.current = { replaceId: interaction.targetId, mark: translateMark(interaction.original, dx, dy) }
+      drawAll()
+      return
+    }
+
+    // resize
+    interaction.moved = true
+    previewRef.current = { replaceId: interaction.targetId, mark: resizeShapeMark(interaction.original, interaction.handle, point) }
+    drawAll()
   }, [drawAll, pointFromEvent])
 
   const finishPointer = React.useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
-    if (activePointerIdRef.current !== event.pointerId) return
-    const mark = liveMarkRef.current
-    activePointerIdRef.current = null
-    liveMarkRef.current = null
+    const interaction = interactionRef.current
+    if (!interaction || interaction.pointerId !== event.pointerId) return
+    interactionRef.current = null
     try {
       event.currentTarget.releasePointerCapture(event.pointerId)
     } catch {
       // The browser can release capture automatically when the pointer leaves.
     }
 
-    if (!mark) {
-      drawAll(null)
+    if (interaction.kind === "pan") {
+      setIsPanning(false)
       return
     }
-    if (mark.kind === "path" && mark.points.length < 2) {
-      drawAll(null)
-      return
-    }
-    if (mark.kind === "shape" && distance(mark.start, mark.end) < mark.size * 1.5) {
-      drawAll(null)
-      return
-    }
-    commitMark(mark)
-  }, [commitMark, drawAll])
 
-  const undo = React.useCallback(() => {
-    setMarks(prev => {
-      const undone = prev.at(-1)
-      if (undone) setRedoStack(stack => [...stack, undone])
-      const next = prev.slice(0, -1)
-      marksRef.current = next
-      return next
-    })
-    setSaveState("idle")
-  }, [])
+    const preview = previewRef.current
+    previewRef.current = null
 
-  const redo = React.useCallback(() => {
-    setRedoStack(prev => {
-      const restored = prev.at(-1)
-      if (restored) {
-        setMarks(current => {
-          const next = [...current, restored]
-          marksRef.current = next
-          return next
-        })
+    if (interaction.kind === "draw") {
+      const mark = interaction.mark
+      if (mark.kind === "path" && mark.points.length < 2) {
+        drawAll()
+        return
       }
-      return prev.slice(0, -1)
-    })
-    setSaveState("idle")
-  }, [])
+      if (mark.kind === "shape" && distance(mark.start, mark.end) < mark.size * 1.5) {
+        drawAll()
+        return
+      }
+      addMark(mark)
+      return
+    }
 
-  const clear = React.useCallback(() => {
-    marksRef.current = []
-    setMarks([])
-    setRedoStack([])
-    setSaveState("idle")
-    setExportError(null)
-    liveMarkRef.current = null
-    drawAll(null)
-  }, [drawAll])
+    // move / resize
+    if (!interaction.moved || !preview || !("replaceId" in preview)) {
+      drawAll()
+      return
+    }
+    const finalMark = preview.mark
+    commit(marksRef.current.map(mark => (mark.id === interaction.targetId ? finalMark : mark)))
+  }, [addMark, commit, drawAll])
 
   const zoomBy = React.useCallback((delta: number) => {
     setZoom(value => clamp(Number((value + delta).toFixed(2)), MIN_ZOOM, MAX_ZOOM))
@@ -578,34 +941,68 @@ export function ImageAnnotationEditor({ imageUrl, filename, onSave }: ImageAnnot
       const blob = await buildAnnotatedBlob()
       const file = new File([blob], annotatedFilename(filename), { type: "image/png" })
       await onSave(file)
-      setSaveState("saved")
+      if (mountedRef.current) setSaveState("saved")
     } catch (error) {
+      if (!mountedRef.current) return
       setSaveState("error")
       setExportError(error instanceof Error ? error.message : "Could not save this image.")
     }
   }, [buildAnnotatedBlob, filename, onSave])
+
+  const cursorClass =
+    tool === "hand"
+      ? isPanning ? "cursor-grabbing" : "cursor-grab"
+      : tool === "select"
+        ? isPanning ? "cursor-grabbing" : "cursor-default"
+        : tool === "eraser"
+          ? "cursor-cell"
+          : tool === "text"
+            ? "cursor-text"
+            : "cursor-crosshair"
 
   return (
     <TooltipProvider>
       <div className="flex h-full min-h-0 w-full flex-col overflow-hidden">
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-y border-white/10 bg-black/35 px-2.5 py-2 backdrop-blur-md">
           <div className="flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.06] p-1">
-            <ToolButton label={toolLabel("pen")} active={tool === "pen"} onClick={() => setTool("pen")}>
+            <ToolButton label={toolLabel("select")} active={tool === "select"} onClick={() => chooseTool("select")}>
+              <MousePointer2 className="size-4" />
+            </ToolButton>
+            <ToolButton label={toolLabel("hand")} active={tool === "hand"} onClick={() => chooseTool("hand")}>
+              <Hand className="size-4" />
+            </ToolButton>
+            {hasSelection && (
+              <ToolButton label="Delete selection" onClick={deleteSelected}>
+                <Trash className="size-4" />
+              </ToolButton>
+            )}
+          </div>
+
+          <div className="flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.06] p-1">
+            <ToolButton label={toolLabel("pen")} active={tool === "pen"} onClick={() => chooseTool("pen")}>
               <PenLine className="size-4" />
             </ToolButton>
-            <ToolButton label={toolLabel("highlighter")} active={tool === "highlighter"} onClick={() => setTool("highlighter")}>
+            <ToolButton label={toolLabel("highlighter")} active={tool === "highlighter"} onClick={() => chooseTool("highlighter")}>
               <Highlighter className="size-4" />
             </ToolButton>
-            <ToolButton label={toolLabel("eraser")} active={tool === "eraser"} onClick={() => setTool("eraser")}>
+            <ToolButton label={toolLabel("eraser")} active={tool === "eraser"} onClick={() => chooseTool("eraser")}>
               <Eraser className="size-4" />
             </ToolButton>
-            <ToolButton label={toolLabel("arrow")} active={tool === "arrow"} onClick={() => setTool("arrow")}>
+            <span className="mx-0.5 h-5 w-px bg-white/12" />
+            <ToolButton label={toolLabel("arrow")} active={tool === "arrow"} onClick={() => chooseTool("arrow")}>
               <ArrowUpRight className="size-4" />
             </ToolButton>
-            <ToolButton label={toolLabel("rectangle")} active={tool === "rectangle"} onClick={() => setTool("rectangle")}>
+            <ToolButton label={toolLabel("line")} active={tool === "line"} onClick={() => chooseTool("line")}>
+              <Slash className="size-4" />
+            </ToolButton>
+            <ToolButton label={toolLabel("rectangle")} active={tool === "rectangle"} onClick={() => chooseTool("rectangle")}>
               <SquareIcon className="size-4" />
             </ToolButton>
-            <ToolButton label={toolLabel("text")} active={tool === "text"} onClick={() => setTool("text")}>
+            <ToolButton label={toolLabel("ellipse")} active={tool === "ellipse"} onClick={() => chooseTool("ellipse")}>
+              <Circle className="size-4" />
+            </ToolButton>
+            <span className="mx-0.5 h-5 w-px bg-white/12" />
+            <ToolButton label={toolLabel("text")} active={tool === "text"} onClick={() => chooseTool("text")}>
               <Type className="size-4" />
             </ToolButton>
           </div>
@@ -616,7 +1013,7 @@ export function ImageAnnotationEditor({ imageUrl, filename, onSave }: ImageAnnot
                 key={swatch}
                 color={swatch}
                 active={swatch === color}
-                onClick={() => setColor(swatch)}
+                onClick={() => chooseColor(swatch)}
               />
             ))}
           </div>
@@ -664,9 +1061,24 @@ export function ImageAnnotationEditor({ imageUrl, filename, onSave }: ImageAnnot
             <ToolButton label="Download" onClick={handleDownload}>
               <Download className="size-4" />
             </ToolButton>
-            <ToolButton label={saveState === "saving" ? "Saving" : "Save"} disabled={!onSave || saveState === "saving"} onClick={handleSave}>
-              <Save className="size-4" />
-            </ToolButton>
+            {onSave && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={saveState === "saving"}
+                    onClick={handleSave}
+                    className="h-7 gap-1.5 rounded-md px-2 text-white/80 hover:bg-white/12 hover:text-white disabled:opacity-50"
+                  >
+                    <Save className="size-4" />
+                    <span>{saveState === "saving" ? "Saving" : "Save"}</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="z-[140]">Save annotations</TooltipContent>
+              </Tooltip>
+            )}
           </div>
         </div>
 
@@ -691,16 +1103,14 @@ export function ImageAnnotationEditor({ imageUrl, filename, onSave }: ImageAnnot
               <canvas
                 ref={canvasRef}
                 aria-label="Image annotation canvas"
-                className={cn(
-                  "absolute inset-0 size-full touch-none",
-                  tool === "eraser" ? "cursor-cell" : tool === "text" ? "cursor-text" : "cursor-crosshair"
-                )}
+                className={cn("absolute inset-0 size-full touch-none", cursorClass)}
                 onPointerDown={handlePointerDown}
                 onPointerMove={handlePointerMove}
                 onPointerUp={finishPointer}
                 onPointerCancel={finishPointer}
                 onPointerLeave={(event) => {
-                  if (activePointerIdRef.current === event.pointerId) finishPointer(event)
+                  const interaction = interactionRef.current
+                  if (interaction && interaction.pointerId === event.pointerId) finishPointer(event)
                 }}
               />
             </div>
