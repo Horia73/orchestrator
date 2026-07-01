@@ -24,7 +24,33 @@ export function resolveRequestOrigin(request: Request): string {
  * only break the app for its own viewer, not widen access.
  */
 export function resolveBrowserOrigin(request: Request): string {
-    return originFromRequestHeaders(request) ?? safeRequestUrlOrigin(request.url) ?? DEFAULT_APP_ORIGIN
+    let requestUrl: URL | null = null
+    try {
+        requestUrl = new URL(request.url)
+    } catch {
+        requestUrl = null
+    }
+
+    const forwardedHost = firstHeaderValue(request.headers.get('x-forwarded-host'))
+    const host = forwardedHost
+        || firstHeaderValue(request.headers.get('host'))
+        || requestUrl?.host
+        || null
+    if (!host) return requestUrl?.origin ?? DEFAULT_APP_ORIGIN
+
+    const forwardedProto = firstHeaderValue(request.headers.get('x-forwarded-proto'))
+    const proto = (forwardedProto || requestUrl?.protocol.replace(':', '') || 'http').toLowerCase()
+
+    // Deliberately IGNORE x-forwarded-port: behind the reverse proxy it carries
+    // the upstream container port (e.g. 3000), not the client-facing port, which
+    // would yield a wrong-origin CSP source that fails to match the browser's own
+    // same-origin fetches. A non-standard public port is already encoded in the
+    // forwarded host; standard ports normalize away via URL.origin.
+    try {
+        return new URL(`${proto}://${host}`).origin
+    } catch {
+        return requestUrl?.origin ?? DEFAULT_APP_ORIGIN
+    }
 }
 
 export function resolveAppOrigin(candidate?: string | null): string {
