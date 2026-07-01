@@ -70,13 +70,16 @@ export function ChatInput({
     // Caret position to restore after a programmatic value change (list
     // continuation). Applied in a layout effect once the new value is rendered.
     const pendingSelectionRef = React.useRef<number | null>(null)
+    const pendingInputScrollRef = React.useRef(false)
     const [previewAttachment, setPreviewAttachment] = React.useState<Attachment | null>(null)
+    const [previewDraftAttachmentId, setPreviewDraftAttachmentId] = React.useState<string | null>(null)
     const [isRecording, setIsRecording] = React.useState(false)
 
     const draft = useMessageDraft({ namespace: draftNamespace, threadId: activeConversationId })
     const {
         fileInputRef,
         isDragging,
+        replaceAttachmentFile,
         removeAttachment,
         markRendered,
         handleDragEnter,
@@ -161,20 +164,39 @@ export function ChatInput({
     const resizeTextarea = React.useCallback(() => {
         const textarea = textareaRef.current
         if (!textarea) return
+        const shouldStickToEnd =
+            document.activeElement === textarea &&
+            textarea.selectionStart === textarea.value.length &&
+            textarea.selectionEnd === textarea.value.length
         textarea.style.height = "0px"
         textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`
+        if (shouldStickToEnd && textarea.scrollHeight > maxHeight) {
+            textarea.scrollTop = textarea.scrollHeight
+        }
     }, [maxHeight])
-
-    React.useEffect(() => { resizeTextarea() }, [draft.value, resizeTextarea])
 
     // After a list-continuation edit re-renders the textarea, move the caret to
     // the position computed alongside the new value.
     React.useLayoutEffect(() => {
+        resizeTextarea()
         const caret = pendingSelectionRef.current
         if (caret == null) return
         pendingSelectionRef.current = null
-        textareaRef.current?.setSelectionRange(caret, caret)
-    }, [draft.value])
+        const textarea = textareaRef.current
+        if (!textarea) return
+        textarea.setSelectionRange(caret, caret)
+        if (pendingInputScrollRef.current && caret >= textarea.value.length) {
+            pendingInputScrollRef.current = false
+            textarea.scrollTop = textarea.scrollHeight
+            window.requestAnimationFrame(() => {
+                if (textareaRef.current === textarea) {
+                    textarea.scrollTop = textarea.scrollHeight
+                }
+            })
+        } else {
+            pendingInputScrollRef.current = false
+        }
+    }, [draft.value, resizeTextarea])
 
     const handleSubmit = React.useCallback(() => {
         const trimmed = draft.value.trim()
@@ -224,11 +246,12 @@ export function ChatInput({
 
             const textarea = event.currentTarget
             const isMobileEnter = isMobileKeyboardViewport()
-            if ((event.shiftKey || isMobileEnter) && textarea.selectionStart === textarea.selectionEnd) {
+            if (textarea.selectionStart === textarea.selectionEnd) {
                 const continuation = computeMarkdownListContinuation(textarea.value, textarea.selectionStart)
                 if (continuation) {
                     event.preventDefault()
                     pendingSelectionRef.current = continuation.nextCaret
+                    pendingInputScrollRef.current = true
                     draft.setValue(continuation.nextValue)
                     return
                 }
@@ -253,7 +276,18 @@ export function ChatInput({
         voice.start()
     }, [isStreamingActiveConversation, voice])
     const handlePreviewClick = React.useCallback((att: AttachedFile) => {
-        if (att.uploaded) setPreviewAttachment(att.uploaded)
+        if (!att.uploaded) return
+        setPreviewDraftAttachmentId(att.id)
+        setPreviewAttachment(att.uploaded)
+    }, [])
+    const handlePreviewSaveImage = React.useCallback(async (_attachment: Attachment, file: File) => {
+        if (!previewDraftAttachmentId) throw new Error("Attachment is no longer available.")
+        const uploaded = await replaceAttachmentFile(previewDraftAttachmentId, file)
+        if (uploaded) setPreviewAttachment(uploaded)
+    }, [previewDraftAttachmentId, replaceAttachmentFile])
+    const closePreview = React.useCallback(() => {
+        setPreviewAttachment(null)
+        setPreviewDraftAttachmentId(null)
     }, [])
 
     return (
@@ -325,10 +359,9 @@ export function ChatInput({
                             // proportional font tab-size:2 lands the first stop
                             // right after "1." (≈3px gap — looks glued) and gives
                             // different gaps per marker width, so items don't
-                            // align. tab-size:6 pushes every single-char marker
-                            // (1.–9., -, a.) past the first stop so their text
-                            // aligns at one hanging indent with a paragraph-like gap.
-                            "[tab-size:6]",
+                            // align. tab-size:8 plus the two-space marker indent
+                            // gives ordered lists a Word-like hanging paragraph gap.
+                            "[tab-size:8]",
                             "[font-family:var(--font-display)] tracking-[-0.02em]",
                             "text-[16px]",
                             "placeholder:font-medium placeholder:text-foreground/65",
@@ -417,7 +450,8 @@ export function ChatInput({
 
             <FilePreviewModal
                 attachment={previewAttachment}
-                onClose={() => setPreviewAttachment(null)}
+                onSaveImage={previewDraftAttachmentId ? handlePreviewSaveImage : undefined}
+                onClose={closePreview}
             />
         </>
     )

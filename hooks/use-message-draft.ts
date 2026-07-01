@@ -4,6 +4,7 @@ import {
     revokeAttachmentPreviewUrls,
     type AttachedFile,
 } from "@/hooks/use-file-attachments"
+import { appPath } from "@/lib/app-path"
 import type { Attachment } from "@/lib/types"
 
 interface MessageDraftOptions {
@@ -11,6 +12,36 @@ interface MessageDraftOptions {
     namespace: string
     /** Per-thread id (conversation id, inbox item id, etc.). null → "new" bucket */
     threadId: string | null
+}
+
+const MISSING_RESTORED_UPLOAD_ERROR = "Attachment file is no longer available. Re-attach it."
+
+function uploadUrl(id: string): string {
+    return appPath(`/api/uploads/${encodeURIComponent(id)}`)
+}
+
+function restoredAttachmentFromUpload(att: Attachment): AttachedFile {
+    return {
+        id: att.id,
+        type: att.type === "image" ? "image" : att.type === "pdf" ? "pdf" : "file",
+        previewUrl: att.type === "image" ? uploadUrl(att.id) : undefined,
+        uploaded: att,
+        rendering: att.type === "pdf",
+    }
+}
+
+async function missingRestoredUploadIds(attachments: Attachment[]): Promise<Set<string>> {
+    const missing = new Set<string>()
+    await Promise.all(attachments.map(async (att) => {
+        try {
+            const res = await fetch(uploadUrl(att.id), { method: "HEAD", cache: "no-store" })
+            if (res.status === 404) missing.add(att.id)
+        } catch {
+            // Network/session failures are ambiguous; keep the draft rather than
+            // deleting a still-valid file from local state.
+        }
+    }))
+    return missing
 }
 
 export function useMessageDraft({ namespace, threadId }: MessageDraftOptions) {
@@ -53,6 +84,7 @@ export function useMessageDraft({ namespace, threadId }: MessageDraftOptions) {
 
     const restore = React.useCallback((textareaRef: React.RefObject<HTMLTextAreaElement | null>) => {
         restoredForKeyRef.current = null
+        let validationCancelled = false
 
         const frame = window.requestAnimationFrame(() => {
             const el = textareaRef.current
@@ -70,16 +102,30 @@ export function useMessageDraft({ namespace, threadId }: MessageDraftOptions) {
         if (savedFiles) {
             try {
                 const parsed = JSON.parse(savedFiles) as Attachment[]
-                const restoredAttachments: AttachedFile[] = parsed.map(att => ({
-                    id: att.id,
-                    type: att.type === "image" ? "image" : att.type === "pdf" ? "pdf" : "file",
-                    previewUrl: att.type === "image" ? `/api/uploads/${att.id}` : undefined,
-                    uploaded: att,
-                    rendering: att.type === "pdf",
-                }))
+                const restoredAttachments: AttachedFile[] = parsed.map(restoredAttachmentFromUpload)
                 setAttachments(prev => {
                     revokeAttachmentPreviewUrls(prev)
                     return restoredAttachments
+                })
+                missingRestoredUploadIds(parsed).then(missing => {
+                    if (validationCancelled || missing.size === 0) return
+                    const available = parsed.filter(att => !missing.has(att.id))
+                    if (available.length > 0) {
+                        localStorage.setItem(filesKey, JSON.stringify(available))
+                    } else {
+                        localStorage.removeItem(filesKey)
+                    }
+                    setAttachments(prev => prev.map(att => {
+                        const uploadedId = att.uploaded?.id
+                        if (!uploadedId || !missing.has(uploadedId)) return att
+                        return {
+                            ...att,
+                            uploaded: undefined,
+                            uploading: false,
+                            rendering: false,
+                            error: MISSING_RESTORED_UPLOAD_ERROR,
+                        }
+                    }))
                 })
             } catch {
                 setAttachments(prev => {
@@ -96,6 +142,7 @@ export function useMessageDraft({ namespace, threadId }: MessageDraftOptions) {
 
         const restoredFrame = window.requestAnimationFrame(() => { restoredForKeyRef.current = filesKey })
         return () => {
+            validationCancelled = true
             window.cancelAnimationFrame(frame)
             window.cancelAnimationFrame(restoredFrame)
         }

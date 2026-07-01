@@ -68,6 +68,17 @@ export function uploadErrorMessage(data: unknown, fallback: string) {
     return fallback
 }
 
+async function uploadSingleFile(file: File): Promise<Attachment> {
+    const formData = new FormData()
+    formData.append('files', file)
+    const res = await fetch('/api/upload', { method: 'POST', body: formData })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(uploadErrorMessage(data, `Upload failed (${res.status})`))
+    const uploaded = uploadedAttachmentFromResponse(data)
+    if (!uploaded) throw new Error("Upload response did not include an attachment")
+    return uploaded
+}
+
 export function useFileAttachments(setAttachments: React.Dispatch<React.SetStateAction<AttachedFile[]>>) {
     const fileInputRef = React.useRef<HTMLInputElement>(null)
     const [isDragging, setIsDragging] = React.useState(false)
@@ -92,16 +103,7 @@ export function useFileAttachments(setAttachments: React.Dispatch<React.SetState
 
         for (const att of newAttachments) {
             if (!att.file) continue
-            const formData = new FormData()
-            formData.append('files', att.file)
-            fetch('/api/upload', { method: 'POST', body: formData })
-                .then(async res => {
-                    const data = await res.json().catch(() => ({}))
-                    if (!res.ok) throw new Error(uploadErrorMessage(data, `Upload failed (${res.status})`))
-                    const uploaded = uploadedAttachmentFromResponse(data)
-                    if (!uploaded) throw new Error("Upload response did not include an attachment")
-                    return uploaded
-                })
+            uploadSingleFile(att.file)
                 .then(uploaded => {
                     if (!mountedRef.current) return
                     setAttachments(prev => prev.map(a =>
@@ -116,6 +118,51 @@ export function useFileAttachments(setAttachments: React.Dispatch<React.SetState
                             : a
                     ))
                 })
+        }
+    }, [setAttachments])
+
+    const replaceAttachmentFile = React.useCallback(async (id: string, file: File) => {
+        const nextPreviewUrl = fileType(file) === "image" ? URL.createObjectURL(file) : undefined
+        if (nextPreviewUrl) createdPreviewUrlsRef.current.add(nextPreviewUrl)
+
+        setAttachments(prev => prev.map(a => {
+            if (a.id !== id) return a
+            if (isBlobPreviewUrl(a.previewUrl)) {
+                URL.revokeObjectURL(a.previewUrl)
+                createdPreviewUrlsRef.current.delete(a.previewUrl)
+            }
+            return {
+                ...a,
+                file,
+                previewUrl: nextPreviewUrl,
+                type: fileType(file),
+                uploaded: undefined,
+                uploading: true,
+                rendering: false,
+                error: undefined,
+            }
+        }))
+
+        try {
+            const uploaded = await uploadSingleFile(file)
+            if (!mountedRef.current) return uploaded
+            setAttachments(prev => prev.map(a =>
+                a.id === id ? { ...a, uploaded, uploading: false, error: undefined } : a
+            ))
+            return uploaded
+        } catch (error) {
+            if (mountedRef.current) {
+                setAttachments(prev => prev.map(a =>
+                    a.id === id
+                        ? {
+                            ...a,
+                            uploading: false,
+                            error: error instanceof Error ? error.message : "Upload failed",
+                        }
+                        : a
+                ))
+            }
+            throw error
         }
     }, [setAttachments])
 
@@ -186,7 +233,7 @@ export function useFileAttachments(setAttachments: React.Dispatch<React.SetState
     }, [])
 
     return {
-        fileInputRef, isDragging, addFiles, removeAttachment, markRendered,
+        fileInputRef, isDragging, addFiles, replaceAttachmentFile, removeAttachment, markRendered,
         handleDragEnter, handleDragLeave, handleDrop, handlePaste,
         handlePlusClick, handleFileChange,
     }

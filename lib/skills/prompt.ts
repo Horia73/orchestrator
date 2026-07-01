@@ -20,7 +20,7 @@ export function buildSkillsIndex(): string {
   return `
 <skills_index>
 Installed workflow skills are available lazily. This list is an index only; do not assume the full instructions are loaded.
-Use SkillSearch to find a matching skill, ActivateSkill to load SKILL.md, and ReadSkillFile for referenced guides/scripts/assets. Do not read provider-native skill folders such as CODEX_HOME/.codex/skills, ~/.codex/skills, or ~/.claude/skills; Orchestrator skills are resolved by these tools, not by guessed runtime-home paths. Prefer worker for substantial skill-backed deliverables; orchestrator may use skills directly for small bounded tasks.
+Use SkillSearch to find a matching skill, ActivateSkill to load SKILL.md, and ReadSkillFile for referenced guides/scripts/assets. Do not read provider-native skill folders such as CODEX_HOME/.codex/skills, ~/.codex/skills, or ~/.claude/skills; Orchestrator skills are resolved by these tools, not by guessed runtime-home paths. When the user asks to add or install a skill for Orchestrator, install it through Settings → Integrations → Custom Skills or the Orchestrator profile/global skills roots, never into Codex/Claude provider homes. Prefer worker for substantial skill-backed deliverables; orchestrator may use skills directly for small bounded tasks.
 ${rows.join("\n")}${overflow}
 </skills_index>
 `.trim()

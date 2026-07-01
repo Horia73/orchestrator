@@ -12,6 +12,7 @@ import { SvgViewer } from "@/components/office/svg-viewer"
 import { CodeViewer } from "@/components/code-viewer"
 import { ViewerErrorBoundary } from "@/components/office/viewer-error-boundary"
 import { CadFileViewer } from "@/components/cad/cad-file-viewer"
+import { ImageAnnotationEditor } from "@/components/image-annotation-editor"
 import { isDocxFile, isSvgFile, isSpreadsheetFile, isPresentationFile, isCodeOrTextFile, is3DModelFile } from "@/lib/preview-kinds"
 import type { Attachment } from "@/lib/types"
 
@@ -20,6 +21,7 @@ interface FilePreviewModalProps {
     /** Sibling attachments in the same group. When more than one is an
      *  image/video, the lightbox shows left/right gallery navigation. */
     gallery?: Attachment[]
+    onSaveImage?: (attachment: Attachment, file: File) => void | Promise<void>
     onClose: () => void
 }
 
@@ -50,7 +52,7 @@ function ModalShell({ onClose, children }: { onClose: () => void; children: Reac
 // Modal
 // ---------------------------------------------------------------------------
 
-export function FilePreviewModal({ attachment, gallery, onClose }: FilePreviewModalProps) {
+export function FilePreviewModal({ attachment, gallery, onSaveImage, onClose }: FilePreviewModalProps) {
     const isOpen = !!attachment
     const [mounted, setMounted] = React.useState(false)
 
@@ -86,6 +88,8 @@ export function FilePreviewModal({ attachment, gallery, onClose }: FilePreviewMo
         if (!isOpen) return
         const handler = (e: KeyboardEvent) => {
             if (e.key === "Escape") { onClose(); return }
+            const target = e.target as HTMLElement | null
+            if (target?.closest("input, textarea, [contenteditable='true']")) return
             if (e.key === "ArrowLeft") showPrev()
             else if (e.key === "ArrowRight") showNext()
         }
@@ -194,8 +198,12 @@ export function FilePreviewModal({ attachment, gallery, onClose }: FilePreviewMo
                     </button>
                 )}
                 {active.type === "image" ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={url} alt={active.filename} className="max-w-full max-h-full rounded-lg object-contain" />
+                    <ImageAnnotationEditor
+                        key={active.id}
+                        imageUrl={url}
+                        filename={active.filename}
+                        onSave={onSaveImage ? (file) => onSaveImage(active, file) : undefined}
+                    />
                 ) : active.type === "video" ? (
                     <video
                         key={active.id}

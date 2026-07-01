@@ -26,12 +26,14 @@ interface InboxComposerProps {
 export function InboxComposer({ itemId, responding, onSend }: InboxComposerProps) {
     const textareaRef = React.useRef<HTMLTextAreaElement>(null)
     const [previewAttachment, setPreviewAttachment] = React.useState<Attachment | null>(null)
+    const [previewDraftAttachmentId, setPreviewDraftAttachmentId] = React.useState<string | null>(null)
     const keyboardInset = useMobileKeyboardInset()
 
     const draft = useMessageDraft({ namespace: "inbox", threadId: itemId })
     const {
         fileInputRef,
         isDragging,
+        replaceAttachmentFile,
         removeAttachment,
         markRendered,
         handleDragEnter,
@@ -108,7 +110,18 @@ export function InboxComposer({ itemId, responding, onSend }: InboxComposerProps
     )
 
     const handlePreviewClick = React.useCallback((att: AttachedFile) => {
-        if (att.uploaded) setPreviewAttachment(att.uploaded)
+        if (!att.uploaded) return
+        setPreviewDraftAttachmentId(att.id)
+        setPreviewAttachment(att.uploaded)
+    }, [])
+    const handlePreviewSaveImage = React.useCallback(async (_attachment: Attachment, file: File) => {
+        if (!previewDraftAttachmentId) throw new Error("Attachment is no longer available.")
+        const uploaded = await replaceAttachmentFile(previewDraftAttachmentId, file)
+        if (uploaded) setPreviewAttachment(uploaded)
+    }, [previewDraftAttachmentId, replaceAttachmentFile])
+    const closePreview = React.useCallback(() => {
+        setPreviewAttachment(null)
+        setPreviewDraftAttachmentId(null)
     }, [])
 
     return (
@@ -227,7 +240,8 @@ export function InboxComposer({ itemId, responding, onSend }: InboxComposerProps
 
             <FilePreviewModal
                 attachment={previewAttachment}
-                onClose={() => setPreviewAttachment(null)}
+                onSaveImage={previewDraftAttachmentId ? handlePreviewSaveImage : undefined}
+                onClose={closePreview}
             />
         </form>
     )

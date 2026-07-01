@@ -622,14 +622,14 @@ const baseComponents: Components = {
 const contextComponents: Components = {
   ...baseComponents,
   ul: ({ children }) => (
-    <ul className="my-2 list-disc space-y-1 pl-6 md:-ml-16 md:pl-[calc(4rem+1.5rem)] [&_ol]:my-1 [&_ol]:ml-0 [&_ol]:list-decimal [&_ol]:pl-6 [&_ul]:my-1 [&_ul]:ml-0 [&_ul]:list-disc [&_ul]:pl-6">
+    <ul className="my-2 list-disc space-y-1 pl-9 md:-ml-16 md:pl-[calc(4rem+2.25rem)] [&_ol]:my-1 [&_ol]:ml-0 [&_ol]:list-decimal [&_ol]:pl-7 [&_ul]:my-1 [&_ul]:ml-0 [&_ul]:list-disc [&_ul]:pl-7">
       {children}
     </ul>
   ),
   ol: ({ children, start }) => (
     <ol
       start={start}
-      className="my-2 list-decimal space-y-1 pl-6 md:-ml-16 md:pl-[calc(4rem+1.5rem)] [&_ol]:my-1 [&_ol]:ml-0 [&_ol]:list-decimal [&_ol]:pl-6 [&_ul]:my-1 [&_ul]:ml-0 [&_ul]:list-disc [&_ul]:pl-6"
+      className="my-2 list-decimal space-y-1 pl-9 md:-ml-16 md:pl-[calc(4rem+2.25rem)] [&_ol]:my-1 [&_ol]:ml-0 [&_ol]:list-decimal [&_ol]:pl-7 [&_ul]:my-1 [&_ul]:ml-0 [&_ul]:list-disc [&_ul]:pl-7"
     >
       {children}
     </ol>
@@ -687,14 +687,14 @@ const compactComponents: Components = {
   ),
   p: ({ children }) => <p className="my-1.5 leading-relaxed">{children}</p>,
   ul: ({ children }) => (
-    <ul className="my-1.5 list-disc space-y-1 pl-5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5">
+    <ul className="my-1.5 list-disc space-y-1 pl-7 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-6 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-6">
       {children}
     </ul>
   ),
   ol: ({ children, start }) => (
     <ol
       start={start}
-      className="my-1.5 list-decimal space-y-1 pl-5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5"
+      className="my-1.5 list-decimal space-y-1 pl-7 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-6 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-6"
     >
       {children}
     </ol>

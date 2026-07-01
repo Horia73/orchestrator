@@ -19,6 +19,7 @@ const isProductionBuild =
   process.env.ORCHESTRATOR_BUILD === "1" ||
   process.env.NEXT_PHASE === "phase-production-build" ||
   process.env.npm_lifecycle_event === "build"
+const ORPHAN_UPLOAD_GRACE_MS = 7 * 24 * 60 * 60 * 1000
 
 const dbConnections = new Map<string, Database.Database>()
 const capturedSchemaExecSql: string[] = []
@@ -1861,12 +1862,24 @@ function cleanupOrphanUploads(): { scanned: number; removed: number } {
       }
     }
 
+    const now = Date.now()
     const onDisk = fs.readdirSync(uploadsDir)
     for (const name of onDisk) {
       scanned++
       if (referenced.has(name)) continue
+      const target = path.join(uploadsDir, name)
+      let stat: fs.Stats
       try {
-        fs.unlinkSync(path.join(uploadsDir, name))
+        stat = fs.statSync(target)
+      } catch {
+        continue
+      }
+      if (!stat.isFile()) continue
+      // A just-uploaded file can be referenced only by a browser draft until the
+      // user sends the message. Keep recent orphans across restarts/updates.
+      if (now - stat.mtimeMs < ORPHAN_UPLOAD_GRACE_MS) continue
+      try {
+        fs.unlinkSync(target)
         removed++
       } catch (err) {
         console.warn("Orphan-upload GC: failed to remove", name, err)

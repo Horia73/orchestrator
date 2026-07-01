@@ -119,6 +119,26 @@ import { runWithRequestProfile } from "@/lib/profiles/server"
 /** Persist in-progress assistant output periodically so reloads can catch up */
 const STREAM_PROGRESS_PERSIST_INTERVAL_MS = 250
 
+function currentMessageMissingUploads(message: Message | undefined): Attachment[] {
+  const attachments = Array.isArray(message?.attachments) ? message.attachments : []
+  return attachments.filter((att): att is Attachment => {
+    return Boolean(att?.id && !resolveExistingUploadPath(att.id))
+  })
+}
+
+function missingUploadsChatMessage(missing: Attachment[]): string {
+  const names = missing
+    .map((att) => att.filename || att.id)
+    .slice(0, 3)
+    .join(", ")
+  const suffix = missing.length > 3 ? ` and ${missing.length - 3} more` : ""
+  return [
+    `I can't access ${missing.length === 1 ? "the attached file" : "some attached files"}: ${names}${suffix}.`,
+    "The upload metadata is still in this draft/message, but the file bytes are no longer present on disk, likely after a restart or cleanup.",
+    "Remove and re-attach the missing file, then send again.",
+  ].join(" ")
+}
+
 export async function POST(request: Request) {
   return runWithRequestProfile(request, async () => {
       const requestOrigin = resolveRequestOrigin(request)
@@ -246,6 +266,23 @@ export async function POST(request: Request) {
           status,
           headers: { "Content-Type": "application/json" },
         })
+      }
+
+      // The "input" for the orchestrator row is the latest user turn.
+      // History stays implicit (we already capture it on each message row).
+      const latestUserMessage = [...messagesForProvider]
+        .reverse()
+        .find((m) => m.role === "user")
+      const missingCurrentUploads = currentMessageMissingUploads(latestUserMessage)
+      if (missingCurrentUploads.length > 0) {
+        return setupErrorResponse(
+          {
+            error: `Missing upload file(s): ${missingCurrentUploads.map((att) => att.id).join(", ")}`,
+            chatMessage: missingUploadsChatMessage(missingCurrentUploads),
+            code: "missing_upload_file",
+          },
+          409
+        )
       }
 
       // Build system prompt from orchestrator agent. For text-kind agents
@@ -462,12 +499,6 @@ export async function POST(request: Request) {
 
       const serverAbortController = new AbortController()
       registerChatStream(conversationId, messageId, serverAbortController)
-
-      // The "input" for the orchestrator row is the latest user turn.
-      // History stays implicit (we already capture it on each message row).
-      const latestUserMessage = [...messagesForProvider]
-        .reverse()
-        .find((m) => m.role === "user")
 
       // Automatic semantic memory recall for this user turn. Computed once (a turn
       // may build resolved messages more than once across attempts), fail-open: an

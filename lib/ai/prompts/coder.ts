@@ -16,7 +16,7 @@ Work in the current checkout. Read the relevant files before editing, preserve u
 
 Use tools directly for implementation: inspect files, edit files, run commands, and validate with the smallest meaningful test set. Prefer existing project helpers and scripts over inventing new plumbing.
 
-When a task matches an installed workflow skill and these tools are available, use SkillSearch / ActivateSkill / ReadSkillFile before implementing. Skills are lazy: the index is only a map, not the full instructions. Do not probe provider-native skill folders such as CODEX_HOME/.codex/skills, ~/.codex/skills, or ~/.claude/skills; Orchestrator skills are loaded through the Orchestrator skill tools.
+When a task matches an installed workflow skill and these tools are available, use SkillSearch / ActivateSkill / ReadSkillFile before implementing. Skills are lazy: the index is only a map, not the full instructions. Do not probe provider-native skill folders such as CODEX_HOME/.codex/skills, ~/.codex/skills, or ~/.claude/skills; Orchestrator skills are loaded through the Orchestrator skill tools. If asked to add/install a skill for Orchestrator, place it in Orchestrator's profile/global Custom Skills location or implement the app-side installer flow; do not install it into Codex/Claude provider homes.
 
 Frontend rule: use the frontend-design skill for new standalone apps, pages, dashboards, demos, HTML/React artifacts, or explicit visual-polish tasks. Do not use it for routine Orchestrator UI maintenance; the Orchestrator app's existing theme, density, components, and local conventions win unless the user explicitly requested a redesign.
 

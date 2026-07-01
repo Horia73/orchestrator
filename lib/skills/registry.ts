@@ -37,6 +37,12 @@ export interface CreateCustomSkillInput {
   description: string
 }
 
+export interface CreateCustomSkillFromContentInput {
+  scope: WritableSkillScope
+  id?: string
+  content: string
+}
+
 export function skillRoots(): SkillRoot[] {
   const runtime = activeRuntimePaths()
   return [
@@ -218,13 +224,55 @@ export function createCustomSkill(input: CreateCustomSkillInput): RuntimeSkill {
   return readCustomSkill(input.scope, id)
 }
 
+export function createCustomSkillFromContent(
+  input: CreateCustomSkillFromContentInput
+): RuntimeSkill {
+  const content = input.content.trim()
+  if (!content) throw new Error("SKILL.md content is required.")
+  const metadata = parseSkillMetadata(content)
+  const id = normalizeSkillId(input.id || metadata.id || metadata.name || "")
+  const root = getWritableSkillRoot(input.scope)
+  const skillDir = path.join(root.dir, id)
+  const skillFile = path.join(skillDir, SKILL_FILE)
+  if (
+    fs.existsSync(skillFile) ||
+    scanSkillRoot(root).some(
+      (entry) => entry.id === id || path.basename(entry.root) === id
+    )
+  ) {
+    throw new Error(`A ${input.scope} skill named "${id}" already exists.`)
+  }
+
+  const resolvedId = normalizeSkillId(metadata.id || metadata.name || id)
+  if (resolvedId !== id) {
+    throw new Error(
+      `SKILL.md frontmatter resolves to "${resolvedId}", but the install id is "${id}".`
+    )
+  }
+
+  fs.mkdirSync(skillDir, { recursive: true })
+  fs.writeFileSync(skillFile, content.endsWith("\n") ? content : `${content}\n`, "utf8")
+  return readCustomSkill(input.scope, id)
+}
+
 export function readCustomSkill(
   scope: WritableSkillScope,
   id: string
 ): RuntimeSkill {
-  const skill = findCustomSkill(scope, id)
+  const skill = findSkillEntry(scope, id)
   if (!skill) {
     throw new Error(`Custom skill "${normalizeSkillId(id)}" was not found.`)
+  }
+  return skill
+}
+
+export function readSkillEntry(
+  scope: RuntimeSkillScope,
+  id: string
+): RuntimeSkill {
+  const skill = findSkillEntry(scope, id)
+  if (!skill) {
+    throw new Error(`${scope} skill "${normalizeSkillId(id)}" was not found.`)
   }
   return skill
 }
@@ -292,12 +340,13 @@ function getWritableSkillRoot(scope: WritableSkillScope): WritableSkillRoot {
   return root
 }
 
-function findCustomSkill(
-  scope: WritableSkillScope,
+function findSkillEntry(
+  scope: RuntimeSkillScope,
   id: string
 ): RuntimeSkill | null {
   const cleanId = normalizeSkillId(id)
-  const root = getWritableSkillRoot(scope)
+  const root = skillRoots().find((candidate) => candidate.scope === scope)
+  if (!root) return null
   return (
     scanSkillRoot(root).find(
       (entry) => entry.id === cleanId || path.basename(entry.root) === cleanId

@@ -378,8 +378,6 @@ export function ModelsTab() {
 
       {data.canManageModelRegistry && <ModelResearchCard />}
 
-      {data.canManageModelRegistry && <CliAccountsSection />}
-
       <AgentSettingsLayout
         data={data}
         orderedAgents={orderedAgents}
@@ -407,6 +405,8 @@ export function ModelsTab() {
         providers={data.providers}
         providerStatus={data.providerStatus}
       />}
+
+      {data.canManageModelRegistry && <CliAccountsSection />}
     </div>
   )
 }

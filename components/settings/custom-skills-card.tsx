@@ -5,6 +5,7 @@ import {
   BookOpen,
   CheckCircle2,
   Edit3,
+  Eye,
   Loader2,
   Plus,
   Save,
@@ -21,11 +22,13 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Select } from "@/components/ui/select"
+import { MarkdownRenderer } from "@/components/markdown-renderer"
 import { ConfigInput, InlineNotice } from "@/components/settings/auth-shared"
 import type { NoticeTone } from "@/components/settings/auth-types"
 
 type SkillScope = "profile" | "global" | "bundled"
 type WritableSkillScope = Exclude<SkillScope, "bundled">
+type CreateMode = "starter" | "paste" | "url"
 
 interface SkillEntry {
   id: string
@@ -70,13 +73,19 @@ export function CustomSkillsCard() {
     text: string
   } | null>(null)
   const [showCreate, setShowCreate] = React.useState(false)
+  const [createMode, setCreateMode] = React.useState<CreateMode>("starter")
   const [newName, setNewName] = React.useState("")
   const [newId, setNewId] = React.useState("")
   const [newDescription, setNewDescription] = React.useState("")
+  const [newContent, setNewContent] = React.useState("")
+  const [sourceUrl, setSourceUrl] = React.useState("")
   const [newScope, setNewScope] = React.useState<WritableSkillScope>("profile")
   const [selectedKey, setSelectedKey] = React.useState<string | null>(null)
   const [editorContent, setEditorContent] = React.useState("")
   const [editorDirty, setEditorDirty] = React.useState(false)
+  const [editorMode, setEditorMode] = React.useState<"preview" | "edit">(
+    "preview"
+  )
 
   const refresh = React.useCallback(async () => {
     setLoading(true)
@@ -120,8 +129,8 @@ export function CustomSkillsCard() {
       setSelectedKey(skillKey(skill))
       setEditorContent("")
       setEditorDirty(false)
+      setEditorMode("preview")
       setNotice(null)
-      if (!skill.writable) return
 
       setBusy("load")
       try {
@@ -148,10 +157,27 @@ export function CustomSkillsCard() {
   )
 
   const createSkill = async () => {
-    if (!newName.trim() || !newDescription.trim()) {
+    if (
+      createMode === "starter" &&
+      (!newName.trim() || !newDescription.trim())
+    ) {
       setNotice({
         tone: "warning",
         text: "Add a name and description before creating the skill.",
+      })
+      return
+    }
+    if (createMode === "paste" && !newContent.trim()) {
+      setNotice({
+        tone: "warning",
+        text: "Paste SKILL.md content or choose a Markdown file.",
+      })
+      return
+    }
+    if (createMode === "url" && !sourceUrl.trim()) {
+      setNotice({
+        tone: "warning",
+        text: "Add an HTTPS URL to a SKILL.md file.",
       })
       return
     }
@@ -164,8 +190,11 @@ export function CustomSkillsCard() {
         body: JSON.stringify({
           scope: newScope,
           id: newId.trim() || undefined,
-          name: newName,
-          description: newDescription,
+          name: createMode === "starter" ? newName : undefined,
+          description:
+            createMode === "starter" ? newDescription : undefined,
+          content: createMode === "paste" ? newContent : undefined,
+          sourceUrl: createMode === "url" ? sourceUrl : undefined,
         }),
       })
       const json = (await res.json().catch(() => ({}))) as {
@@ -178,6 +207,8 @@ export function CustomSkillsCard() {
       setNewName("")
       setNewId("")
       setNewDescription("")
+      setNewContent("")
+      setSourceUrl("")
       setShowCreate(false)
       setNotice({ tone: "success", text: `${json.skill.name} created.` })
       await refresh()
@@ -234,6 +265,7 @@ export function CustomSkillsCard() {
       setSelectedKey(null)
       setEditorContent("")
       setEditorDirty(false)
+      setEditorMode("preview")
       setNotice({ tone: "success", text: "Skill deleted." })
       await refresh()
     } catch (err) {
@@ -249,6 +281,13 @@ export function CustomSkillsCard() {
   const writableScopes = data?.writableScopes ?? []
   const canCreate = writableScopes.length > 0
   const activeCount = data?.skills.filter((skill) => skill.active).length ?? 0
+
+  const loadMarkdownFile = async (file: File | null) => {
+    if (!file) return
+    const text = await file.text()
+    setNewContent(text)
+    setCreateMode("paste")
+  }
 
   return (
     <Card>
@@ -294,51 +333,135 @@ export function CustomSkillsCard() {
         {notice && <InlineNotice tone={notice.tone} text={notice.text} />}
 
         {showCreate && canCreate && (
-          <div className="grid gap-3 rounded-xl border border-border/70 bg-muted/20 p-3 md:grid-cols-[minmax(0,1fr)_160px]">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <ConfigInput
-                label="Name"
-                value={newName}
-                onChange={setNewName}
-                placeholder="Customer report writer"
-              />
-              <ConfigInput
-                label="Skill id (optional)"
-                value={newId}
-                onChange={setNewId}
-                placeholder="customer-report-writer"
-              />
-              <div className="sm:col-span-2">
-                <ConfigInput
-                  label="Description"
-                  value={newDescription}
-                  onChange={setNewDescription}
-                  placeholder="the user asks for recurring customer reporting workflows"
-                />
+          <div className="grid gap-3 rounded-xl border border-border/70 bg-muted/20 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="inline-flex h-8 overflow-hidden rounded-lg border border-border bg-background">
+                {(["starter", "paste", "url"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setCreateMode(mode)}
+                    className={cn(
+                      "border-l border-border px-2.5 text-[12px] font-medium capitalize first:border-l-0",
+                      createMode === mode
+                        ? "bg-muted text-foreground"
+                        : "text-foreground/55 hover:bg-muted/60 hover:text-foreground"
+                    )}
+                  >
+                    {mode === "starter"
+                      ? "Starter"
+                      : mode === "paste"
+                        ? "Paste MD"
+                        : "From URL"}
+                  </button>
+                ))}
               </div>
-            </div>
-            <div className="flex flex-col gap-2">
-              <label className="grid gap-1">
+              <label className="grid w-full gap-1 sm:w-[180px]">
                 <span className="text-[11.5px] font-medium text-foreground/60">
                   Scope
                 </span>
                 <Select
                   value={newScope}
-                  onValueChange={(value) => setNewScope(value as WritableSkillScope)}
+                  onValueChange={(value) =>
+                    setNewScope(value as WritableSkillScope)
+                  }
                   options={writableScopes.map((scope) => ({
                     value: scope,
                     label: SCOPE_LABELS[scope],
                   }))}
                 />
               </label>
-              <Button onClick={createSkill} disabled={busy === "create"}>
-                {busy === "create" ? (
-                  <Loader2 className="size-3.5 animate-spin" />
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_180px]">
+              <div className="grid gap-3">
+                {createMode === "starter" ? (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <ConfigInput
+                      label="Name"
+                      value={newName}
+                      onChange={setNewName}
+                      placeholder="Customer report writer"
+                    />
+                    <ConfigInput
+                      label="Skill id (optional)"
+                      value={newId}
+                      onChange={setNewId}
+                      placeholder="customer-report-writer"
+                    />
+                    <div className="sm:col-span-2">
+                      <ConfigInput
+                        label="Description"
+                        value={newDescription}
+                        onChange={setNewDescription}
+                        placeholder="the user asks for recurring customer reporting workflows"
+                      />
+                    </div>
+                  </div>
+                ) : createMode === "paste" ? (
+                  <div className="grid gap-3">
+                    <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_170px]">
+                      <ConfigInput
+                        label="Install id (optional)"
+                        value={newId}
+                        onChange={setNewId}
+                        placeholder="uses frontmatter if blank"
+                      />
+                      <label className="grid gap-1">
+                        <span className="text-[11.5px] font-medium text-foreground/60">
+                          Markdown file
+                        </span>
+                        <input
+                          type="file"
+                          accept=".md,text/markdown,text/plain"
+                          onChange={(event) =>
+                            void loadMarkdownFile(event.target.files?.[0] ?? null)
+                          }
+                          className="block h-8 w-full rounded-lg border border-border bg-background px-2 py-1 text-[12px] text-foreground file:mr-2 file:rounded-md file:border-0 file:bg-muted file:px-2 file:py-0.5 file:text-[11px] file:font-medium"
+                        />
+                      </label>
+                    </div>
+                    <textarea
+                      value={newContent}
+                      onChange={(event) => setNewContent(event.target.value)}
+                      placeholder="Paste a SKILL.md file here..."
+                      spellCheck={false}
+                      className="min-h-[180px] resize-y rounded-lg border border-border bg-background p-3 font-mono text-[12px] leading-relaxed text-foreground outline-none focus:border-ring"
+                    />
+                  </div>
                 ) : (
-                  <Plus className="size-3.5" />
+                  <div className="grid gap-3">
+                    <ConfigInput
+                      label="SKILL.md URL"
+                      value={sourceUrl}
+                      onChange={setSourceUrl}
+                      placeholder="https://github.com/owner/repo/blob/main/path/SKILL.md"
+                    />
+                    <ConfigInput
+                      label="Install id (optional)"
+                      value={newId}
+                      onChange={setNewId}
+                      placeholder="uses frontmatter if blank"
+                    />
+                  </div>
                 )}
-                Create
-              </Button>
+              </div>
+              <div className="flex flex-col justify-end gap-2">
+                {createMode !== "starter" && (
+                  <p className="text-[11.5px] leading-relaxed text-foreground/45">
+                    A valid skill needs a SKILL.md. If it has frontmatter with
+                    id/name, the installer uses that unless you set an id here.
+                  </p>
+                )}
+                <Button onClick={createSkill} disabled={busy === "create"}>
+                  {busy === "create" ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Plus className="size-3.5" />
+                  )}
+                  {createMode === "url" ? "Install" : "Create"}
+                </Button>
+              </div>
             </div>
           </div>
         )}
@@ -405,8 +528,39 @@ export function CustomSkillsCard() {
                         {selectedSkill.description}
                       </p>
                     </div>
-                    {selectedSkill.writable && (
-                      <div className="flex shrink-0 items-center gap-2">
+                    <div className="flex shrink-0 flex-wrap items-center gap-2">
+                      {editorContent && selectedSkill.writable && (
+                        <div className="inline-flex h-7 overflow-hidden rounded-lg border border-border bg-background">
+                          <button
+                            type="button"
+                            onClick={() => setEditorMode("preview")}
+                            className={cn(
+                              "inline-flex items-center gap-1 px-2 text-[12px] font-medium transition-colors",
+                              editorMode === "preview"
+                                ? "bg-muted text-foreground"
+                                : "text-foreground/55 hover:bg-muted/60 hover:text-foreground"
+                            )}
+                          >
+                            <Eye className="size-3.5" />
+                            Preview
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditorMode("edit")}
+                            className={cn(
+                              "inline-flex items-center gap-1 border-l border-border px-2 text-[12px] font-medium transition-colors",
+                              editorMode === "edit"
+                                ? "bg-muted text-foreground"
+                                : "text-foreground/55 hover:bg-muted/60 hover:text-foreground"
+                            )}
+                          >
+                            <Edit3 className="size-3.5" />
+                            Edit
+                          </button>
+                        </div>
+                      )}
+                      {selectedSkill.writable && (
+                        <>
                         <Button
                           variant="outline"
                           size="sm"
@@ -433,10 +587,16 @@ export function CustomSkillsCard() {
                           )}
                           Delete
                         </Button>
-                      </div>
-                    )}
+                        </>
+                      )}
+                    </div>
                   </div>
-                  {selectedSkill.writable ? (
+                  {busy === "load" ? (
+                    <div className="flex min-h-[320px] flex-1 items-center justify-center gap-2 px-5 py-10 text-[13px] text-foreground/45">
+                      <Loader2 className="size-4 animate-spin" />
+                      Loading SKILL.md
+                    </div>
+                  ) : selectedSkill.writable && editorMode === "edit" ? (
                     <textarea
                       value={editorContent}
                       onChange={(event) => {
@@ -446,10 +606,11 @@ export function CustomSkillsCard() {
                       spellCheck={false}
                       className="min-h-[320px] flex-1 resize-y rounded-b-xl bg-background p-3 font-mono text-[12px] leading-relaxed text-foreground outline-none focus:ring-2 focus:ring-ring/30"
                     />
+                  ) : editorContent ? (
+                    <SkillMarkdownPreview content={editorContent} />
                   ) : (
                     <div className="flex min-h-[260px] items-center justify-center px-5 py-10 text-center text-[13px] text-foreground/50">
-                      Bundled skills are managed by the app package. Create a
-                      profile or global skill with the same id to override it.
+                      SKILL.md preview is not available for this entry.
                     </div>
                   )}
                 </div>
@@ -525,6 +686,30 @@ function ScopeBadge({ scope }: { scope: SkillScope }) {
       {SCOPE_LABELS[scope]}
     </span>
   )
+}
+
+function SkillMarkdownPreview({ content }: { content: string }) {
+  const preview = markdownPreviewContent(content)
+  return (
+    <div className="min-h-[320px] flex-1 overflow-y-auto rounded-b-xl bg-background px-4 py-3 [scrollbar-gutter:stable]">
+      {preview.trim() ? (
+        <div className="text-[13px] leading-relaxed text-foreground/85">
+          <MarkdownRenderer content={preview} compact />
+        </div>
+      ) : (
+        <div className="flex min-h-[260px] items-center justify-center text-center text-[13px] text-foreground/45">
+          No Markdown body to preview.
+        </div>
+      )}
+    </div>
+  )
+}
+
+function markdownPreviewContent(content: string): string {
+  if (!content.startsWith("---")) return content
+  const end = content.indexOf("\n---", 3)
+  if (end === -1) return content
+  return content.slice(end + 4).replace(/^\s+/, "")
 }
 
 function skillKey(skill: Pick<SkillEntry, "scope" | "id">): string {

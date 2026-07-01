@@ -37,6 +37,7 @@ export function AttachmentPreview({
         ? appPath(`/api/uploads/${encodeURIComponent(attachment.uploaded.id)}`)
         : undefined
     const isLoading = attachment.uploading || attachment.rendering
+    const errorLabel = attachment.error?.includes("no longer available") ? "File missing" : "Upload failed"
 
     if (attachment.uploading) {
         return (
@@ -130,7 +131,7 @@ export function AttachmentPreview({
             )}
             {attachment.error && (
                 <div className="absolute inset-x-1.5 bottom-1.5 rounded-md border border-destructive/30 bg-background/95 px-1.5 py-1 text-[10px] font-medium text-destructive shadow-sm">
-                    Upload failed
+                    {errorLabel}
                 </div>
             )}
         </div>

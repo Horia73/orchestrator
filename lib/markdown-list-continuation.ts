@@ -5,6 +5,9 @@
 const LIST_ITEM_RE =
   /^(\s*)(?:([-*+])|(\d+)([.)])|([A-Za-z])([.)]))([ \t]+)(.*)$/
 const LIST_ITEM_GAP = "\t"
+// Keep top-level lists visually indented in the composer while staying within
+// CommonMark's 0-3 space allowance for top-level list markers.
+const TOP_LEVEL_LIST_INDENT = "  "
 
 export interface MarkdownListContinuation {
   nextValue: string
@@ -33,15 +36,23 @@ export function computeMarkdownListTabSpacing(
   if (spaces === LIST_ITEM_GAP || !/^[ ]+$/.test(spaces)) return null
 
   const marker = bullet ?? (num ? `${num}${numSep}` : `${letter}${letterSep}`)
+  const prefix = indent.length === 0 ? TOP_LEVEL_LIST_INDENT : ""
   const gapStart = lineStart + indent.length + marker.length
   const gapEnd = gapStart + spaces.length
-  const nextValue = value.slice(0, gapStart) + LIST_ITEM_GAP + value.slice(gapEnd)
-  const nextCaret =
-    caret > gapStart
-      ? caret < gapEnd
-        ? gapStart + LIST_ITEM_GAP.length
-        : caret - spaces.length + LIST_ITEM_GAP.length
-      : caret
+  const nextValue =
+    value.slice(0, lineStart) +
+    prefix +
+    value.slice(lineStart, gapStart) +
+    LIST_ITEM_GAP +
+    value.slice(gapEnd)
+  let nextCaret = caret
+  if (caret > lineStart && caret <= gapStart) {
+    nextCaret = caret + prefix.length
+  } else if (caret > gapStart && caret < gapEnd) {
+    nextCaret = gapStart + prefix.length + LIST_ITEM_GAP.length
+  } else if (caret >= gapEnd) {
+    nextCaret = caret + prefix.length - spaces.length + LIST_ITEM_GAP.length
+  }
 
   return { nextValue, nextCaret }
 }
@@ -66,6 +77,8 @@ export function computeMarkdownListContinuation(
   const [, indent, bullet, num, numSep, letter, letterSep, spaces, content] =
     match
   const marker = bullet ?? (num ? `${num}${numSep}` : `${letter}${letterSep}`)
+  const prefix = indent.length === 0 ? TOP_LEVEL_LIST_INDENT : ""
+  const nextIndent = prefix + indent
 
   if (content.trim().length === 0) {
     const markerLength = indent.length + marker.length + spaces.length
@@ -81,10 +94,15 @@ export function computeMarkdownListContinuation(
     : num
       ? `${Number(num) + 1}${numSep}`
       : `${nextLetter(letter)}${letterSep}`
-  const insertion = `\n${indent}${nextMarker}${LIST_ITEM_GAP}`
+  const insertion = `\n${nextIndent}${nextMarker}${LIST_ITEM_GAP}`
 
   return {
-    nextValue: value.slice(0, caret) + insertion + value.slice(caret),
-    nextCaret: caret + insertion.length,
+    nextValue:
+      value.slice(0, lineStart) +
+      prefix +
+      value.slice(lineStart, caret) +
+      insertion +
+      value.slice(caret),
+    nextCaret: caret + prefix.length + insertion.length,
   }
 }

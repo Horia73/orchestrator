@@ -6,11 +6,11 @@ import {
   deleteCustomSkill,
   isWritableSkillScope,
   publicSkill,
-  readCustomSkill,
+  readSkillEntry,
   readSkillFile,
   writeCustomSkillFile,
 } from "@/lib/skills/registry"
-import type { WritableSkillScope } from "@/lib/skills/types"
+import type { RuntimeSkillScope, WritableSkillScope } from "@/lib/skills/types"
 
 const JSON_HEADERS = { "Cache-Control": "no-store" }
 
@@ -19,16 +19,16 @@ export async function GET(
   { params }: { params: Promise<{ scope: string; id: string }> }
 ) {
   return runWithRequestProfile(request, async (current) => {
-    const resolved = await resolveParams(params)
+    const resolved = await resolveReadParams(params)
     if (resolved instanceof NextResponse) return resolved
-    if (!canManageSkillScope(current, resolved.scope)) {
+    if (!canReadSkillScope(current, resolved.scope)) {
       return NextResponse.json(
         { error: "Profile is not allowed to read this skill." },
         { status: 403, headers: JSON_HEADERS }
       )
     }
     try {
-      const skill = readCustomSkill(resolved.scope, resolved.id)
+      const skill = readSkillEntry(resolved.scope, resolved.id)
       const file = readSkillFile(skill, "SKILL.md")
       return NextResponse.json(
         { skill: publicSkill(skill), file },
@@ -51,7 +51,7 @@ export async function PUT(
     const guard = guardSensitiveRequest(request)
     if (guard) return guard
 
-    const resolved = await resolveParams(params)
+    const resolved = await resolveWritableParams(params)
     if (resolved instanceof NextResponse) return resolved
     if (!canManageSkillScope(current, resolved.scope)) {
       return NextResponse.json(
@@ -105,7 +105,7 @@ export async function DELETE(
     const guard = guardSensitiveRequest(request)
     if (guard) return guard
 
-    const resolved = await resolveParams(params)
+    const resolved = await resolveWritableParams(params)
     if (resolved instanceof NextResponse) return resolved
     if (!canManageSkillScope(current, resolved.scope)) {
       return NextResponse.json(
@@ -129,17 +129,42 @@ export async function DELETE(
   })
 }
 
-async function resolveParams(
+async function resolveReadParams(
+  params: Promise<{ scope: string; id: string }>
+): Promise<{ scope: RuntimeSkillScope; id: string } | NextResponse> {
+  const resolved = await params
+  if (!isSkillScope(resolved.scope)) {
+    return NextResponse.json(
+      { error: "Skill scope must be profile, global, or bundled." },
+      { status: 400, headers: JSON_HEADERS }
+    )
+  }
+  return { scope: resolved.scope, id: resolved.id }
+}
+
+async function resolveWritableParams(
   params: Promise<{ scope: string; id: string }>
 ): Promise<{ scope: WritableSkillScope; id: string } | NextResponse> {
   const resolved = await params
   if (!isWritableSkillScope(resolved.scope)) {
     return NextResponse.json(
-      { error: "Skill scope must be profile or global." },
+      { error: "Only profile and global skills are editable." },
       { status: 400, headers: JSON_HEADERS }
     )
   }
   return { scope: resolved.scope, id: resolved.id }
+}
+
+function isSkillScope(value: string): value is RuntimeSkillScope {
+  return value === "profile" || value === "global" || value === "bundled"
+}
+
+function canReadSkillScope(
+  current: CurrentProfile,
+  scope: RuntimeSkillScope
+): boolean {
+  if (scope === "bundled") return true
+  return canManageSkillScope(current, scope)
 }
 
 function canManageSkillScope(
