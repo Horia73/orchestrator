@@ -64,7 +64,9 @@ async function main(): Promise<void> {
     )
     check(
       "audit prompt reads AGENT_NEEDS.md as its primary input",
-      prompt.includes("AGENT_NEEDS.md") && /PRIMARY INPUT/i.test(prompt)
+      prompt.includes("EVERY profile-scoped AGENT_NEEDS.md") &&
+        prompt.includes("profile_id") &&
+        /PRIMARY INPUT/i.test(prompt)
     )
     check(
       "audit prompt is propose-only — forbids implementing / dev activation in this run",
@@ -93,6 +95,8 @@ async function main(): Promise<void> {
 
   // 2. ensureCapabilityAuditTask is idempotent ------------------------------
   const { listScheduledTasks } = await import("@/lib/scheduling/store")
+  const { runWithProfileContext } = await import("@/lib/profiles/context")
+  const { createProfile } = await import("@/lib/profiles/store")
   const countAudit = () =>
     listScheduledTasks().filter(
       (t) =>
@@ -118,6 +122,21 @@ async function main(): Promise<void> {
       created.schedule.kind === "weeklyAt" &&
       created.action.kind === "agent",
     created?.schedule
+  )
+
+  const member = createProfile({ name: "Member Smoke", role: "member" })
+  await runWithProfileContext(
+    { profileId: member.id, role: "member" },
+    () => ensureCapabilityAuditTask()
+  )
+  const memberAudits = runWithProfileContext(
+    { profileId: member.id, role: "member" },
+    countAudit
+  )
+  check(
+    "member profile does not get a capability-audit self-dev task",
+    memberAudits.length === 0,
+    memberAudits
   )
 
   // 3. ResolveAgentNeed is registered everywhere ----------------------------
@@ -190,6 +209,36 @@ async function main(): Promise<void> {
       "resolving an already-resolved key reports not found",
       again.success === false,
       again
+    )
+
+    const memberDedupeKey = "audit-smoke-member-profile"
+    await runWithProfileContext(
+      { profileId: member.id, role: "member" },
+      () => recordAgentNeed({
+        severity: "medium",
+        category: "repo_gap",
+        summary: "Smoke: a member-profile need the admin should resolve",
+        needed: "A test member backlog entry resolved by the admin audit.",
+        dedupeKey: memberDedupeKey,
+      })
+    )
+    const crossProfile = executeResolveAgentNeed({
+      dedupe_key: memberDedupeKey,
+      profile_id: member.id,
+      resolution: "closed by admin capability audit",
+    })
+    check(
+      "admin ResolveAgentNeed can close a member profile entry with profile_id",
+      crossProfile.success === true,
+      crossProfile
+    )
+    const memberNeeds = fs.readFileSync(ensureAgentNeedsFile(member.id), "utf-8")
+    const [, memberResolved = ""] = memberNeeds.split("## Resolved")
+    check(
+      "member entry moved to that member profile's Resolved section",
+      memberResolved.includes(`dedupe_key: ${memberDedupeKey}`) &&
+        memberResolved.includes("closed by admin capability audit"),
+      memberResolved
     )
   }
 

@@ -77,7 +77,15 @@ function effectiveActivated(opts: ExposureOptions): Set<string> {
     const set = getActivatedIntegrations(opts.conversationId)
     for (const id of getDefaultActivatedCapabilities(opts.agentId)) set.add(id)
     for (const id of opts.preactivatedCapabilities ?? []) set.add(id)
+    for (const id of [...set]) {
+        if (!isCapabilityAllowedForActiveProfile(id)) set.delete(id)
+    }
     return set
+}
+
+export function isCapabilityAllowedForActiveProfile(id: string): boolean {
+    if (id === 'profile_admin' || id === 'self_dev') return isAdminProfileId()
+    return true
 }
 
 /**
@@ -294,7 +302,7 @@ export function buildSubsystemsContextBlock(
     if (SUBSYSTEM_MANIFEST.length === 0) return ''
     const activated = effectiveActivated(opts)
     const visibleSubsystems = SUBSYSTEM_MANIFEST.filter(
-        (entry) => entry.id !== 'profile_admin' || isAdminProfileId()
+        (entry) => isCapabilityAllowedForActiveProfile(entry.id)
     )
     if (visibleSubsystems.length === 0) return ''
 

@@ -1,6 +1,8 @@
 # Use Your Own HTTPS Domain
 
-Orchestrator's one-click HTTPS setup is DuckDNS-specific. A purchased domain works too, but today it is a manual reverse-proxy setup: point DNS at the machine that runs Orchestrator, terminate HTTPS there, and proxy traffic to the local Orchestrator ports.
+Orchestrator's one-click HTTPS setup is DuckDNS-specific. A purchased domain works too, but it is still a manual reverse-proxy setup: point DNS at the machine that runs Orchestrator, terminate HTTPS there, and proxy traffic to the local Orchestrator ports.
+
+Settings -> Remote Access -> HTTPS / public address has an "Own domain" mode that validates whether your public HTTPS domain reaches Orchestrator's `/api/ping` endpoint and then gives you the exact env lines to set. It does not buy the domain, edit DNS, install certificates, or write your host nginx config for you.
 
 Use a subdomain such as `orchestrator.example.com`. It is easier to manage than the root domain and avoids conflicts with your main website.
 

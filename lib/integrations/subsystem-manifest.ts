@@ -214,7 +214,7 @@ export const SUBSYSTEM_MANIFEST: readonly SubsystemManifestEntry[] = [
     {
         id: 'self_dev',
         label: 'Orchestrator self-development',
-        capability: 'Protocol for changing Orchestrator itself: self-dev worktree, managed preview, coder handoff, verification, commit/release/deploy gates. Activate only for this app, not external sites/repos.',
+        capability: 'Admin-only protocol for changing Orchestrator itself: self-dev worktree, managed preview, coder handoff, verification, commit/release/deploy gates. Activate only for this app, not external sites/repos.',
         doctrine: SELF_DEVELOPMENT_DOCTRINE,
     },
     {

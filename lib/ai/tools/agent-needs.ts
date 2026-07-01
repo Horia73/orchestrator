@@ -5,6 +5,7 @@ import {
     recordAgentNeed,
     resolveAgentNeed,
 } from '@/lib/agent-needs'
+import { getActiveProfileId, isAdminProfileId, normalizeProfileId } from '@/lib/profiles/context'
 
 export const reportAgentNeedTool: ToolDef = {
     id: 'ReportAgentNeed',
@@ -88,6 +89,7 @@ export function executeReportAgentNeed(
             success: true,
             data: {
                 path: result.path,
+                profile_id: result.profileId,
                 recorded: result.recorded,
                 duplicate: result.duplicate,
                 dedupe_key: result.dedupeKey,
@@ -107,7 +109,7 @@ export const resolveAgentNeedTool: ToolDef = {
     description: [
         'Move an open AGENT_NEEDS.md entry into the Resolved section once its missing capability/bug has shipped or the need is confirmed obsolete.',
         'Identify the entry by its dedupe_key (the `dedupe_key:` line on each structured entry). Records a short resolution note and timestamp.',
-        'Use this to close the loop after a capability-audit proposal is implemented, or when triage confirms a need no longer applies. Do not invent dedupe keys; if an old hand-written entry has no dedupe_key, move it with the Edit tool instead.',
+        'Use this to close the loop after a capability-audit proposal is implemented, or when triage confirms a need no longer applies. Admin may pass profile_id to close a need in another profile backlog. Do not invent dedupe keys; if an old hand-written entry has no dedupe_key, move it with the Edit tool instead.',
     ].join(' '),
     input_schema: {
         type: 'object',
@@ -119,6 +121,10 @@ export const resolveAgentNeedTool: ToolDef = {
             resolution: {
                 type: 'string',
                 description: 'One short line on how it was resolved, e.g. "shipped in <commit/release>" or "obsolete because <reason>".',
+            },
+            profile_id: {
+                type: 'string',
+                description: 'Optional target profile id. Admin-only; omit to resolve the active profile\'s AGENT_NEEDS.md.',
             },
         },
         required: ['dedupe_key', 'resolution'],
@@ -132,15 +138,29 @@ export function executeResolveAgentNeed(
 ): ToolResult {
     const dedupeKey = stringValue(args.dedupe_key)
     const resolution = stringValue(args.resolution)
+    const requestedProfileId = stringValue(args.profile_id)
 
     if (!dedupeKey.trim()) return { success: false, error: 'dedupe_key must be a non-empty string.' }
     if (!resolution.trim()) return { success: false, error: 'resolution must be a non-empty string.' }
 
     try {
+        let profileId: string | undefined
+        if (requestedProfileId.trim()) {
+            profileId = normalizeProfileId(requestedProfileId)
+            const activeProfileId = getActiveProfileId()
+            if (profileId !== activeProfileId && !isAdminProfileId(activeProfileId)) {
+                return {
+                    success: false,
+                    error: 'profile_id can target another AGENT_NEEDS.md only from the admin profile.',
+                }
+            }
+        }
+
         const result = resolveAgentNeed({
             dedupeKey,
             resolution,
             resolvedBy: ctx?.callerAgentId,
+            profileId,
         })
 
         if (!result.found) {
@@ -154,6 +174,7 @@ export function executeResolveAgentNeed(
             success: true,
             data: {
                 path: result.path,
+                profile_id: result.profileId,
                 resolved: result.resolved,
                 dedupe_key: result.dedupeKey,
             },

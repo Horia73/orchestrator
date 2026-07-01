@@ -15,6 +15,7 @@
 // model decides what to resolve, drop, and propose.
 
 import { getConfiguredTimezone } from '@/lib/config'
+import { isAdminProfileId } from '@/lib/profiles/context'
 import type { CreateScheduledTaskInput } from '@/lib/scheduling/schema'
 
 export const CAPABILITY_AUDIT_TASK_TITLE = 'Capability audit'
@@ -27,11 +28,11 @@ const AUDIT_HOUR = 4
 const AUDIT_MINUTE = 0
 
 const CAPABILITY_AUDIT_PROMPT = [
-  'This is the scheduled weekly Capability Audit — background self-development triage, not a user request. No one is waiting. This run ONLY produces a proposal: it must NOT implement anything, must NOT activate self_dev or project_dev, must NOT prepare a worktree, delegate to coder, push, deploy, or change any code.',
+  'This is the scheduled weekly Capability Audit — admin-only background self-development triage, not a user request. No one is waiting. This run ONLY produces a proposal: it must NOT implement anything, must NOT activate self_dev or project_dev, must NOT prepare a worktree, delegate to coder, push, deploy, or change any code.',
   '',
   "Your job: turn the agents' own blocked-needs backlog into a ranked, evidence-backed proposal for the user to approve — with the emphasis on NEW CAPABILITIES / FEATURES the agents found missing, not just bug fixes.",
   '',
-  '1. Read AGENT_NEEDS.md (your workspace file). The `## Open` section is your PRIMARY INPUT and source of truth: each entry is something an agent could not complete because a capability, tool, integration, runtime behavior, doc, or repo behavior was missing or broken.',
+  '1. Read EVERY profile-scoped AGENT_NEEDS.md, not only the admin workspace file. The admin file is `AGENT_NEEDS.md`; member files live at `../profiles/<profileId>/workspace/AGENT_NEEDS.md` relative to the admin workspace. The `## Open` sections across all profiles are your PRIMARY INPUT and source of truth: each entry is something an agent could not complete because a capability, tool, integration, runtime behavior, doc, or repo behavior was missing or broken. Track the source profile_id for each entry; when closing a non-admin entry, call ResolveAgentNeed with that profile_id.',
   '',
   "2. For corroboration ONLY, you may pull supporting signal: search_agent_logs (status='error', range='30d') for recurring failures, and get_agent_log for the tool breakdown of a failing run. Use this to confirm or prioritize an Open need — NEVER to invent items that have no Open entry behind them.",
   '',
@@ -111,16 +112,22 @@ function isDesiredSchedule(schedule: unknown, timezone: string): boolean {
  * touches our own system task.
  */
 export async function ensureCapabilityAuditTask(): Promise<void> {
-  const { listScheduledTasks, createScheduledTask, updateScheduledTask } =
+  const { listScheduledTasks, createScheduledTask, updateScheduledTask, deleteScheduledTask } =
     await import('@/lib/scheduling/store')
 
-  const timezone = resolveCapabilityAuditTimezone()
   const existing = listScheduledTasks().find(
     (t) =>
       t.createdBy === 'system' &&
       t.action.kind === 'agent' &&
       t.title === CAPABILITY_AUDIT_TASK_TITLE
   )
+
+  if (!isAdminProfileId()) {
+    if (existing) deleteScheduledTask(existing.id)
+    return
+  }
+
+  const timezone = resolveCapabilityAuditTimezone()
 
   if (existing) {
     const patch: Parameters<typeof updateScheduledTask>[1] = {}

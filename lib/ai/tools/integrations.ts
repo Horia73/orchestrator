@@ -2,13 +2,13 @@ import type { ToolDef, ToolExecutionContext, ToolResult } from '@/lib/ai/agents/
 import {
     ALL_CAPABILITY_IDS,
     describeActivatedIntegration,
+    isCapabilityAllowedForActiveProfile,
     isSubsystemId,
 } from '@/lib/integrations/exposure'
 import { getIntegrationManifest } from '@/lib/integrations/manifest'
 import { getSubsystemManifest } from '@/lib/integrations/subsystem-manifest'
 import { refreshIntegrationStatusSnapshot } from '@/lib/integrations/status-snapshot'
 import { activateIntegrations, getActivatedIntegrations } from '@/lib/integrations/activation-store'
-import { isAdminProfileId } from '@/lib/profiles/context'
 import { compactToolSchema } from './executors/tool-schema-compact'
 
 /** The gated operational tool ids a capability unlocks (integration or subsystem). */
@@ -157,9 +157,9 @@ export function createActivateIntegrationToolsExecutor(
         if (isSubsystemId(id)) {
             const subsystem = getSubsystemManifest(id)
             if (!subsystem) continue
-            if (id === 'profile_admin' && !isAdminProfileId()) {
+            if (!isCapabilityAllowedForActiveProfile(id)) {
                 skipped.push(id)
-                report.push('Profile administration was NOT activated — it requires the admin profile.')
+                report.push(`${subsystem.label} was NOT activated — it requires the admin profile.`)
                 continue
             }
             activatedNow.push(id)

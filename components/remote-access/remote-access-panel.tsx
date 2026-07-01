@@ -23,13 +23,23 @@ interface TailscaleState {
   dnsName: string | null
   webhookFunnelEnabled: boolean
   funnelUrl: string | null
+  appFunnelEnabled: boolean
+  appFunnelUrl: string | null
   publishedAppFunnels?: Array<{ slug: string; path: string; url: string | null }>
+}
+
+interface RemoteAccessBridge {
+  available: boolean
+  tailscale: TailscaleState | null
+  error: string | null
 }
 
 interface RemoteAccessStatus {
   access: RuntimeAccessInfo
-  bridge: { available: boolean; tailscale: TailscaleState | null; error: string | null }
+  bridge: RemoteAccessBridge
 }
+
+type HttpsSetupMode = "duckdns" | "custom" | "tailscale"
 
 export function isPublicHttps(url: string | null | undefined): boolean {
   if (!url) return false
@@ -256,6 +266,215 @@ function HttpsSetupForm({ onDone }: { onDone: () => Promise<void> | void }) {
   )
 }
 
+function HttpsSetupModePicker({
+  value,
+  onChange,
+}: {
+  value: HttpsSetupMode
+  onChange: (value: HttpsSetupMode) => void
+}) {
+  const options: Array<{ value: HttpsSetupMode; label: string }> = [
+    { value: "duckdns", label: "DuckDNS" },
+    { value: "custom", label: "Own domain" },
+    { value: "tailscale", label: "Tailscale Funnel" },
+  ]
+  return (
+    <div className="inline-flex max-w-full flex-wrap rounded-lg border border-border/60 bg-muted/30 p-1">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          onClick={() => onChange(option.value)}
+          className={cn(
+            "rounded-md px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition hover:text-foreground",
+            value === option.value && "bg-background text-foreground shadow-sm",
+          )}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+interface CustomDomainValidationResult {
+  ok?: boolean
+  origin?: string
+  pingUrl?: string
+  addresses?: string[]
+  env?: {
+    ORCHESTRATOR_PUBLIC_URL?: string
+    BROWSER_AGENT_VNC_WS_PUBLIC_URL?: string
+  }
+  error?: string
+}
+
+function CustomDomainSetup() {
+  const [url, setUrl] = React.useState("")
+  const [busy, setBusy] = React.useState(false)
+  const [result, setResult] = React.useState<CustomDomainValidationResult | null>(null)
+
+  const canValidate = url.trim().length > 0 && !busy
+  const envText = result?.env?.ORCHESTRATOR_PUBLIC_URL
+    ? [
+        `ORCHESTRATOR_PUBLIC_URL=${result.env.ORCHESTRATOR_PUBLIC_URL}`,
+        `BROWSER_AGENT_VNC_WS_PUBLIC_URL=${result.env.BROWSER_AGENT_VNC_WS_PUBLIC_URL ?? ""}`,
+      ].join("\n")
+    : null
+
+  const validate = React.useCallback(async () => {
+    setBusy(true)
+    setResult(null)
+    try {
+      const res = await fetch(appApiPath("/api/remote-access/custom-domain"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: url.trim() }),
+      })
+      const json = (await res.json().catch(() => null)) as CustomDomainValidationResult | null
+      setResult(json ?? { ok: false, error: `Validation failed (${res.status}).` })
+    } catch (e) {
+      setResult({ ok: false, error: e instanceof Error ? e.message : "Validation failed." })
+    } finally {
+      setBusy(false)
+    }
+  }, [url])
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        Use a subdomain such as <span className="font-mono">orchestrator.example.com</span>. Point DNS
+        at this host, terminate HTTPS in nginx or another trusted proxy, and forward Orchestrator to
+        the local app port.
+      </p>
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <Input
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://orchestrator.example.com"
+          className="h-8 text-[13px]"
+        />
+        <Button size="sm" disabled={!canValidate} onClick={() => void validate()}>
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Validate"}
+        </Button>
+      </div>
+      {result?.ok ? (
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2 text-sm text-foreground">
+            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+            <span>Domain reaches Orchestrator.</span>
+            {result.origin ? <CopyLink url={result.origin} /> : null}
+          </div>
+          {envText ? <CopyCommand command={envText} /> : null}
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            Add those values to the host/project env, restart Orchestrator if needed, then press Refresh.
+            Update Google OAuth redirect URIs if those credentials were created for another origin.
+          </p>
+        </div>
+      ) : result?.error ? (
+        <p className="text-xs leading-relaxed text-destructive">{result.error}</p>
+      ) : null}
+      <div className="space-y-1 rounded-lg bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
+        <p className="font-medium text-foreground">Checklist</p>
+        <ol className="ml-4 list-decimal space-y-1">
+          <li>DNS points to the Orchestrator host, or CNAMEs to an existing dynamic DNS name.</li>
+          <li>HTTPS serves the custom domain and proxies <span className="font-mono">/</span> to <span className="font-mono">127.0.0.1:3000</span>.</li>
+          <li>If live browser view is enabled, proxy <span className="font-mono">/vnc/</span> to <span className="font-mono">127.0.0.1:6080</span>.</li>
+          <li>Set <span className="font-mono">ORCHESTRATOR_PUBLIC_URL</span> and, if needed, <span className="font-mono">BROWSER_AGENT_VNC_WS_PUBLIC_URL</span>.</li>
+        </ol>
+        <p>
+          Full nginx and certificate examples live in <span className="font-mono">docs/custom-domain.md</span>.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+function TailscaleAppFunnelSetup({
+  bridge,
+  tailscale,
+  busy,
+  installing,
+  onInstall,
+  onToggle,
+}: {
+  bridge: RemoteAccessBridge
+  tailscale: TailscaleState | null
+  busy: boolean
+  installing: boolean
+  onInstall: () => void
+  onToggle: (enable: boolean) => void
+}) {
+  if (!bridge.available) {
+    return (
+      <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 p-3 text-xs leading-relaxed text-amber-700 dark:text-amber-300">
+        <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <div>
+          <p className="font-medium text-foreground">Tailscale Funnel is managed by the host bridge.</p>
+          <p>{bridge.error || "This install cannot run Tailscale commands from the browser."}</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!tailscale?.installed) {
+    return (
+      <div className="space-y-2">
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          Install Tailscale on the Orchestrator host, then sign in and enable Funnel for this node.
+        </p>
+        <Button size="sm" disabled={installing} onClick={onInstall}>
+          {installing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Install Tailscale"}
+        </Button>
+        <CopyLink url="curl -fsSL https://tailscale.com/install.sh | sh" />
+      </div>
+    )
+  }
+
+  if (!tailscale.loggedIn) {
+    return (
+      <div className="space-y-2">
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          Tailscale is installed but not signed in. Run this on the server, finish browser auth, then Refresh:
+        </p>
+        <CopyLink url="sudo tailscale up" />
+      </div>
+    )
+  }
+
+  if (tailscale.appFunnelEnabled) {
+    return (
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center gap-2 text-sm text-foreground">
+          <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+          <span>Orchestrator UI is public through Tailscale Funnel.</span>
+          {tailscale.appFunnelUrl ? <CopyLink url={tailscale.appFunnelUrl} /> : null}
+        </div>
+        <Button variant="outline" size="sm" disabled={busy} onClick={() => onToggle(false)}>
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Disable UI Funnel"}
+        </Button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        Publish the full Orchestrator UI at your node&apos;s <span className="font-mono">.ts.net</span>{" "}
+        HTTPS URL. This exposes the app to the public internet; keep profile access and secrets locked down.
+      </p>
+      {tailscale.dnsName ? (
+        <p className="text-[11px] text-muted-foreground">
+          Expected URL: <span className="font-mono">https://{tailscale.dnsName}/</span>
+        </p>
+      ) : null}
+      <Button size="sm" disabled={busy} onClick={() => onToggle(true)}>
+        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Enable UI Funnel"}
+      </Button>
+    </div>
+  )
+}
+
 export function RemoteAccessPanel({
   onStatus,
 }: {
@@ -267,6 +486,7 @@ export function RemoteAccessPanel({
   const [busy, setBusy] = React.useState(false)
   const [installing, setInstalling] = React.useState(false)
   const [showReconfig, setShowReconfig] = React.useState(false)
+  const [setupMode, setSetupMode] = React.useState<HttpsSetupMode>("duckdns")
   const [error, setError] = React.useState<string | null>(null)
   const { confirm, dialog } = useConfirm()
 
@@ -322,6 +542,40 @@ export function RemoteAccessPanel({
     [confirm, load],
   )
 
+  const toggleAppFunnel = React.useCallback(
+    async (enable: boolean) => {
+      if (enable) {
+        const ok = await confirm({
+          title: "Expose the full Orchestrator UI?",
+          message:
+            "This publishes the whole app through Tailscale Funnel at a public https://*.ts.net URL. Profile/session controls still apply, but anyone on the internet can reach the UI surface. Continue only if this is intentional.",
+          confirmLabel: "Enable",
+          cancelLabel: "Cancel",
+        })
+        if (!ok) return
+      }
+      setBusy(true)
+      setError(null)
+      try {
+        const res = await fetch(appApiPath("/api/remote-access/app-funnel"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enable }),
+        })
+        const json = await res.json().catch(() => null)
+        if (!res.ok || !json?.ok) {
+          throw new Error(json?.error || json?.output || "Couldn't update the UI Funnel.")
+        }
+        await load()
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Couldn't update the UI Funnel.")
+      } finally {
+        setBusy(false)
+      }
+    },
+    [confirm, load],
+  )
+
   const runInstall = React.useCallback(async () => {
     setInstalling(true)
     setError(null)
@@ -362,6 +616,9 @@ export function RemoteAccessPanel({
     new Set([access.envHostLanIp, ...access.runtimeIPv4].filter(Boolean) as string[]),
   ).map((ip) => `http://${ip}:${access.appPort}`)
   const hasHttps = isPublicHttps(access.publicUrl)
+  const hasAppFunnel = ts?.appFunnelEnabled === true && isPublicHttps(ts.appFunnelUrl)
+  const hasPublicAddress = hasHttps || hasAppFunnel
+  const showSetupOptions = showReconfig || !hasPublicAddress
 
   return (
     <div className="space-y-3">
@@ -382,40 +639,49 @@ export function RemoteAccessPanel({
       </Section>
 
       <Section icon={<Globe className="h-4 w-4" />} title="HTTPS / public address">
-        {hasHttps ? (
-          <div className="space-y-2">
+        <div className="space-y-3">
+          {hasPublicAddress ? (
             <div className="flex flex-wrap items-center gap-2 text-sm text-foreground">
               <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-              <span>HTTPS is set up.</span>
+              <span>{hasHttps ? "HTTPS is set up." : "Tailscale Funnel is serving public HTTPS."}</span>
               {access.publicUrl ? <CopyLink url={access.publicUrl} /> : null}
+              {hasAppFunnel && ts?.appFunnelUrl ? <CopyLink url={ts.appFunnelUrl} /> : null}
             </div>
-            {bridge.available ? (
-              showReconfig ? (
-                <HttpsSetupForm onDone={load} />
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setShowReconfig(true)}
-                  className="text-xs font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                >
-                  Change HTTPS domain (DuckDNS)
-                </button>
-              )
-            ) : null}
-          </div>
-        ) : (
-          <div className="space-y-3">
+          ) : (
             <p className="text-xs leading-relaxed text-amber-600 dark:text-amber-400">
               No public HTTPS URL yet. HTTPS is needed for Google/Gmail sign-in and browser
-              notifications. Set it up with your own domain on DuckDNS:
+              notifications. Choose DuckDNS, your own domain, or Tailscale Funnel.
             </p>
-            {bridge.available ? (
-              <HttpsSetupForm onDone={load} />
-            ) : (
-              <ManualHttpsSetupFallback bridgeError={bridge.error} />
-            )}
-          </div>
-        )}
+          )}
+
+          {showSetupOptions ? (
+            <div className="space-y-3">
+              <HttpsSetupModePicker value={setupMode} onChange={setSetupMode} />
+              {setupMode === "duckdns" ? (
+                bridge.available ? <HttpsSetupForm onDone={load} /> : <ManualHttpsSetupFallback bridgeError={bridge.error} />
+              ) : setupMode === "custom" ? (
+                <CustomDomainSetup />
+              ) : (
+                <TailscaleAppFunnelSetup
+                  bridge={bridge}
+                  tailscale={ts}
+                  busy={busy}
+                  installing={installing}
+                  onInstall={() => void runInstall()}
+                  onToggle={(enable) => void toggleAppFunnel(enable)}
+                />
+              )}
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowReconfig(true)}
+              className="text-xs font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            >
+              Change public access setup
+            </button>
+          )}
+        </div>
       </Section>
 
       <Section icon={<Webhook className="h-4 w-4" />} title="Inbound webhooks">

@@ -47,6 +47,9 @@ async function main() {
     const { MAX_AGENT_DEPTH } = await import('@/lib/ai/agents/types')
     const { getToolsForAgent, getToolsForBuiltins } = await import('@/lib/ai/tools/registry')
     const { filterIntegrationToolExposure } = await import('@/lib/integrations/exposure')
+    const { executeActivateIntegrationTools } = await import('@/lib/ai/tools/integrations')
+    const { runWithProfileContext } = await import('@/lib/profiles/context')
+    const { createProfile } = await import('@/lib/profiles/store')
 
     const ctx = (over: Record<string, unknown> = {}) => ({
         agentId: orchestrator.id,
@@ -116,6 +119,55 @@ async function main() {
         !activatedProjectDev.includes('application/vnd.ant.dev-preview') &&
         !activatedProjectDev.includes('live_preview_policy') &&
         !activatedProjectDev.includes('<self_update_policy>'))
+
+    const subsystemBlock = (value: string) =>
+        value.match(/<subsystems>[\s\S]*?<\/subsystems>/)?.[0] ?? ''
+    const member = createProfile({ name: 'Member Smoke', role: 'member' })
+    const memberPrompt = runWithProfileContext(
+        { profileId: member.id, role: 'member' },
+        () => orchestrator.buildPrompt!(ctx({ availableTools: exposed }) as never)
+    )
+    check('member <subsystems> menu hides self_dev',
+        !subsystemBlock(memberPrompt).includes('(id: self_dev)'))
+    check('member <subsystems> menu still lists project_dev',
+        subsystemBlock(memberPrompt).includes('(id: project_dev)'))
+    const memberActivatedSelfDev = runWithProfileContext(
+        { profileId: member.id, role: 'member' },
+        () => orchestrator.buildPrompt!(ctx({
+            availableTools: exposed,
+            preactivatedCapabilities: ['self_dev'],
+        }) as never)
+    )
+    check('member preactivation cannot load self_dev doctrine',
+        !memberActivatedSelfDev.includes('<project_workspace_policy>') &&
+        !memberActivatedSelfDev.includes('<self_update_policy>'))
+    const memberActivatedProjectDev = runWithProfileContext(
+        { profileId: member.id, role: 'member' },
+        () => orchestrator.buildPrompt!(ctx({
+            availableTools: exposed,
+            preactivatedCapabilities: ['project_dev'],
+        }) as never)
+    )
+    check('member preactivation can load project_dev doctrine',
+        memberActivatedProjectDev.includes('<project_development_policy>') &&
+        memberActivatedProjectDev.includes('project-run:prepare'))
+    const memberSelfDevActivation = await runWithProfileContext(
+        { profileId: member.id, role: 'member' },
+        () => executeActivateIntegrationTools(
+            { integrations: ['self_dev'] },
+            {
+                callerAgentId: 'orchestrator',
+                depth: 0,
+                conversationId: `member-self-dev-${randomUUID()}`,
+                parentRequestId: 'smoke',
+            }
+        )
+    )
+    check('member ActivateIntegrationTools("self_dev") is skipped',
+        memberSelfDevActivation.success === true &&
+        Array.isArray((memberSelfDevActivation.data as { activated?: unknown[] })?.activated) &&
+        (memberSelfDevActivation.data as { activated: unknown[] }).activated.length === 0 &&
+        String((memberSelfDevActivation.data as { message?: unknown })?.message ?? '').includes('admin profile'))
 
     fs.rmSync(stateDir, { recursive: true, force: true })
 

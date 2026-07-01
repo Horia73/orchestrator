@@ -27,7 +27,13 @@ export function RemoteAccessStep() {
       }
       wide
     >
-      <RemoteAccessPanel onStatus={(s) => setHasHttps(isPublicHttps(s.access.publicUrl))} />
+      <RemoteAccessPanel
+        onStatus={(s) =>
+          setHasHttps(
+            isPublicHttps(s.access.publicUrl) || isPublicHttps(s.bridge.tailscale?.appFunnelUrl),
+          )
+        }
+      />
     </OnboardingStepShell>
   )
 }

@@ -7,6 +7,8 @@ export interface TailscaleState {
   dnsName: string | null
   webhookFunnelEnabled: boolean
   funnelUrl: string | null
+  appFunnelEnabled: boolean
+  appFunnelUrl: string | null
   publishedAppFunnels: Array<{ slug: string; path: string; url: string | null }>
 }
 
@@ -58,6 +60,8 @@ function tailscaleFromPayload(payload: unknown): TailscaleState | null {
     dnsName: typeof r.dnsName === 'string' ? r.dnsName : null,
     webhookFunnelEnabled: r.webhookFunnelEnabled === true,
     funnelUrl: typeof r.funnelUrl === 'string' ? r.funnelUrl : null,
+    appFunnelEnabled: r.appFunnelEnabled === true,
+    appFunnelUrl: typeof r.appFunnelUrl === 'string' ? r.appFunnelUrl : null,
     publishedAppFunnels: Array.isArray(r.publishedAppFunnels)
       ? r.publishedAppFunnels.flatMap((item) => {
           if (!item || typeof item !== 'object') return []
@@ -91,6 +95,20 @@ export interface SetFunnelResult {
 
 export async function setWebhookFunnel(enable: boolean): Promise<SetFunnelResult> {
   const result = await callBridge('remote-access/funnel', { method: 'POST', body: { enable } })
+  if (!result) {
+    return { ok: false, tailscale: null, error: NO_BRIDGE.error }
+  }
+  const json = (result.json ?? {}) as Record<string, unknown>
+  return {
+    ok: result.ok && json.ok === true,
+    tailscale: tailscaleFromPayload(json),
+    error: result.ok ? null : (typeof json.error === 'string' ? json.error : `Bridge returned ${result.status}.`),
+    output: typeof json.output === 'string' ? json.output : undefined,
+  }
+}
+
+export async function setAppFunnel(enable: boolean): Promise<SetFunnelResult> {
+  const result = await callBridge('remote-access/app-funnel', { method: 'POST', body: { enable } })
   if (!result) {
     return { ok: false, tailscale: null, error: NO_BRIDGE.error }
   }

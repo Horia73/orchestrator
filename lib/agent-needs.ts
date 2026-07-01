@@ -2,7 +2,8 @@ import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
 
-import { activeRuntimePaths } from '@/lib/runtime-paths'
+import { runtimePathsForProfile } from '@/lib/runtime-paths'
+import { getActiveProfileId, isAdminProfileId } from '@/lib/profiles/context'
 
 export const AGENT_NEEDS_RELATIVE_PATH = 'AGENT_NEEDS.md'
 
@@ -56,6 +57,7 @@ export interface AgentNeedRecordResult {
     recorded: boolean
     duplicate: boolean
     path: string
+    profileId: string
     dedupeKey: string
 }
 
@@ -63,12 +65,14 @@ export interface AgentNeedResolveInput {
     dedupeKey: string
     resolution: string
     resolvedBy?: string
+    profileId?: string
 }
 
 export interface AgentNeedResolveResult {
     resolved: boolean
     found: boolean
     path: string
+    profileId: string
     dedupeKey: string
 }
 
@@ -77,13 +81,15 @@ const MAX_SUMMARY_CHARS = 180
 
 export function recordAgentNeed(input: AgentNeedInput): AgentNeedRecordResult {
     const normalized = normalizeAgentNeed(input)
-    const filePath = ensureAgentNeedsFile()
+    const profileId = getActiveProfileId()
+    const filePath = ensureAgentNeedsFile(profileId)
     const content = fs.readFileSync(/* turbopackIgnore: true */ filePath, 'utf-8')
     if (content.includes(`dedupe_key: ${normalized.dedupeKey}`)) {
         return {
             recorded: false,
             duplicate: true,
-            path: AGENT_NEEDS_RELATIVE_PATH,
+            path: agentNeedsDisplayPath(profileId),
+            profileId,
             dedupeKey: normalized.dedupeKey,
         }
     }
@@ -94,7 +100,8 @@ export function recordAgentNeed(input: AgentNeedInput): AgentNeedRecordResult {
     return {
         recorded: true,
         duplicate: false,
-        path: AGENT_NEEDS_RELATIVE_PATH,
+        path: agentNeedsDisplayPath(profileId),
+        profileId,
         dedupeKey: normalized.dedupeKey,
     }
 }
@@ -105,29 +112,53 @@ export function recordAgentNeed(input: AgentNeedInput): AgentNeedRecordResult {
  *  confirmed obsolete. Returns found=false when no open entry carries the key
  *  (e.g. an old hand-written entry with no dedupe_key — edit those directly). */
 export function resolveAgentNeed(input: AgentNeedResolveInput): AgentNeedResolveResult {
+    const profileId = runtimePathsForProfile(input.profileId ?? getActiveProfileId()).profileId
     const dedupeKey = cleanDedupeKey(input.dedupeKey)
     if (!dedupeKey) throw new Error('dedupeKey must be a non-empty string.')
     const resolution = cleanField(input.resolution ?? '', MAX_FIELD_CHARS)
     if (!resolution) throw new Error('resolution must be a non-empty string.')
     const resolvedBy = cleanField(input.resolvedBy ?? '', 80)
 
-    const filePath = ensureAgentNeedsFile()
+    const filePath = ensureAgentNeedsFile(profileId)
     const content = fs.readFileSync(/* turbopackIgnore: true */ filePath, 'utf-8')
     const next = moveEntryToResolved(content, dedupeKey, resolution, resolvedBy, new Date().toISOString())
     if (!next) {
-        return { resolved: false, found: false, path: AGENT_NEEDS_RELATIVE_PATH, dedupeKey }
+        return {
+            resolved: false,
+            found: false,
+            path: agentNeedsDisplayPath(profileId),
+            profileId,
+            dedupeKey,
+        }
     }
     fs.writeFileSync(/* turbopackIgnore: true */ filePath, next, 'utf-8')
-    return { resolved: true, found: true, path: AGENT_NEEDS_RELATIVE_PATH, dedupeKey }
+    return {
+        resolved: true,
+        found: true,
+        path: agentNeedsDisplayPath(profileId),
+        profileId,
+        dedupeKey,
+    }
 }
 
-export function ensureAgentNeedsFile(): string {
-    const filePath = path.join(/* turbopackIgnore: true */ activeRuntimePaths().agentWorkspaceDir, AGENT_NEEDS_RELATIVE_PATH)
+export function ensureAgentNeedsFile(profileId = getActiveProfileId()): string {
+    const resolvedProfileId = runtimePathsForProfile(profileId).profileId
+    const filePath = agentNeedsFilePath(resolvedProfileId)
     fs.mkdirSync(/* turbopackIgnore: true */ path.dirname(filePath), { recursive: true })
     if (!fs.existsSync(/* turbopackIgnore: true */ filePath)) {
         fs.writeFileSync(/* turbopackIgnore: true */ filePath, AGENT_NEEDS_DEFAULT_CONTENT, 'utf-8')
     }
     return filePath
+}
+
+export function agentNeedsFilePath(profileId = getActiveProfileId()): string {
+    return path.join(/* turbopackIgnore: true */ runtimePathsForProfile(profileId).agentWorkspaceDir, AGENT_NEEDS_RELATIVE_PATH)
+}
+
+function agentNeedsDisplayPath(profileId: string): string {
+    return isAdminProfileId(profileId)
+        ? AGENT_NEEDS_RELATIVE_PATH
+        : `profiles/${profileId}/${AGENT_NEEDS_RELATIVE_PATH}`
 }
 
 export function redactLikelySecrets(value: string): string {

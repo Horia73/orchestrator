@@ -859,6 +859,8 @@ def detect_remote_access() -> dict:
         "dnsName": None,
         "webhookFunnelEnabled": False,
         "funnelUrl": None,
+        "appFunnelEnabled": False,
+        "appFunnelUrl": None,
         "publishedAppFunnels": [],
     }
     status_raw = capture_optional(["tailscale", "status", "--json"])
@@ -883,6 +885,15 @@ def detect_remote_access() -> dict:
         ts["webhookFunnelEnabled"] = True
         if ts["dnsName"]:
             ts["funnelUrl"] = f"https://{ts['dnsName']}/api/webhooks"
+    root_proxy_re = re.compile(
+        r"(?m)(?:^|\s)(?:\|--\s*)?/\s+(?:proxy\s+)?https?://127[.]0[.]0[.]1:"
+        + re.escape(str(APP_PORT))
+        + r"(?:[/\s]|$)"
+    )
+    if root_proxy_re.search(serve_blob):
+        ts["appFunnelEnabled"] = True
+        if ts["dnsName"]:
+            ts["appFunnelUrl"] = f"https://{ts['dnsName']}/"
     published_slugs = sorted(set(re.findall(r"/published-apps/([a-z0-9][a-z0-9-]{0,79})(?=[/\s]|$)", serve_blob)))
     if ts["dnsName"]:
         ts["publishedAppFunnels"] = [
@@ -921,6 +932,38 @@ def set_webhook_funnel(enable: bool) -> dict:
         "exitCode": code,
         "output": (out or "").strip()[-1500:],
         "tailscale": detected.get("tailscale"),
+    }
+
+
+def set_app_funnel(enable: bool) -> dict:
+    """Toggle a public Tailscale Funnel for the full Orchestrator UI.
+
+    This intentionally differs from the scoped webhook/published-app funnels:
+    the root mount exposes the whole app on the public internet, protected by
+    Orchestrator's own profile/session controls.
+    """
+    target = f"http://127.0.0.1:{APP_PORT}"
+    if enable:
+        code, out = run_capture(
+            ["tailscale", "funnel", "--bg", target],
+            timeout=45,
+        )
+    else:
+        code, out = run_capture(
+            ["tailscale", "funnel", "--set-path", "/", "off"],
+            timeout=45,
+        )
+    detected = detect_remote_access()
+    ts = detected.get("tailscale") or {}
+    app_url = ts.get("appFunnelUrl")
+    if enable and not app_url and ts.get("dnsName"):
+        app_url = f"https://{ts['dnsName']}/"
+    return {
+        "ok": code == 0 and (not enable or bool(app_url)),
+        "exitCode": code,
+        "output": (out or "").strip()[-1500:],
+        "funnelUrl": app_url,
+        "tailscale": ts,
     }
 
 
@@ -1196,6 +1239,7 @@ class Handler(BaseHTTPRequestHandler):
             "/restart",
             "/rollback",
             "/remote-access/funnel",
+            "/remote-access/app-funnel",
             "/remote-access/published-app-funnel",
             "/remote-access/install-tailscale",
             "/remote-access/https",
@@ -1217,6 +1261,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(400, {"error": "Invalid JSON payload."})
                 return
             result = set_webhook_funnel(bool(body.get("enable")))
+            self.send_json(200 if result.get("ok") else 502, result)
+            return
+
+        if path == "/remote-access/app-funnel":
+            try:
+                length = min(int(self.headers.get("Content-Length", "0") or "0"), 65536)
+                raw = self.rfile.read(length) if length else b"{}"
+                body = json.loads(raw.decode("utf-8") or "{}")
+            except Exception:
+                self.send_json(400, {"error": "Invalid JSON payload."})
+                return
+            result = set_app_funnel(bool(body.get("enable")))
             self.send_json(200 if result.get("ok") else 502, result)
             return
 
