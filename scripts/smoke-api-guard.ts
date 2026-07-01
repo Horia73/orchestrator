@@ -7,7 +7,7 @@ process.chdir(tmpRoot)
 
 async function main(): Promise<void> {
     const { guardSensitiveRequest } = await import('@/lib/api/request-guard')
-    const { isProfileExemptPath, shouldGuardApiRequest } = await import('../proxy')
+    const { isProfileExemptPath, shouldGuardApiRequest, profileGateRespondsWithJson } = await import('../proxy')
 
     let failures = 0
     function check(label: string, cond: unknown, detail?: unknown) {
@@ -46,6 +46,18 @@ async function main(): Promise<void> {
     check(
         'published apps reach their route before profile gating',
         isProfileExemptPath('/published-apps/smoke-static/assets/app.js') === true,
+    )
+    check(
+        'unauthenticated direct file download answers with JSON, not an HTML redirect',
+        profileGateRespondsWithJson('/files/cu-77235-detail/site_plan.pdf') === true,
+    )
+    check(
+        'unauthenticated API request answers with JSON',
+        profileGateRespondsWithJson('/api/config') === true,
+    )
+    check(
+        'unauthenticated app page still falls through to the profile picker',
+        profileGateRespondsWithJson('/settings') === false,
     )
 
     const publicApiRequest = new Request('https://orchestrator.example.com/api/config', {

@@ -79,7 +79,13 @@ function maybeGateProfileRequest(request: NextRequest): NextResponse | null {
   if (isPublicWebhookIngress(pathname, request.method)) return null
   if (request.cookies.get(PROFILE_SESSION_COOKIE)?.value) return null
 
-  if (pathname.startsWith("/api/")) {
+  // A file download must only ever resolve to file bytes or an honest error —
+  // never HTML. Redirecting an unauthenticated /files/* (or /api/*) request to
+  // the /profiles picker made the browser save that HTML page under the
+  // requested name (e.g. site_plan.pdf), which every PDF reader then reports as
+  // a damaged/corrupt file. Answer those with a JSON 401 instead; only real
+  // page navigations fall through to the profile picker.
+  if (profileGateRespondsWithJson(pathname)) {
     return NextResponse.json(
       { error: "Profile required", code: "profile_required" },
       { status: 401, headers: { "Cache-Control": "no-store" } }
@@ -90,6 +96,15 @@ function maybeGateProfileRequest(request: NextRequest): NextResponse | null {
   url.pathname = "/profiles"
   url.searchParams.set("next", `${pathname}${request.nextUrl.search}`)
   return NextResponse.redirect(url)
+}
+
+// Unauthenticated requests to these paths get a JSON 401 rather than an HTML
+// redirect to the profile picker. Direct workspace file downloads (/files/*)
+// belong here alongside the API: a browser that saves the /profiles HTML under
+// the requested filename produces a file that PDF/Office readers report as
+// damaged, so a file URL must only ever yield file bytes or an honest error.
+export function profileGateRespondsWithJson(pathname: string): boolean {
+  return pathname.startsWith("/api/") || pathname.startsWith("/files/")
 }
 
 export function isProfileExemptPath(pathname: string): boolean {
