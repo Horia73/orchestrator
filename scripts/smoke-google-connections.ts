@@ -18,10 +18,13 @@ try {
   const { runWithProfileContext } = await import("@/lib/profiles/context")
   const { runtimePathsForProfile } = await import("@/lib/runtime-paths")
   const {
+    grantIntegrationConnection,
     getPreferredIntegrationConnectionId,
     listIntegrationConnections,
+    listAccessibleIntegrationConnections,
     setPreferredIntegrationConnection,
   } = await import("@/lib/integrations/connection-store")
+  const { createProfile } = await import("@/lib/profiles/store")
   const {
     resolveGoogleAccountToken,
     saveGoogleAccountTokenForActiveProfile,
@@ -74,6 +77,29 @@ try {
       legacyTokenPath,
     })
     check("preference switch changes selected Gmail token", selectedAlpha.token?.accountEmail === "alpha@example.com", selectedAlpha)
+
+    const member = createProfile({ name: "Member" }, ADMIN_PROFILE_ID)
+    let grantError = ""
+    try {
+      grantIntegrationConnection({
+        connectionId: migrated.connection?.id ?? "",
+        profileId: member.id,
+        access: "read",
+        actorProfileId: ADMIN_PROFILE_ID,
+      })
+    } catch (error) {
+      grantError = error instanceof Error ? error.message : String(error)
+    }
+    check(
+      "Gmail connections cannot be granted across profiles",
+      grantError.includes("cannot be shared across profiles"),
+      grantError
+    )
+    check(
+      "member does not see admin Gmail account as accessible",
+      listAccessibleIntegrationConnections(member.id, "gmail").length === 0,
+      listAccessibleIntegrationConnections(member.id, "gmail")
+    )
   })
 } finally {
   fs.rmSync(stateDir, { recursive: true, force: true })

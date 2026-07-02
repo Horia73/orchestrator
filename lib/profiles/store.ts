@@ -13,6 +13,8 @@ import { ADMIN_PROFILE_ID, PROFILE_SESSION_MAX_AGE_SECONDS } from "./constants"
 import {
   adminPermissions,
   normalizeProfilePermissions,
+  type IntegrationAccess,
+  type IntegrationPermissionId,
   type ProfileAuditEvent,
   type ProfilePermissions,
   type ProfileRecord,
@@ -115,6 +117,7 @@ export function getControlDb(): Database.Database {
   ensureDefaultAdminProfile(db)
   migrateLegacyMemberProfileDefaults(db)
   migrateMemberBasicSettingsAccess(db)
+  migrateMemberPersonalIntegrationSelfService(db)
   restoreMemberApiKeySharingAfterHaDecouple(db)
   return db
 }
@@ -762,6 +765,83 @@ function migrateMemberBasicSettingsAccess(database: Database.Database): void {
     permissions.surfaces.settings = true
     update.run(JSON.stringify(permissions), Date.now(), row.id)
   }
+}
+
+const PERSONAL_SELF_SERVICE_INTEGRATIONS: IntegrationPermissionId[] = [
+  "gmail",
+  "google_calendar",
+  "google_drive",
+  "whatsapp",
+  "home_assistant",
+  "maps",
+]
+
+function migrateMemberPersonalIntegrationSelfService(
+  database: Database.Database
+): void {
+  const MARKER = "member_personal_integration_self_service_v1"
+  const already = database
+    .prepare(`SELECT 1 FROM control_meta WHERE key = ?`)
+    .get(MARKER)
+  if (already) return
+
+  const rows = database
+    .prepare(`SELECT * FROM profiles WHERE role = 'member'`)
+    .all() as ProfileRow[]
+  const update = database.prepare(
+    `UPDATE profiles SET permissions = ?, updatedAt = ? WHERE id = ?`
+  )
+  const now = Date.now()
+  for (const row of rows) {
+    let raw: Record<string, unknown>
+    try {
+      const parsed = row.permissions ? JSON.parse(row.permissions) : null
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        continue
+      }
+      raw = parsed as Record<string, unknown>
+    } catch {
+      continue
+    }
+    if (!isPreSelfServiceIntegrationDefaultShape(raw)) continue
+
+    const permissions = normalizeProfilePermissions(raw, "member")
+    for (const integration of PERSONAL_SELF_SERVICE_INTEGRATIONS) {
+      permissions.integrations[integration] = "setup"
+    }
+    update.run(JSON.stringify(permissions), now, row.id)
+  }
+
+  database
+    .prepare(
+      `INSERT OR IGNORE INTO control_meta (key, value, updatedAt) VALUES (?, ?, ?)`
+    )
+    .run(MARKER, "applied", now)
+}
+
+function isPreSelfServiceIntegrationDefaultShape(
+  raw: Record<string, unknown>
+): boolean {
+  const integrations =
+    raw.integrations &&
+    typeof raw.integrations === "object" &&
+    !Array.isArray(raw.integrations)
+      ? (raw.integrations as Record<string, unknown>)
+      : {}
+
+  const expected: Partial<Record<IntegrationPermissionId, IntegrationAccess>> = {
+    gmail: "none",
+    google_calendar: "none",
+    google_drive: "none",
+    whatsapp: "none",
+    home_assistant: "none",
+    maps: "read",
+    weather: "read",
+  }
+
+  return Object.entries(expected).every(
+    ([integration, access]) => integrations[integration] === access
+  )
 }
 
 function profileFromRow(row: ProfileRow): ProfileRecord {

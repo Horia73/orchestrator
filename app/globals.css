@@ -205,23 +205,6 @@
 }
 
 @layer base {
-  :root {
-    --orch-viewport-height: 100vh;
-    --orch-small-viewport-height: 100vh;
-  }
-
-  @supports (height: 100dvh) {
-    :root {
-      --orch-viewport-height: 100dvh;
-    }
-  }
-
-  @supports (height: 100svh) {
-    :root {
-      --orch-small-viewport-height: 100svh;
-    }
-  }
-
   * {
     @apply border-border outline-ring/50;
   }
@@ -235,12 +218,6 @@
   html {
     @apply font-sans;
     scrollbar-gutter: stable;
-    background: var(--background);
-  }
-
-  html,
-  body {
-    min-height: var(--orch-viewport-height);
   }
 }
 
@@ -292,23 +269,31 @@ button:not(:disabled),
 }
 
 @layer utilities {
-  /* iOS Safari can report support for dvh/svh while standalone web apps still
-     reserve the old browser toolbar height. These utilities route shell sizing
-     through a JS-populated value that falls back to native viewport units. */
-  .h-dvh {
-    height: var(--orch-viewport-height);
+  /* Older iOS WebKit does not understand dynamic viewport units. Keep the app
+     shell full-height there instead of letting h-dvh/h-svh collapse to content
+     height and expose the document background at the bottom. */
+  @supports not (height: 100dvh) {
+    .h-dvh {
+      height: 100vh;
+      height: -webkit-fill-available;
+    }
+
+    .min-h-dvh {
+      min-height: 100vh;
+      min-height: -webkit-fill-available;
+    }
   }
 
-  .min-h-dvh {
-    min-height: var(--orch-viewport-height);
-  }
+  @supports not (height: 100svh) {
+    .h-svh {
+      height: 100vh;
+      height: -webkit-fill-available;
+    }
 
-  .h-svh {
-    height: var(--orch-small-viewport-height);
-  }
-
-  .min-h-svh {
-    min-height: var(--orch-small-viewport-height);
+    .min-h-svh {
+      min-height: 100vh;
+      min-height: -webkit-fill-available;
+    }
   }
 
   .thought-title-text {
@@ -748,21 +733,26 @@ html[data-orch-home-page="true"] body {
   html[data-orch-viewport-lock="true"] body {
     position: fixed;
     inset: 0;
-    height: var(--orch-viewport-height);
-    min-height: var(--orch-viewport-height);
+    height: 100vh;
+    height: -webkit-fill-available;
+    height: 100dvh;
   }
 
   html[data-orch-viewport-lock="true"] [data-slot="sidebar-wrapper"] {
-    height: var(--orch-viewport-height);
+    height: 100vh;
+    height: -webkit-fill-available;
+    height: 100dvh;
     min-height: 0;
     overflow: hidden;
   }
 
-  html[data-orch-viewport-lock="true"] [data-slot="sidebar-inset"],
-  html[data-orch-viewport-lock="true"] [data-slot="sheet-overlay"],
-  html[data-orch-viewport-lock="true"] [data-slot="sheet-content"][data-mobile="true"],
-  html[data-orch-viewport-lock="true"] [data-sidebar="sidebar"][data-mobile="true"] {
-    height: var(--orch-viewport-height);
+  html[data-orch-legacy-ios-webapp="true"][data-orch-viewport-lock="true"] body,
+  html[data-orch-legacy-ios-webapp="true"][data-orch-viewport-lock="true"] [data-slot="sidebar-wrapper"],
+  html[data-orch-legacy-ios-webapp="true"][data-orch-viewport-lock="true"] [data-slot="sidebar-inset"],
+  html[data-orch-legacy-ios-webapp="true"][data-orch-viewport-lock="true"] [data-slot="sheet-overlay"],
+  html[data-orch-legacy-ios-webapp="true"][data-orch-viewport-lock="true"] [data-slot="sheet-content"][data-mobile="true"],
+  html[data-orch-legacy-ios-webapp="true"][data-orch-viewport-lock="true"] [data-sidebar="sidebar"][data-mobile="true"] {
+    height: var(--orch-legacy-ios-webapp-height);
     min-height: 0;
   }
 }

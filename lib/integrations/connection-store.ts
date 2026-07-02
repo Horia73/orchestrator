@@ -64,6 +64,9 @@ const ACCESS_RANK: Record<GrantableIntegrationAccess, number> = {
   write: 2,
   setup: 3,
 }
+const SHAREABLE_CONNECTION_PROVIDERS = new Set<IntegrationConnectionProvider>([
+  "home_assistant",
+])
 
 let schemaReady = false
 
@@ -312,6 +315,7 @@ export function listAccessibleIntegrationConnections(
     access: "setup",
     source: "owned",
   }))
+  if (!SHAREABLE_CONNECTION_PROVIDERS.has(provider)) return owned
 
   const grantRows = getControlDb()
     .prepare(
@@ -426,6 +430,11 @@ export function grantIntegrationConnection(input: {
   ensureIntegrationConnectionSchema()
   const connection = getIntegrationConnection(input.connectionId)
   if (!connection) throw new Error("Connection not found.")
+  if (!SHAREABLE_CONNECTION_PROVIDERS.has(connection.provider)) {
+    throw new Error(
+      `${providerDisplayName(connection.provider)} connections cannot be shared across profiles. Connect that account under the target profile instead.`
+    )
+  }
   const profileId = normalizeProfileId(input.profileId)
   const target = getProfile(profileId)
   if (!target) throw new Error(`Profile not found: ${profileId}`)

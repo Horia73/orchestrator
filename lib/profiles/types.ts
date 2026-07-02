@@ -155,12 +155,12 @@ const MEMBER_INTEGRATION_DEFAULTS: Record<
   IntegrationPermissionId,
   IntegrationAccess
 > = {
-  gmail: "none",
-  google_calendar: "none",
-  google_drive: "none",
-  whatsapp: "none",
-  home_assistant: "none",
-  maps: "read",
+  gmail: "setup",
+  google_calendar: "setup",
+  google_drive: "setup",
+  whatsapp: "setup",
+  home_assistant: "setup",
+  maps: "setup",
   weather: "read",
 }
 

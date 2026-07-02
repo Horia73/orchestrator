@@ -12,7 +12,7 @@ import { PreviewBasePathScript } from "@/components/preview-base-path-script"
 import { ProfileSessionGuard } from "@/components/profile-session-guard"
 import { ActiveWorkoutFloatingButton } from "@/components/workout/active-workout-floating-button"
 import { TransientScrollbarController } from "@/components/transient-scrollbar-controller"
-import { ViewportHeightScript } from "@/components/viewport-height-script"
+import { LegacyIosViewportScript } from "@/components/legacy-ios-viewport-script"
 
 const fontSans = Geist({
   subsets: ["latin"],
@@ -146,7 +146,7 @@ export default async function RootLayout({
       )}
     >
       <body>
-        <ViewportHeightScript />
+        <LegacyIosViewportScript />
         <PreviewBasePathScript />
         <ProfileSessionGuard />
         <TransientScrollbarController />

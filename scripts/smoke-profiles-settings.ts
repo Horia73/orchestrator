@@ -44,6 +44,21 @@ const defaultPermissions = defaultMemberPermissions()
 check("member Settings surface defaults on", defaultPermissions.surfaces.settings === true)
 check("member model self-service defaults off", defaultPermissions.tools.models === false)
 check("member settings files default off", defaultPermissions.tools.settings_files === false)
+for (const integration of [
+  "gmail",
+  "google_calendar",
+  "google_drive",
+  "whatsapp",
+  "home_assistant",
+  "maps",
+] as const) {
+  check(
+    `member ${integration} integration setup defaults on`,
+    defaultPermissions.integrations[integration] === "setup",
+    defaultPermissions.integrations[integration]
+  )
+}
+check("member weather integration read default stays on", defaultPermissions.integrations.weather === "read")
 
 const normalMember = createProfile({
   name: "Normal Member",

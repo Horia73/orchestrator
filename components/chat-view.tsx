@@ -3152,20 +3152,12 @@ export function ChatView() {
             ref={inputContainerRef}
             data-chat-input-container="true"
             className={cn(
-              "pointer-events-none absolute bottom-0 left-0 z-10 bg-background px-4",
+              "pointer-events-none absolute bottom-0 left-0 right-0 z-10 bg-background px-4 md:right-[14px]",
               keyboardInset > 0
                 ? "pb-0.5"
                 : "pb-[calc(0.5rem+env(safe-area-inset-bottom))] md:pb-3"
             )}
             style={{
-              // Inset the bottom input overlay from the right edge on every
-              // viewport so its opaque bg never paints over the chat scrollbar.
-              // Previously mobile used 0 (full-bleed), which buried the overlay
-              // scrollbar behind the input block once scrolled to the bottom.
-              // The cleared strip is empty scroll-padding over a background-
-              // colored fill, so the gap reads as bg-on-bg (invisible) while the
-              // scrollbar shows through it.
-              right: 14,
               transform:
                 keyboardInset > 0
                   ? `translate3d(0, -${keyboardInset}px, 0)`
