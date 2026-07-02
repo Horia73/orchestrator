@@ -503,7 +503,7 @@ function ByModelTable({ rows }: { rows: UsageByModel[] }) {
             <div className="border-b border-border/70 bg-muted/30 px-4 py-2.5 text-[14px] font-semibold text-foreground">
                 By model
             </div>
-            <div className="max-w-full overflow-x-auto">
+            <div className="max-w-full overflow-x-auto max-md:[mask-image:linear-gradient(to_right,black_calc(100%-1.5rem),transparent)]">
                 <table className="min-w-[760px] w-full text-[13px] md:min-w-0">
                     <thead>
                         <tr className="border-b border-border/50 text-left text-[11px] font-medium uppercase tracking-wider text-foreground/55">
@@ -564,7 +564,7 @@ function ByAgentTable({ rows }: { rows: UsageByAgent[] }) {
             {rows.length === 0 ? (
                 <p className="px-4 py-6 text-center text-[13px] text-foreground/45">No data.</p>
             ) : (
-                <div className="max-w-full overflow-x-auto md:overflow-visible">
+                <div className="max-w-full overflow-x-auto md:overflow-visible max-md:[mask-image:linear-gradient(to_right,black_calc(100%-1.5rem),transparent)]">
                     <table className="min-w-[420px] w-full text-[13px] md:min-w-0">
                         <thead>
                             <tr className="border-b border-border/50 text-left text-[11px] font-medium uppercase tracking-wider text-foreground/55">
@@ -602,7 +602,7 @@ function ByToolTable({ rows }: { rows: UsageByTool[] }) {
             {rows.length === 0 ? (
                 <p className="px-4 py-6 text-center text-[13px] text-foreground/45">No tool calls in this range.</p>
             ) : (
-                <div className="max-h-[420px] max-w-full overflow-auto">
+                <div className="max-h-[420px] max-w-full overflow-auto max-md:[mask-image:linear-gradient(to_right,black_calc(100%-1.5rem),transparent)]">
                     <table className="min-w-[420px] w-full text-[13px] md:min-w-0">
                         <thead className="sticky top-0 z-10 bg-card">
                             <tr className="border-b border-border/50 text-left text-[11px] font-medium uppercase tracking-wider text-foreground/55">

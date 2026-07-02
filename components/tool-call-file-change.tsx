@@ -166,7 +166,7 @@ function DiffLines({ lines }: { lines: DiffLine[] }) {
         <div
           key={index}
           className={cn(
-            "grid min-w-[520px] grid-cols-[44px_44px_minmax(0,1fr)] border-l-2",
+            "grid min-w-[520px] max-md:min-w-full grid-cols-[44px_44px_minmax(0,1fr)] border-l-2",
             line.kind === "add" &&
               "border-l-emerald-500/60 bg-emerald-500/10 text-emerald-900 dark:text-emerald-100",
             line.kind === "delete" &&

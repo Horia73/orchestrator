@@ -386,7 +386,7 @@ export function ChatInput({
                         <button
                             type="button"
                             onClick={handlePlusClick}
-                            className="flex size-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+                            className="flex size-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground pointer-coarse:size-10"
                             aria-label="Attach file"
                         >
                             <Plus className="size-5.5 stroke-[1]" />
@@ -403,12 +403,12 @@ export function ChatInput({
                                     contextUsage={activeConversation?.contextUsage}
                                     side={isChat ? "top" : "bottom"}
                                 />
-                                <div className="flex size-9 shrink-0 items-center justify-center">
+                                <div className="flex size-9 shrink-0 items-center justify-center pointer-coarse:size-10">
                                     {isStreamingActiveConversation ? (
                                         <button
                                             type="button"
                                             onClick={() => stopStreaming()}
-                                            className="flex size-8 items-center justify-center rounded-[11px] bg-[#b76440] text-white transition-colors hover:bg-[#a55837]"
+                                            className="flex size-8 items-center justify-center rounded-[11px] bg-[#b76440] text-white transition-colors hover:bg-[#a55837] pointer-coarse:size-10"
                                             aria-label="Stop"
                                         >
                                             <Square className="size-[14px] fill-current" />
@@ -419,7 +419,7 @@ export function ChatInput({
                                             onClick={handleSubmit}
                                             disabled={!canSend}
                                             className={cn(
-                                                "flex size-8 items-center justify-center rounded-[11px] bg-[#b76440] text-white transition-colors hover:bg-[#a55837]",
+                                                "flex size-8 items-center justify-center rounded-[11px] bg-[#b76440] text-white transition-colors hover:bg-[#a55837] pointer-coarse:size-10",
                                                 !canSend && "cursor-not-allowed opacity-50 hover:bg-[#b76440]"
                                             )}
                                             aria-label={
@@ -436,7 +436,7 @@ export function ChatInput({
                                         <button
                                             type="button"
                                             onClick={handleMicClick}
-                                            className="flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+                                            className="flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground pointer-coarse:size-10"
                                             aria-label="Voice"
                                         >
                                             <Mic className="size-5.5 stroke-[1.2]" />

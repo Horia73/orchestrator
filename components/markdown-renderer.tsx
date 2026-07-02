@@ -260,8 +260,8 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
         type="button"
         onClick={handleCopy}
         className={cn(
-          "absolute top-1.5 right-2 z-10 flex size-7 items-center justify-center rounded-md text-muted-foreground transition-all duration-150 hover:bg-muted hover:text-foreground",
-          hovered ? "opacity-100" : "opacity-0"
+          "absolute top-1.5 right-2 z-10 flex size-7 items-center justify-center rounded-md text-muted-foreground transition-all duration-150 hover:bg-muted hover:text-foreground pointer-coarse:size-8",
+          hovered ? "opacity-100" : "opacity-0 pointer-coarse:opacity-100"
         )}
         aria-label="Copy code"
         title="Copy code"

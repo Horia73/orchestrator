@@ -219,7 +219,7 @@ function SettingsViewInner() {
           >
             <div
               ref={tabsScrollRef}
-              className="-mx-3 overflow-x-auto scroll-px-3 px-3 [scrollbar-width:none] sm:mx-0 sm:px-0 md:overflow-visible [&::-webkit-scrollbar]:hidden"
+              className="-mx-3 overflow-x-auto scroll-px-3 px-3 [scrollbar-width:none] sm:mx-0 sm:px-0 md:overflow-visible [&::-webkit-scrollbar]:hidden max-md:[mask-image:linear-gradient(to_right,black_calc(100%-2rem),transparent)]"
             >
               <TabsList className="-mb-px h-auto w-max min-w-full gap-0 border-none md:w-auto md:min-w-0">
                 {visibleTabs.map((tab) => (

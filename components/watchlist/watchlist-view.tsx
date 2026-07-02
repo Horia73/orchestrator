@@ -233,7 +233,7 @@ function WatchlistRow({
             onRemove()
           }
         }}
-        className="absolute top-1/2 right-1 flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-foreground/30 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-50 hover:text-[#802020] focus:opacity-100"
+        className="absolute top-1/2 right-1 flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-foreground/30 opacity-0 transition-opacity group-hover:opacity-100 pointer-coarse:opacity-100 hover:bg-red-50 hover:text-[#802020] focus:opacity-100"
       >
         <Trash2 className="size-3.5" />
       </button>
@@ -371,7 +371,7 @@ function InstrumentSearch({
             }
           }}
           placeholder="Search AAPL, BTC/USD..."
-          className="h-9 pr-8 pl-8 text-[13px]"
+          className="h-9 pr-8 pl-8 text-[16px] md:text-[13px]"
           autoFocus
         />
         {loading && (
@@ -571,7 +571,7 @@ function ProductAdd({
               }
             }}
             placeholder="https://shop.example.com/product/123"
-            className="h-9 flex-1 text-[13px]"
+            className="h-9 flex-1 text-[16px] md:text-[13px]"
             autoFocus
             disabled={step === "fetching"}
           />
@@ -700,13 +700,13 @@ function ProductAdd({
         value={draft.url}
         onChange={(event) => updateDraft({ url: event.target.value })}
         placeholder="Product URL"
-        className="h-9 text-[13px]"
+        className="h-9 text-[16px] md:text-[13px]"
       />
       <Input
         value={draft.name}
         onChange={(event) => updateDraft({ name: event.target.value })}
         placeholder="Product name"
-        className="h-9 text-[13px]"
+        className="h-9 text-[16px] md:text-[13px]"
         autoFocus
       />
       <Input
@@ -715,7 +715,7 @@ function ProductAdd({
           updateDraft({ imageUrl: event.target.value || null })
         }
         placeholder="Image URL (optional)"
-        className="h-9 text-[13px]"
+        className="h-9 text-[16px] md:text-[13px]"
       />
       <div className="grid grid-cols-[minmax(0,1fr)_84px] gap-2">
         <Input
@@ -729,7 +729,7 @@ function ProductAdd({
           }}
           inputMode="decimal"
           placeholder="Price"
-          className="h-9 text-[13px]"
+          className="h-9 text-[16px] md:text-[13px]"
         />
         <Input
           value={draft.currency}
@@ -742,7 +742,7 @@ function ProductAdd({
         value={draft.source}
         onChange={(event) => updateDraft({ source: event.target.value })}
         placeholder="Store / source"
-        className="h-9 text-[13px]"
+        className="h-9 text-[16px] md:text-[13px]"
       />
       {error && (
         <p className="text-[11.5px] text-amber-700 dark:text-amber-300">

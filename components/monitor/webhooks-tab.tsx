@@ -577,7 +577,7 @@ function CreateEndpointForm({
             onChange={(event) => onChange({ description: event.target.value })}
             rows={2}
             placeholder="Optional note for what this endpoint accepts."
-            className="min-h-16 w-full resize-none rounded-lg border border-input bg-transparent px-2.5 py-2 text-[13px] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+            className="min-h-16 w-full resize-none rounded-lg border border-input bg-transparent px-2.5 py-2 text-[16px] md:text-[13px] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
           />
         </LabeledField>
         <div className="mt-1 flex items-center justify-between gap-3">

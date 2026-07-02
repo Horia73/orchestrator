@@ -214,7 +214,7 @@ function ImageTile({ image, onError }: { image: NormalizedImage; onError?: () =>
                 </span>
             </div>
             {image.sourceUrl ? (
-                <span className="pointer-events-none absolute right-1.5 top-1.5 inline-flex size-5 items-center justify-center rounded-full bg-black/45 text-white opacity-0 transition-opacity group-hover:opacity-100">
+                <span className="pointer-events-none absolute right-1.5 top-1.5 inline-flex size-5 items-center justify-center rounded-full bg-black/45 text-white opacity-0 transition-opacity group-hover:opacity-100 pointer-coarse:opacity-100">
                     <ExternalLink className="size-3" aria-hidden />
                 </span>
             ) : null}

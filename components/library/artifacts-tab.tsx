@@ -454,7 +454,7 @@ function AppCard({ app, onDelete }: { app: AppListItem; onDelete: () => void }) 
             <button
                 type="button"
                 onClick={(e) => { e.preventDefault(); e.stopPropagation(); onDelete() }}
-                className="absolute right-2 top-2 rounded-md p-1.5 text-muted-foreground/60 opacity-0 transition-opacity hover:bg-background hover:text-rose-500 focus-visible:opacity-100 group-hover:opacity-100"
+                className="absolute right-2 top-2 rounded-md p-1.5 text-muted-foreground/60 opacity-0 transition-opacity hover:bg-background hover:text-rose-500 focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100"
                 aria-label={`Șterge aplicația ${app.title}`}
                 title="Șterge aplicația"
             >

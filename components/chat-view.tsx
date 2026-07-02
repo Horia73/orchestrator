@@ -3329,7 +3329,7 @@ export function ChatView() {
                 type="button"
                 aria-label="Scroll to bottom"
                 onClick={handleScrollButtonClick}
-                className="flex size-9 items-center justify-center rounded-full border border-[#e6e1db] bg-white text-foreground shadow-[0_10px_24px_rgba(32,23,16,0.12)] transition-all hover:scale-105 hover:bg-[#faf8f5]"
+                className="flex size-9 items-center justify-center rounded-full border border-[#e6e1db] bg-white text-foreground shadow-[0_10px_24px_rgba(32,23,16,0.12)] transition-all hover:scale-105 hover:bg-[#faf8f5] pointer-coarse:size-11"
               >
                 <ArrowDown className="size-4 stroke-[1.8]" />
               </button>

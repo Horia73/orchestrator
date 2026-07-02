@@ -573,7 +573,7 @@ function EnvRawRow({
           onClick={onRemove}
           disabled={readOnly}
           aria-label="Remove comment"
-          className="grid size-6 shrink-0 place-items-center rounded-md text-foreground/20 opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100 disabled:pointer-events-none disabled:opacity-40"
+          className="grid size-6 shrink-0 place-items-center rounded-md text-foreground/20 opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100 pointer-coarse:opacity-100 disabled:pointer-events-none disabled:opacity-40"
         >
           <Trash2 className="size-3" />
         </button>
@@ -607,7 +607,7 @@ function EnvRawRow({
 
 function fieldClassName(readOnly: boolean): string {
   return cn(
-    "min-w-0 rounded-lg border border-input bg-background px-2.5 text-[12px] text-foreground outline-none transition-colors placeholder:text-foreground/35 focus:border-ring focus:ring-3 focus:ring-ring/20",
+    "min-w-0 rounded-lg border border-input bg-background px-2.5 text-[16px] md:text-[12px] text-foreground outline-none transition-colors placeholder:text-foreground/35 focus:border-ring focus:ring-3 focus:ring-ring/20",
     readOnly && "bg-muted/30 text-foreground/60"
   )
 }

@@ -1040,7 +1040,7 @@ function CopyCoordsButton({
       className={cn(
         "inline-flex items-center justify-center rounded-md text-muted-foreground transition-all hover:bg-muted hover:text-foreground",
         compact ? "size-5" : "size-6",
-        "opacity-0 group-hover/coords:opacity-100 focus-visible:opacity-100",
+        "opacity-0 group-hover/coords:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100",
         copied && "text-emerald-600 opacity-100 dark:text-emerald-400"
       )}
     >

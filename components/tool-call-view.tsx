@@ -325,7 +325,7 @@ function CodeRows({ rows }: { rows: CodeRow[] }) {
     return (
         <div className="tool-call-scroll tool-call-scroll-x overflow-x-auto bg-background font-mono text-[12px] leading-5">
             {rows.map((row, index) => (
-                <div key={`${row.lineNumber}-${index}`} className="grid min-w-[520px] grid-cols-[56px_minmax(0,1fr)]">
+                <div key={`${row.lineNumber}-${index}`} className="grid min-w-[520px] max-md:min-w-full grid-cols-[56px_minmax(0,1fr)]">
                     <span className="select-none border-r border-border/40 px-2 text-right text-foreground/35">
                         {row.lineNumber}
                     </span>
@@ -410,7 +410,7 @@ function GrepPreview({ entry, data }: { entry: ToolCallReasoningEntry; data: Par
                         </div>
                         <div className="tool-call-scroll tool-call-scroll-x overflow-x-auto font-mono text-[12px] leading-5">
                             {group.rows.map((row, index) => (
-                                <div key={`${row.line}-${row.column}-${index}`} className="grid min-w-[520px] grid-cols-[56px_minmax(0,1fr)]">
+                                <div key={`${row.line}-${row.column}-${index}`} className="grid min-w-[520px] max-md:min-w-full grid-cols-[56px_minmax(0,1fr)]">
                                     <span className="select-none border-r border-border/40 px-2 text-right text-foreground/35">
                                         {row.line || ""}
                                     </span>

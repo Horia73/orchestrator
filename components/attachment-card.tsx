@@ -101,7 +101,7 @@ export function AudioPlayer({ url }: { url: string }) {
                         style={{ width: `${progress}%` }}
                     />
                     <div
-                        className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 size-3 rounded-full bg-[#b76440] shadow-sm opacity-0 group-hover:opacity-100 transition-opacity"
+                        className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 size-3 rounded-full bg-[#b76440] shadow-sm opacity-0 group-hover:opacity-100 pointer-coarse:opacity-100 transition-opacity"
                         style={{ left: `${progress}%` }}
                     />
                 </div>

@@ -60,8 +60,8 @@ export function AttachmentPreview({
                     type="button"
                     onClick={(e) => { e.stopPropagation(); onRemove() }}
                     className={cn(
-                        "absolute -top-1.5 -left-1.5 z-10 flex size-5 items-center justify-center rounded-full bg-background border border-border shadow-sm text-muted-foreground transition-all duration-200 ease-out hover:text-foreground hover:bg-muted",
-                        hovered ? "opacity-100 scale-100" : "opacity-0 scale-75"
+                        "absolute -top-1.5 -left-1.5 z-10 flex size-5 items-center justify-center rounded-full bg-background border border-border shadow-sm text-muted-foreground transition-all duration-200 ease-out hover:text-foreground hover:bg-muted pointer-coarse:size-6",
+                        hovered ? "opacity-100 scale-100" : "opacity-0 scale-75 pointer-coarse:opacity-100 pointer-coarse:scale-100"
                     )}
                     aria-label="Remove file"
                 >
@@ -83,8 +83,8 @@ export function AttachmentPreview({
                 type="button"
                 onClick={(e) => { e.stopPropagation(); onRemove() }}
                 className={cn(
-                    "absolute -top-1.5 -left-1.5 z-10 flex size-5 items-center justify-center rounded-full bg-background border border-border shadow-sm text-muted-foreground transition-all duration-200 ease-out hover:text-foreground hover:bg-muted",
-                    hovered ? "opacity-100 scale-100" : "opacity-0 scale-75"
+                    "absolute -top-1.5 -left-1.5 z-10 flex size-5 items-center justify-center rounded-full bg-background border border-border shadow-sm text-muted-foreground transition-all duration-200 ease-out hover:text-foreground hover:bg-muted pointer-coarse:size-6",
+                    hovered ? "opacity-100 scale-100" : "opacity-0 scale-75 pointer-coarse:opacity-100 pointer-coarse:scale-100"
                 )}
                 aria-label="Remove file"
             >

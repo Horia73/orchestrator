@@ -1637,7 +1637,9 @@ function MessageBubbleComponent({
             className={cn(
                 "flex items-center gap-2 text-[13px] text-muted-foreground transition-opacity duration-150",
                 "max-md:select-none",
-                hovered ? "opacity-100" : "opacity-0",
+                // Touch has no hover — keep the meta row (copy/artifact actions)
+                // reachable on coarse pointers instead of permanently invisible.
+                hovered ? "opacity-100" : "opacity-0 pointer-coarse:opacity-100",
                 message.role === "user" ? "justify-end self-end pr-1" : "justify-start pl-1"
             )}
         >
@@ -1650,7 +1652,7 @@ function MessageBubbleComponent({
             <button
                 type="button"
                 onClick={handleCopy}
-                className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground"
+                className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground pointer-coarse:size-9"
                 aria-label="Copy message"
                 title="Copy message"
             >
@@ -1849,7 +1851,7 @@ function ArtifactMetaActions({
             <button
                 type="button"
                 onClick={() => downloadArtifact(artifact)}
-                className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground"
+                className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground pointer-coarse:size-9"
                 aria-label="Download artifact"
                 title="Download artifact"
             >
@@ -1859,7 +1861,7 @@ function ArtifactMetaActions({
                 <button
                     type="button"
                     onClick={() => onExpand(artifact)}
-                    className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground"
+                    className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground pointer-coarse:size-9"
                     aria-label="Open in side panel"
                     title="Open in side panel"
                 >

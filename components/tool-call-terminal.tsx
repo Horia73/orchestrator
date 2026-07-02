@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils"
 
 type ParsedData = Record<string, unknown> | null
 
-export const TERMINAL_MIN_WIDTH_CLASS = "min-w-[560px]"
+export const TERMINAL_MIN_WIDTH_CLASS = "min-w-[560px] max-md:min-w-full"
 
 // Original default kept for inline Bash tool terminals. The browser-agent
 // terminal overrides this so its full transcript stays scrollable.

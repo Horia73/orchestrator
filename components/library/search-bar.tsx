@@ -68,7 +68,7 @@ export function LibrarySearchBar({
                 placeholder={placeholder}
                 aria-label={placeholder}
                 className={cn(
-                    "h-9 w-full rounded-md border border-border bg-background pl-8 pr-8 text-[13px] text-foreground placeholder:text-muted-foreground/65",
+                    "h-9 w-full rounded-md border border-border bg-background pl-8 pr-8 text-[16px] md:text-[13px] text-foreground placeholder:text-muted-foreground/65",
                     "focus:outline-none focus:ring-2 focus:ring-ring",
                 )}
             />

@@ -360,7 +360,7 @@ function MediaTile({
       >
         {selected ? <Check className="size-3.5" strokeWidth={2.4} /> : null}
       </span>
-      <span className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 bg-gradient-to-t from-black/65 to-transparent px-2 pt-6 pb-1.5 text-[10.5px] text-white opacity-0 transition-opacity group-hover/tile:opacity-100">
+      <span className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 bg-gradient-to-t from-black/65 to-transparent px-2 pt-6 pb-1.5 text-[10.5px] text-white opacity-0 transition-opacity group-hover/tile:opacity-100 pointer-coarse:opacity-100">
         <span className="truncate">{attachment.filename}</span>
         <span className="shrink-0 tabular-nums">
           {formatBytes(attachment.size)}

@@ -163,7 +163,7 @@ function buildPayload(f: FormState): NewTaskPayload | { error: string } {
     return { title: f.title.trim(), action, schedule, enabled: f.enabled }
 }
 
-const fieldCls = "h-9 w-full rounded-md border border-border/70 bg-background px-3 text-[14px] outline-none focus:ring-2 focus:ring-foreground/15"
+const fieldCls = "h-9 w-full rounded-md border border-border/70 bg-background px-3 text-[16px] md:text-[14px] outline-none focus:ring-2 focus:ring-foreground/15"
 const labelCls = "mb-1 block text-[12px] font-medium tracking-wide text-foreground/55 uppercase"
 
 export function TaskForm({
@@ -244,7 +244,7 @@ export function TaskForm({
                             onChange={e => set("toolId", e.target.value)} />
                         <input className={fieldCls} value={f.toolSummary} placeholder="Summary shown in Inbox/Past runs"
                             onChange={e => set("toolSummary", e.target.value)} />
-                        <textarea className={cn(fieldCls, "h-32 py-2 font-mono text-[13px]")} value={f.toolArgs}
+                        <textarea className={cn(fieldCls, "h-32 py-2 font-mono text-[16px] md:text-[13px]")} value={f.toolArgs}
                             placeholder='{"entity_id": "light.living_room", "state": "on"}'
                             onChange={e => set("toolArgs", e.target.value)} />
                     </div>

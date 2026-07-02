@@ -941,7 +941,7 @@ function DailyMemoryFolder({
                 onChange={event => setQuery(event.target.value)}
                 placeholder="Caută dată (ex. 21 mai)"
                 aria-label="Caută în daily memory"
-                className="h-7 w-full rounded-md border border-input bg-background pl-7 pr-2 text-[12px] outline-none placeholder:text-foreground/35 focus:border-ring focus:ring-3 focus:ring-ring/30"
+                className="h-7 w-full rounded-md border border-input bg-background pl-7 pr-2 text-[16px] md:text-[12px] outline-none placeholder:text-foreground/35 focus:border-ring focus:ring-3 focus:ring-ring/30"
               />
             </div>
           )}
@@ -1180,7 +1180,7 @@ function rememberDailyMemoryOpen(open: boolean) {
 
 function fieldClassName(readOnly: boolean): string {
   return cn(
-    "min-h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-[13px] outline-none transition-colors",
+    "min-h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-[16px] md:text-[13px] outline-none transition-colors",
     "focus:border-ring focus:ring-3 focus:ring-ring/30",
     readOnly && "cursor-default bg-muted/20 text-foreground/60"
   )
