@@ -22,6 +22,10 @@ export const SCROLL_RESTORE_STORAGE_PREFIX = "scroll-restore:chat"
 // during the same ongoing stream doesn't re-anchor over a restored scroll.
 export const STREAM_ANCHOR_TAKEN_PREFIX = "chat:anchoredStream"
 export const SCROLL_RESTORE_TOP_OFFSET = 16
+// How long the post-restore hold keeps re-pinning the restored position while
+// late content (idle-scheduled Shiki ≤1200ms, images, chunk-rendered "Worked
+// for" bodies) is still reflowing. Real user input cancels it immediately.
+export const POST_RESTORE_HOLD_MS = 2500
 export const MESSAGE_ANCHOR_TOP_OFFSET = 32
 export const MESSAGE_ANCHOR_SCROLL_DURATION_MS = 420
 export const SCROLL_BUTTON_FADE_DISTANCE_PX = 2700

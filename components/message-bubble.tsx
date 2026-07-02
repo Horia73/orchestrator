@@ -48,13 +48,21 @@ const COLLAPSED_BOTTOM_GAP = 52 // gap from bottom of block to input container
 // Live-streaming window: instead of filling all available space (which leaves a
 // half-cut "semi" card on mobile and an unbounded stack on desktop), regulate it
 // to a whole number of tool cards. A tool-call panel is ~230px tall (see
-// TOOL_CALL_PANEL_HEIGHT in tool-call-view). Desktop targets 2 full cards, mobile
-// 1. The window still grows only as far as the viewport allows and never below the
-// per-device floor.
+// TOOL_CALL_PANEL_HEIGHT in tool-call-view). Desktop and mobile both target 2
+// full cards; when the viewport can't fit 2 the window steps down to 1 whole
+// card rather than clipping the second. The window never grows past the
+// viewport and never shrinks below the per-device floor.
 const LIVE_CARD_UNIT = 230
 const LIVE_CARD_GAP = 8
-const LIVE_WINDOW_TARGET_DESKTOP = LIVE_CARD_UNIT * 2 + LIVE_CARD_GAP + 14 // ~2 cards
-const LIVE_WINDOW_TARGET_MOBILE = LIVE_CARD_UNIT + 14 // ~1 full card
+// Non-card chrome inside the clipped window: the list's pt-1 (4) + mb-2 (8),
+// the h-10 live bottom-fade spacer (40), and headroom so the h-6 top gradient
+// fades the previous entry instead of shaving the first visible card (24).
+const LIVE_WINDOW_CHROME = 76
+const LIVE_WINDOW_MAX_CARDS = 2
+
+function liveWindowHeight(cards: number): number {
+    return cards * LIVE_CARD_UNIT + (cards - 1) * LIVE_CARD_GAP + LIVE_WINDOW_CHROME
+}
 const WORKED_DETAILS_INITIAL_BUDGET = 10
 const WORKED_DETAILS_RENDER_CHUNK = 18
 const WORKED_DETAILS_CHUNK_DELAY_MS = 24
@@ -252,10 +260,18 @@ function useAvailableHeight(
                 const bottom = inputRect?.top ?? viewportBottom
                 const available = Math.floor(bottom - blockRect.top - COLLAPSED_BOTTOM_GAP)
                 const compactViewport = window.matchMedia("(max-width: 767px), (pointer: coarse)").matches
-                const minimumHeight = compactViewport ? COLLAPSED_HEIGHT_FLOOR : COLLAPSED_HEIGHT
-                // Cap to a whole number of cards (2 desktop / 1 mobile) so the window
-                // never shows a half card, while still shrinking to fit short viewports.
-                const targetHeight = compactViewport ? LIVE_WINDOW_TARGET_MOBILE : LIVE_WINDOW_TARGET_DESKTOP
+                // Floor at one whole card on desktop (not COLLAPSED_HEIGHT, which
+                // sits between the 1- and 2-card windows and would re-clip a card).
+                const minimumHeight = compactViewport
+                    ? COLLAPSED_HEIGHT_FLOOR
+                    : Math.min(COLLAPSED_HEIGHT, liveWindowHeight(1))
+                // Cap to a whole number of cards so the window never shows a half
+                // card: fit as many full cards as the viewport allows, up to 2.
+                const fittingCards = Math.floor(
+                    (available - LIVE_WINDOW_CHROME + LIVE_CARD_GAP) / (LIVE_CARD_UNIT + LIVE_CARD_GAP)
+                )
+                const cards = Math.max(1, Math.min(LIVE_WINDOW_MAX_CARDS, fittingCards))
+                const targetHeight = liveWindowHeight(cards)
                 const nextHeight = Math.max(minimumHeight, Math.min(available, targetHeight))
                 setHeight((current) => current === nextHeight ? current : nextHeight)
             })

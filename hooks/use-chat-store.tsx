@@ -1084,12 +1084,20 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     if (pathname?.startsWith("/profiles")) return
     let sequence = 0
+    let inFlight = false
+    let lastStartedAt = 0
 
     const reconcileAfterResume = () => {
       if (document.visibilityState !== "visible") return
       const conversationId = activeConversationIdRef.current
       if (!conversationId) return
       if (streamingRef.current) return
+      // A tab return fires visibilitychange + pageshow + focus back-to-back;
+      // without a single-flight + cooldown each one kicked off its own
+      // refresh/recover pass, and the overlapping recoveries re-dispatched
+      // streaming state over each other (visible flicker until a refresh).
+      if (inFlight) return
+      if (Date.now() - lastStartedAt < 1000) return
 
       const knownStream = activeChatStreamsRef.current[conversationId]
       const wasHiddenDuringStream = streamPageWasHiddenRef.current
@@ -1097,15 +1105,21 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         return
 
       const currentSequence = ++sequence
+      inFlight = true
+      lastStartedAt = Date.now()
       void (async () => {
-        const streams = await refreshActiveChatStreams()
-        if (currentSequence !== sequence) return
-        const stream =
-          streams.find((item) => item.conversationId === conversationId) ??
-          activeChatStreamsRef.current[conversationId]
-        await recoverInterruptedStream(conversationId, stream?.messageId)
-        if (currentSequence === sequence) {
-          streamPageWasHiddenRef.current = false
+        try {
+          const streams = await refreshActiveChatStreams()
+          if (currentSequence !== sequence) return
+          const stream =
+            streams.find((item) => item.conversationId === conversationId) ??
+            activeChatStreamsRef.current[conversationId]
+          await recoverInterruptedStream(conversationId, stream?.messageId)
+          if (currentSequence === sequence) {
+            streamPageWasHiddenRef.current = false
+          }
+        } finally {
+          inFlight = false
         }
       })()
     }
@@ -1240,13 +1254,14 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   // --- SSE LIVE SYNC ---
   React.useEffect(() => {
     if (pathname?.startsWith("/profiles")) return
-    const eventSource = new EventSource("/api/sync")
+    let eventSource: EventSource | null = null
+    let disposed = false
 
-    eventSource.onopen = () => {
+    const handleOpen = () => {
       reconcileConversationSummaries("after chat sync reconnect")
     }
 
-    eventSource.onmessage = (event) => {
+    const handleMessage = (event: MessageEvent) => {
       try {
         const data = JSON.parse(event.data)
         if (data.type === "create_conversation") {
@@ -1400,12 +1415,43 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    eventSource.onerror = () => {
+    const handleError = () => {
       // EventSource emits "error" for transient disconnects and auto-retries.
       // Logging it as console.error trips the Next.js dev overlay with no useful detail.
     }
 
-    return () => eventSource.close()
+    const connect = () => {
+      if (disposed) return
+      eventSource?.close()
+      eventSource = new EventSource("/api/sync")
+      eventSource.onopen = handleOpen
+      eventSource.onmessage = handleMessage
+      eventSource.onerror = handleError
+    }
+
+    connect()
+
+    // EventSource auto-retries transient drops, but a backgrounded tab (mobile
+    // PWA especially) can have the connection torn down for good — readyState
+    // lands on CLOSED and nothing reconnects, so the UI silently stops syncing
+    // until a manual refresh. Reconnect on foreground; onopen's reconcile
+    // backfills whatever was missed while the stream was dead.
+    const reconnectIfDead = () => {
+      if (document.visibilityState !== "visible") return
+      if (eventSource && eventSource.readyState !== EventSource.CLOSED) return
+      connect()
+    }
+    document.addEventListener("visibilitychange", reconnectIfDead)
+    window.addEventListener("focus", reconnectIfDead)
+    window.addEventListener("pageshow", reconnectIfDead)
+
+    return () => {
+      disposed = true
+      document.removeEventListener("visibilitychange", reconnectIfDead)
+      window.removeEventListener("focus", reconnectIfDead)
+      window.removeEventListener("pageshow", reconnectIfDead)
+      eventSource?.close()
+    }
   }, [
     pathname,
     applyConversationReadState,

@@ -14,6 +14,7 @@ import {
   MESSAGE_ANCHOR_SCROLL_DURATION_MS,
   MESSAGE_ANCHOR_TOP_OFFSET,
   MESSAGE_VERTICAL_GAP,
+  POST_RESTORE_HOLD_MS,
   SCROLL_ANCHOR_STORAGE_PREFIX,
   SCROLL_BOTTOM_SENTINEL,
   SCROLL_BUTTON_FADE_DISTANCE_PX,
@@ -131,6 +132,18 @@ export function ChatView() {
   const anchorSettleRef = React.useRef<{
     conversationId: string
     frameId: number
+  } | null>(null)
+  // Post-restore hold: after the settle loop reveals the view, lazy content
+  // (idle-scheduled Shiki, images, chunk-rendered "Worked for" bodies) keeps
+  // reflowing for a while and silently drifts the restored position. The hold
+  // keeps re-pinning the anchor (or the bottom) until the first real user
+  // input or its deadline, so the reading position survives the late reflows.
+  const postRestoreHoldRef = React.useRef<{
+    conversationId: string
+    mode: "anchor" | "bottom"
+    anchor: SavedScrollRestore | null
+    frameId: number
+    until: number
   } | null>(null)
   const olderLoadAnchorRef = React.useRef<{
     conversationId: string
@@ -437,6 +450,10 @@ export function ChatView() {
     if (anchorSettleRef.current) {
       window.cancelAnimationFrame(anchorSettleRef.current.frameId)
       anchorSettleRef.current = null
+    }
+    if (postRestoreHoldRef.current) {
+      window.cancelAnimationFrame(postRestoreHoldRef.current.frameId)
+      postRestoreHoldRef.current = null
     }
     // Entering a conversation must ALWAYS restore — the latch from a previous
     // stay is stale. Without this, returning to a chat whose successor's
@@ -780,6 +797,88 @@ export function ChatView() {
     },
     []
   )
+
+  const cancelPostRestoreHold = React.useCallback(() => {
+    const hold = postRestoreHoldRef.current
+    if (!hold) return
+    postRestoreHoldRef.current = null
+    window.cancelAnimationFrame(hold.frameId)
+  }, [])
+
+  // Keep the just-restored position pinned while lazy content is still
+  // landing. The settle loop can only wait so long before revealing; anything
+  // that reflows after the reveal (idle-scheduled Shiki, images, chunked
+  // "Worked for" bodies, prepended history pages) would otherwise drift the
+  // view away from the position we just restored. Runs until the deadline or
+  // the first real user input — whichever comes first.
+  const startPostRestoreHold = React.useCallback(
+    (conversationId: string, mode: "anchor" | "bottom", anchor?: SavedScrollRestore | null) => {
+      cancelPostRestoreHold()
+      const heldAnchor = mode === "anchor" ? anchor ?? getCurrentScrollAnchor() : null
+      if (mode === "anchor" && !heldAnchor) return
+      const tick = () => {
+        const hold = postRestoreHoldRef.current
+        if (!hold) return
+        const element = scrollContainerRef.current
+        if (
+          !element ||
+          activeIdRef.current !== hold.conversationId ||
+          Date.now() > hold.until
+        ) {
+          postRestoreHoldRef.current = null
+          return
+        }
+        if (hold.mode === "bottom") {
+          const maxScrollTop = Math.max(
+            0,
+            element.scrollHeight - element.clientHeight
+          )
+          if (Math.abs(element.scrollTop - maxScrollTop) > 1) {
+            element.scrollTop = maxScrollTop
+            lastObservedScrollTopRef.current = element.scrollTop
+          }
+        } else if (hold.anchor) {
+          const anchorElement = document.getElementById(
+            `message-${hold.anchor.messageId}`
+          )
+          if (anchorElement) {
+            const offsetNow =
+              anchorElement.getBoundingClientRect().top -
+              element.getBoundingClientRect().top
+            if (Math.abs(offsetNow - hold.anchor.offset) > 1) {
+              restoreScrollAnchor(hold.anchor)
+              lastObservedScrollTopRef.current = element.scrollTop
+            }
+          }
+        }
+        hold.frameId = window.requestAnimationFrame(tick)
+      }
+      postRestoreHoldRef.current = {
+        conversationId,
+        mode,
+        anchor: heldAnchor,
+        frameId: window.requestAnimationFrame(tick),
+        until: Date.now() + POST_RESTORE_HOLD_MS,
+      }
+    },
+    [cancelPostRestoreHold, getCurrentScrollAnchor, restoreScrollAnchor]
+  )
+
+  // Any real user input releases the hold instantly — these fire before the
+  // scroll events they cause, so the hold never fights the user for control.
+  React.useEffect(() => {
+    const release = () => cancelPostRestoreHold()
+    window.addEventListener("wheel", release, { capture: true, passive: true })
+    window.addEventListener("touchstart", release, { capture: true, passive: true })
+    window.addEventListener("mousedown", release, true)
+    window.addEventListener("keydown", release, true)
+    return () => {
+      window.removeEventListener("wheel", release, true)
+      window.removeEventListener("touchstart", release, true)
+      window.removeEventListener("mousedown", release, true)
+      window.removeEventListener("keydown", release, true)
+    }
+  }, [cancelPostRestoreHold])
 
   React.useEffect(() => {
     const flushCurrentScroll = () => {
@@ -2007,6 +2106,9 @@ export function ChatView() {
         setIsRestoringScroll(false)
         saveScrollAnchor()
         syncScrollState()
+        // Late-mounting content keeps growing the list after the reveal; keep
+        // the view pinned to the bottom until it quiets down or the user acts.
+        startPostRestoreHold(conversationId, "bottom")
         return
       }
       bottomSettleFrameIdRef.current = window.requestAnimationFrame(() =>
@@ -2054,7 +2156,7 @@ export function ChatView() {
         !shouldRestoreBottom && anchorScrollTop != null ? savedAnchor : null
       if (shouldRestoreBottom) {
         bottomSettleFrameIdRef.current = window.requestAnimationFrame(() =>
-          settleBottom(3)
+          settleBottom(5)
         )
         restoredScrollConversationRef.current = conversationId
         setRestoredScrollConversationId(conversationId)
@@ -2069,7 +2171,11 @@ export function ChatView() {
         // hasOlderMessages flipping right after a chase) can't cancel it
         // mid-flight; it self-terminates on conversation switch or unmount.
         const anchor = settleAnchorTarget
-        let framesLeft = 30
+        // ~1.5s budget: heavy conversations (lots of markdown, collapsed
+        // blocks measuring in) reflow well past the old 30-frame window, and
+        // giving up early revealed the view mid-drift. Stability requires 5
+        // consecutive quiet frames so a lull between reflows doesn't pass.
+        let framesLeft = 90
         let stableFrames = 0
         const tick = () => {
           const settleElement = scrollContainerRef.current
@@ -2097,7 +2203,7 @@ export function ChatView() {
             lastObservedScrollTopRef.current = settleElement.scrollTop
           }
           framesLeft -= 1
-          if (stableFrames >= 3 || framesLeft <= 0) {
+          if (stableFrames >= 5 || framesLeft <= 0) {
             anchorSettleRef.current = null
             restoredScrollConversationRef.current = conversationId
             setRestoredScrollConversationId(conversationId)
@@ -2105,6 +2211,9 @@ export function ChatView() {
             setIsRestoringScroll(false)
             saveScrollAnchor()
             syncScrollState()
+            // The reveal happens here, but lazy content keeps reflowing for a
+            // while — hold the anchor so the position survives it.
+            startPostRestoreHold(conversationId, "anchor", anchor)
             return
           }
           anchorSettleRef.current = {
@@ -2132,6 +2241,10 @@ export function ChatView() {
       if (!shouldPinBottom) setIsRestoringScroll(false)
       saveScrollAnchor()
       syncScrollState()
+      // Legacy numeric restore (no anchor payload): pin whatever position we
+      // landed on so late reflows don't drift it. Bottom restores start their
+      // hold when settleBottom completes instead.
+      if (!shouldRestoreBottom) startPostRestoreHold(conversationId, "anchor")
     })
 
     return () => {
@@ -2154,6 +2267,7 @@ export function ChatView() {
     restoreScrollAnchor,
     saveScrollAnchor,
     setScrollButtonVisible,
+    startPostRestoreHold,
     syncScrollState,
   ])
 
