@@ -269,6 +269,33 @@ button:not(:disabled),
 }
 
 @layer utilities {
+  /* Older iOS WebKit does not understand dynamic viewport units. Keep the app
+     shell full-height there instead of letting h-dvh/h-svh collapse to content
+     height and expose the document background at the bottom. */
+  @supports not (height: 100dvh) {
+    .h-dvh {
+      height: 100vh;
+      height: -webkit-fill-available;
+    }
+
+    .min-h-dvh {
+      min-height: 100vh;
+      min-height: -webkit-fill-available;
+    }
+  }
+
+  @supports not (height: 100svh) {
+    .h-svh {
+      height: 100vh;
+      height: -webkit-fill-available;
+    }
+
+    .min-h-svh {
+      min-height: 100vh;
+      min-height: -webkit-fill-available;
+    }
+  }
+
   .thought-title-text {
     display: inline-block;
     max-width: 100%;
@@ -706,10 +733,14 @@ html[data-orch-home-page="true"] body {
   html[data-orch-viewport-lock="true"] body {
     position: fixed;
     inset: 0;
+    height: 100vh;
+    height: -webkit-fill-available;
     height: 100dvh;
   }
 
   html[data-orch-viewport-lock="true"] [data-slot="sidebar-wrapper"] {
+    height: 100vh;
+    height: -webkit-fill-available;
     height: 100dvh;
     min-height: 0;
     overflow: hidden;

@@ -135,7 +135,7 @@ export function ArtifactPanel({
                 className
             )}
         >
-            <header className="flex items-center justify-between gap-2 border-b border-border/60 bg-muted/30 px-3 py-2.5">
+            <header className="flex items-center justify-between gap-2 border-b border-border/60 bg-muted/30 pr-[calc(0.75rem+env(safe-area-inset-right))] pl-[calc(0.75rem+env(safe-area-inset-left))] pt-[calc(0.625rem+env(safe-area-inset-top))] pb-2.5 md:px-3 md:pt-2.5">
                 <div className="flex min-w-0 flex-1 items-center gap-2">
                     <div className="min-w-0">
                         <div className="truncate text-[13px] font-semibold text-foreground" title={artifact.title}>

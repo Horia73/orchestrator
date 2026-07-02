@@ -15,7 +15,9 @@ import { runWithRequestProfile } from "@/lib/profiles/server"
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   return runWithRequestProfile(_request, async () => {
         const { id } = await params
-        const detail = getRequestLogDetailAcrossProfiles(id)
+        const url = new URL(_request.url)
+        const includeInput = url.searchParams.get('includeInput') === '1'
+        const detail = getRequestLogDetailAcrossProfiles(id, { includeInput })
         if (!detail) {
             return NextResponse.json({ error: 'Not found' }, { status: 404 })
         }
@@ -26,7 +28,13 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
                 getRequestTranscript(detail.row)
             )
         )
-        return NextResponse.json({ log: detail.row, toolLogs: detail.toolLogs, transcript, input: detail.input })
+        return NextResponse.json({
+            log: detail.row,
+            toolLogs: detail.toolLogs,
+            transcript,
+            hasInput: detail.hasInput,
+            input: includeInput ? detail.input : null,
+        })
   })
 }
 

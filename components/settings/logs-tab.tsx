@@ -16,12 +16,12 @@ import {
 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
-import type { RequestLogRow, RequestStatus, ToolLogRow, RequestLogInput } from "@/lib/observability/schema"
+import type { RequestLogRow, RequestStatus, ToolLogRow } from "@/lib/observability/schema"
 import type { Message, ToolCallReasoningEntry } from "@/lib/types"
 import { MessageBubble } from "@/components/message-bubble"
 import { Select as UiSelect } from "@/components/ui/select"
 import { ConversationArtifactsProvider } from "@/components/artifacts/use-conversation-artifacts"
-import { useLogs, useRequestDetail, type LiveTailStatus, type LogsFilters, type RequestLogTranscript } from "./use-logs"
+import { useLogs, useRequestDetail, useRequestInput, type LiveTailStatus, type LogsFilters, type RequestLogTranscript } from "./use-logs"
 
 const STATUS_LABELS: Record<RequestStatus, string> = {
     streaming: "Streaming",
@@ -469,6 +469,7 @@ function LogRow({ row, expanded, onToggle, onMeasure }: {
     return (
         <div className={cn("border-b border-border/50", expanded && "bg-muted/30")}>
             <button
+                data-request-id={row.id}
                 onClick={onToggle}
                 className="flex w-full flex-col gap-2 px-3 py-3 text-left text-[13px] transition-colors hover:bg-muted/50 md:hidden"
             >
@@ -493,6 +494,7 @@ function LogRow({ row, expanded, onToggle, onMeasure }: {
                 </div>
             </button>
             <button
+                data-request-id={row.id}
                 onClick={onToggle}
                 className={cn(
                     "hidden h-[56px] w-full grid-cols-[24px_140px_110px_110px_minmax(0,1fr)_90px_90px_120px_24px] items-center gap-3 px-3 py-2 text-left text-[13px] transition-colors md:grid",
@@ -528,17 +530,11 @@ function ExpandedDetail({ requestId, row, onMeasure }: {
 }) {
     const { data, loading, error } = useRequestDetail(requestId, { live: row.status === "streaming" })
     const rootRef = React.useRef<HTMLDivElement>(null)
-    // Render nothing heavy until the detail request settles, then fade the whole
-    // panel in at once. Showing the transcript/tool-calls as they trickle in is
-    // what made the expand feel janky ("load progresiv buggy"). The detail body
-    // is also height-capped with an internal scroll so a tall transcript can't
-    // grow the row after it mounts — that async growth is exactly what left the
-    // virtualized rows below overlapping the bottom of the expanded panel.
-    const ready = data !== null || error !== null
+    const waitingForFirstDetail = loading || (data === null && error === null)
 
     // The detail lives in an absolutely-positioned virtualized row whose growth a
     // ResizeObserver doesn't report, so re-measure the row from here on every
-    // height change that matters: opening (spinner), the loaded fade-in, and
+    // height change that matters: opening, loading state, loaded details, and
     // unmount (collapse, via the cleanup). `onMeasure` walks up to the row
     // wrapper and writes its real height into the virtualizer.
     React.useLayoutEffect(() => {
@@ -547,13 +543,18 @@ function ExpandedDetail({ requestId, row, onMeasure }: {
         return () => {
             if (wrapper) onMeasure(wrapper)
         }
-    }, [ready, onMeasure])
+    }, [waitingForFirstDetail, data, error, onMeasure])
 
     return (
-        <div ref={rootRef} className={cn(ready && "border-t border-border/50")}>
-            {ready && (
-            <div className="max-h-[55vh] overflow-y-auto overscroll-contain animate-in fade-in-0 duration-300">
+        <div ref={rootRef} className="border-t border-border/50">
+            <div className="max-h-[55vh] overflow-y-auto overscroll-contain animate-in fade-in-0 duration-200">
             <div className="flex flex-col gap-4 px-3 py-3 md:px-4 md:py-4">
+            {waitingForFirstDetail && (
+                <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-background/60 px-3 py-2 text-[12.5px] text-foreground/55">
+                    <Loader2 className="size-3.5 animate-spin" />
+                    Loading request details…
+                </div>
+            )}
             <LogChatTranscript
                 row={row}
                 transcript={data?.transcript ?? null}
@@ -644,19 +645,19 @@ function ExpandedDetail({ requestId, row, onMeasure }: {
                 </div>
             </div>
 
-            <LogFullInput input={data?.input ?? null} />
+            <LogFullInput requestId={requestId} hasInput={data?.hasInput ?? false} />
             </div>
             </div>
-            )}
         </div>
     )
 }
 
-function LogFullInput({ input }: { input: RequestLogInput | null }) {
+function LogFullInput({ requestId, hasInput }: { requestId: string; hasInput: boolean }) {
     const [open, setOpen] = React.useState(false)
-    if (!input || (!input.systemPrompt && input.messages.length === 0)) return null
+    const { input, loading, error } = useRequestInput(requestId, open && hasInput)
+    if (!hasInput) return null
 
-    const count = (input.systemPrompt ? 1 : 0) + input.messages.length
+    const count = input ? (input.systemPrompt ? 1 : 0) + input.messages.length : 0
     return (
         <div className="flex flex-col gap-2">
             <button
@@ -672,7 +673,17 @@ function LogFullInput({ input }: { input: RequestLogInput | null }) {
                         The full payload sent to the provider — system prompt and every message with recalled
                         memories, runtime and attachment context already inlined.
                     </p>
-                    {input.tools.length > 0 && (
+                    {loading && (
+                        <div className="flex items-center gap-2 text-[12px] text-foreground/50">
+                            <Loader2 className="size-3.5 animate-spin" />
+                            Loading exact input…
+                        </div>
+                    )}
+                    {error && <p className="text-[12px] text-destructive">{error}</p>}
+                    {!loading && !error && !input && (
+                        <p className="text-[12px] text-foreground/50">Exact input is unavailable.</p>
+                    )}
+                    {input && input.tools.length > 0 && (
                         <div>
                             <div className="mb-1 text-[10.5px] uppercase tracking-wider text-foreground/45">
                                 Tools exposed ({input.tools.length})
@@ -684,8 +695,8 @@ function LogFullInput({ input }: { input: RequestLogInput | null }) {
                             </div>
                         </div>
                     )}
-                    {input.systemPrompt && <InputBlock label="System prompt" content={input.systemPrompt} />}
-                    {input.messages.map((m, i) => (
+                    {input?.systemPrompt && <InputBlock label="System prompt" content={input.systemPrompt} />}
+                    {input?.messages.map((m, i) => (
                         <InputBlock key={i} label={m.role} content={m.content} attachments={m.attachments} />
                     ))}
                 </div>
@@ -764,31 +775,74 @@ function buildLogAssistantMessage(
         timestamp: row.endedAt ?? row.startedAt,
     })
 
-    if (hasReasoning(base) || !toolLogs?.length) return base
+    return withMissingToolLogReasoning(base, toolLogs)
+}
 
-    const reasoning = toolLogs
-        .filter(tool => tool.errorMessage)
-        .map<ToolCallReasoningEntry>((tool, index) => ({
-            type: "tool_call",
-            id: `log_tool_${tool.id}`,
-            phase: index,
-            toolCallId: `log_tool_${tool.id}`,
-            title: tool.toolName,
-            content: `Error: ${tool.errorMessage}`,
-            toolName: tool.toolName,
-            success: false,
-            status: "error",
-            startedAt: tool.startedAt,
-            endedAt: tool.durationMs === null ? undefined : tool.startedAt + tool.durationMs,
-        }))
-    if (reasoning.length === 0) return base
-    const finalPhase = reasoning.length
+function withMissingToolLogReasoning(message: Message, toolLogs: ToolLogRow[] | null): Message {
+    if (!toolLogs?.length) return message
+    const existing = message.reasoning ?? []
 
-    return {
-        ...base,
-        reasoning,
-        contentSegments: base.content ? [{ phase: finalPhase, content: base.content }] : undefined,
+    if (existing.length === 0) {
+        const reasoning = toolLogs.map((tool, index) => syntheticToolLogReasoning(tool, index, index))
+        return {
+            ...message,
+            reasoning,
+            contentSegments: message.content ? [{ phase: reasoning.length, content: message.content }] : message.contentSegments,
+        }
     }
+
+    const existingCounts = new Map<string, number>()
+    for (const entry of existing) {
+        if (entry.type !== "tool_call") continue
+        const key = toolIdentity(entry.toolName ?? entry.title)
+        existingCounts.set(key, (existingCounts.get(key) ?? 0) + 1)
+    }
+
+    const missing: ToolLogRow[] = []
+    for (const tool of toolLogs) {
+        const key = toolIdentity(tool.toolName)
+        const remaining = existingCounts.get(key) ?? 0
+        if (remaining > 0) {
+            existingCounts.set(key, remaining - 1)
+            continue
+        }
+        missing.push(tool)
+    }
+
+    if (missing.length === 0) return message
+    const phase = finalContentPhase(existing)
+    return {
+        ...message,
+        reasoning: [
+            ...existing,
+            ...missing.map((tool, index) => syntheticToolLogReasoning(tool, index, phase)),
+        ],
+    }
+}
+
+function syntheticToolLogReasoning(tool: ToolLogRow, index: number, phase: number): ToolCallReasoningEntry {
+    return {
+        type: "tool_call",
+        id: `log_tool_fallback_${tool.id}_${index}`,
+        phase,
+        toolCallId: `log_tool_fallback_${tool.id}`,
+        title: tool.toolName,
+        content: tool.errorMessage
+            ? `Error: ${tool.errorMessage}`
+            : [
+                "Logged tool call completed.",
+                "Full tool output was not persisted in this compact trace.",
+            ].join("\n"),
+        toolName: tool.toolName,
+        success: tool.success,
+        status: tool.success ? "ok" : "error",
+        startedAt: tool.startedAt,
+        endedAt: tool.durationMs === null ? undefined : tool.startedAt + tool.durationMs,
+    }
+}
+
+function toolIdentity(value: string | undefined): string {
+    return (value ?? "").trim().toLowerCase()
 }
 
 function ensureRenderableLogContent(message: Message): Message {

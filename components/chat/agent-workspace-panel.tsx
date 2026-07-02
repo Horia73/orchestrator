@@ -150,7 +150,7 @@ export function AgentWorkspacePanel({
       data-agent-scroll-visible={scrollbarVisible.active ? "true" : "false"}
       onScrollCapture={scrollbarVisible.reveal}
     >
-      <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
+      <div className="flex shrink-0 items-center justify-between border-b border-border pr-[calc(1rem+env(safe-area-inset-right))] pl-[calc(1rem+env(safe-area-inset-left))] pt-[calc(0.75rem+env(safe-area-inset-top))] pb-3 md:px-4 md:pt-3">
         <div className="min-w-0">
           <div className="truncate text-[15px] font-medium">
             {agentRoleAndName(run)}

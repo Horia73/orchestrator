@@ -569,6 +569,18 @@ export function getRequestLogInput(requestId: string): RequestLogInput | null {
     return { systemPrompt: row.systemPrompt, messages, tools }
 }
 
+export function hasRequestLogInput(requestId: string): boolean {
+    const row = db
+        .prepare(
+            `SELECT 1 AS present FROM request_log_input
+             WHERE requestId = ?
+               AND (systemPrompt IS NOT NULL OR messages IS NOT NULL OR tools IS NOT NULL)
+             LIMIT 1`
+        )
+        .get(requestId) as { present: number } | undefined
+    return Boolean(row)
+}
+
 function parseJsonArray<T>(value: string | null): T[] | null {
     if (!value) return null
     try {

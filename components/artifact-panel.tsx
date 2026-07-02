@@ -322,7 +322,7 @@ interface PanelHeaderProps {
 
 function PanelHeader({ icon, title, subtitle, actions }: PanelHeaderProps) {
     return (
-        <div className="flex items-center justify-between border-b border-border/40 px-4 py-3 shrink-0 gap-3">
+        <div className="flex items-center justify-between border-b border-border/40 pr-[calc(1rem+env(safe-area-inset-right))] pl-[calc(1rem+env(safe-area-inset-left))] pt-[calc(0.75rem+env(safe-area-inset-top))] pb-3 md:px-4 md:pt-3 shrink-0 gap-3">
             <div className="flex items-center gap-2 min-w-0">
                 {icon}
                 <div className="flex min-w-0 items-baseline gap-2">

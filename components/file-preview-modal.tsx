@@ -37,7 +37,7 @@ interface FilePreviewModalProps {
 function ModalShell({ onClose, children }: { onClose: () => void; children: React.ReactNode }) {
     return (
         <div
-            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 p-2 md:p-3"
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 px-2 pt-[calc(0.5rem+env(safe-area-inset-top))] pb-[calc(0.5rem+env(safe-area-inset-bottom))] md:p-3"
             onClick={onClose}
             role="dialog"
             aria-modal="true"
@@ -191,7 +191,7 @@ export function FilePreviewModal({
     return createPortal(
         <div className="fixed inset-0 z-[100] flex flex-col" onClick={onClose}>
             <div className="absolute inset-0 bg-black/80" />
-            <div className="relative z-10 flex items-center justify-between px-5 py-3 shrink-0" onClick={(e) => e.stopPropagation()}>
+            <div className="relative z-10 flex items-center justify-between pr-[calc(1.25rem+env(safe-area-inset-right))] pl-[calc(1.25rem+env(safe-area-inset-left))] pt-[calc(0.75rem+env(safe-area-inset-top))] pb-3 shrink-0 md:px-5 md:pt-3" onClick={(e) => e.stopPropagation()}>
                 <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-white/90">
                     <span className="truncate max-w-[60vw]">{active.filename}</span>
                     {hasGallery && (

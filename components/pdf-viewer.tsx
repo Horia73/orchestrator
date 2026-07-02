@@ -238,7 +238,7 @@ export function PdfViewer({
     return (
         <section className="flex h-full min-h-0 flex-col bg-pdf-canvas text-pdf-text overflow-hidden rounded-lg" onClick={(e) => e.stopPropagation()}>
             {/* Toolbar */}
-            <header className="flex shrink-0 items-center gap-2 overflow-x-auto border-b border-pdf-border bg-pdf-toolbar px-3 py-2 select-none">
+            <header className="flex shrink-0 items-center gap-2 overflow-x-auto border-b border-pdf-border bg-pdf-toolbar pr-[calc(0.75rem+env(safe-area-inset-right))] pl-[calc(0.75rem+env(safe-area-inset-left))] pt-[calc(0.5rem+env(safe-area-inset-top))] pb-2 select-none md:px-3 md:pt-2">
                 <div className="flex min-w-0 flex-1 items-center gap-2">
                     <button
                         type="button"

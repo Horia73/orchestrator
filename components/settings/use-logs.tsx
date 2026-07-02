@@ -309,6 +309,7 @@ export interface RequestDetail {
     log: RequestLogRow
     toolLogs: ToolLogRow[]
     transcript: RequestLogTranscript | null
+    hasInput: boolean
     input: RequestLogInput | null
 }
 
@@ -352,7 +353,7 @@ export function useRequestDetail(requestId: string | null, options?: { live?: bo
 
         const fetchDetail = (foreground: boolean) => {
             if (foreground) setLoading(true)
-            fetch(`/api/logs/${encodeURIComponent(requestId)}`)
+            fetch(`/api/logs/${encodeURIComponent(requestId)}?includeInput=0`)
                 .then(async res => {
                     if (!res.ok) throw new Error(`Failed (${res.status})`)
                     return res.json() as Promise<RequestDetail>
@@ -393,4 +394,46 @@ export function useRequestDetail(requestId: string | null, options?: { live?: bo
     }, [requestId, live])
 
     return { data, loading, error }
+}
+
+export function useRequestInput(requestId: string, enabled: boolean): {
+    input: RequestLogInput | null
+    loading: boolean
+    error: string | null
+} {
+    const [input, setInput] = React.useState<RequestLogInput | null>(null)
+    const [loading, setLoading] = React.useState(false)
+    const [error, setError] = React.useState<string | null>(null)
+    const loadedForRef = React.useRef<string | null>(null)
+
+    React.useEffect(() => {
+        if (!enabled || loadedForRef.current === requestId) return
+
+        let cancelled = false
+        setLoading(true)
+        fetch(`/api/logs/${encodeURIComponent(requestId)}?includeInput=1`)
+            .then(async res => {
+                if (!res.ok) throw new Error(`Failed (${res.status})`)
+                return res.json() as Promise<RequestDetail>
+            })
+            .then(json => {
+                if (cancelled) return
+                loadedForRef.current = requestId
+                setInput(json.input ?? null)
+                setError(null)
+            })
+            .catch((err: unknown) => {
+                if (cancelled) return
+                setError(err instanceof Error ? err.message : "Unknown error")
+            })
+            .finally(() => {
+                if (!cancelled) setLoading(false)
+            })
+
+        return () => {
+            cancelled = true
+        }
+    }, [requestId, enabled])
+
+    return { input, loading, error }
 }

@@ -9,6 +9,7 @@ import {
   getRequestLogInput,
   getRequestLogReasoning,
   getToolLogsForRequest,
+  hasRequestLogInput,
   queryLogs,
   type FilterOptions,
   type LogsPage,
@@ -26,6 +27,7 @@ export interface ProfiledRequestLogDetail {
   row: ProfiledRequestLogRow
   reasoning: RequestLogReasoning | null
   toolLogs: ToolLogRow[]
+  hasInput: boolean
   input: RequestLogInput | null
 }
 
@@ -87,7 +89,8 @@ export function getFilterOptionsAcrossProfiles(): FilterOptions {
 }
 
 export function getRequestLogDetailAcrossProfiles(
-  requestId: string
+  requestId: string,
+  options: { includeInput?: boolean } = {}
 ): ProfiledRequestLogDetail | null {
   for (const profile of listProfiles({ includeDisabled: true })) {
     const detail = runWithProfileContext(
@@ -95,11 +98,13 @@ export function getRequestLogDetailAcrossProfiles(
       () => {
         const row = getRequestLog(requestId)
         if (!row) return null
+        const hasInput = hasRequestLogInput(requestId)
         return {
           row: withProfile(row, profile),
           reasoning: getRequestLogReasoning(requestId),
           toolLogs: getToolLogsForRequest(requestId),
-          input: getRequestLogInput(requestId),
+          hasInput,
+          input: options.includeInput && hasInput ? getRequestLogInput(requestId) : null,
         }
       }
     )
