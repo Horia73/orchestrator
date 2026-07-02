@@ -11,8 +11,6 @@ import {
   ARTIFACT_PANEL_RESIZE_STEP,
   ARTIFACT_PANEL_RESIZER_WIDTH,
   LAYOUT_TRANSITION,
-  MAX_MOBILE_RESTORE_OLDER_PAGES,
-  MAX_RESTORE_OLDER_PAGES,
   MESSAGE_ANCHOR_SCROLL_DURATION_MS,
   MESSAGE_ANCHOR_TOP_OFFSET,
   MESSAGE_VERTICAL_GAP,
@@ -122,7 +120,17 @@ export function ChatView() {
   const highlightTimeoutRef = React.useRef<number | null>(null)
   const restoreOlderAttemptRef = React.useRef<{
     conversationId: string
-    attempts: number
+    status: "chasing" | "exhausted"
+  } | null>(null)
+  // Bumped when a restore anchor chase settles, so the restore effect re-runs
+  // even if no store flag flips afterwards (found → restore over the loaded
+  // range; exhausted → fall back instead of holding the view hidden forever).
+  const [restoreChaseTick, setRestoreChaseTick] = React.useState(0)
+  // Ref-owned anchor settle loop (see the restore effect). Not cancelled by
+  // effect re-runs — only by a conversation switch or its own completion.
+  const anchorSettleRef = React.useRef<{
+    conversationId: string
+    frameId: number
   } | null>(null)
   const olderLoadAnchorRef = React.useRef<{
     conversationId: string
@@ -426,6 +434,16 @@ export function ChatView() {
     // Mirror a fresh mount for the transient scroll bookkeeping the
     // scroll-restore effect expects clean for a new conversation.
     restoreOlderAttemptRef.current = null
+    if (anchorSettleRef.current) {
+      window.cancelAnimationFrame(anchorSettleRef.current.frameId)
+      anchorSettleRef.current = null
+    }
+    // Entering a conversation must ALWAYS restore — the latch from a previous
+    // stay is stale. Without this, returning to a chat whose successor's
+    // restore never fired (rAF parked in a hidden/backgrounded tab) skipped
+    // the restore entirely and revealed the view at a clamped position.
+    restoredScrollConversationRef.current = null
+    setRestoredScrollConversationId(null)
     olderLoadAnchorRef.current = null
     olderLoadRequestedRef.current = false
     streamingScrollAnchorRef.current = null
@@ -627,28 +645,6 @@ export function ChatView() {
     messageCount,
   ])
 
-  const requestOlderMessagesForRestore = React.useCallback(() => {
-    if (
-      !conversationId ||
-      !hasOlderMessages ||
-      isLoadingOlderMessages ||
-      olderLoadRequestedRef.current
-    ) {
-      return false
-    }
-
-    olderLoadRequestedRef.current = true
-    void loadOlderMessages(conversationId).finally(() => {
-      olderLoadRequestedRef.current = false
-    })
-    return true
-  }, [
-    conversationId,
-    hasOlderMessages,
-    isLoadingOlderMessages,
-    loadOlderMessages,
-  ])
-
   const flushPendingScrollSave = React.useCallback(() => {
     const pending = pendingScrollSaveRef.current
     if (!pending) return
@@ -725,6 +721,10 @@ export function ChatView() {
     const conversationId = activeIdRef.current
     const element = scrollContainerRef.current
     if (!conversationId || !element) return false
+    // Mid-restore (chase/settle) the layout is transient — flushing it here
+    // (pagehide while the view is still settling) would overwrite the real
+    // saved position that restore is still trying to reach.
+    if (restoredScrollConversationRef.current !== conversationId) return false
     if (
       element.scrollHeight <= element.clientHeight ||
       !element.querySelector('[id^="message-"]')
@@ -840,7 +840,16 @@ export function ChatView() {
     lastDistanceFromBottomRef.current = distanceFromBottom
     const isPinnedToBottom = distanceFromBottom <= STICKY_BOTTOM_THRESHOLD
 
-    if (activeIdRef.current && !ignoreSyncRef.current) {
+    if (
+      activeIdRef.current &&
+      !ignoreSyncRef.current &&
+      // Until this conversation's initial restore has completed, passive
+      // scroll events are clamp/layout noise from pages prepending and the
+      // view settling — persisting them would overwrite the REAL saved
+      // position with a mid-restore snapshot (which is how long
+      // conversations used to lose their spot).
+      restoredScrollConversationRef.current === activeIdRef.current
+    ) {
       // Guard against the browser triggering passive layout-shift scroll events
       // when the container height is tiny or still rendering, which was poisoning the cache with `0`.
       if (element.scrollHeight > element.clientHeight) {
@@ -998,10 +1007,14 @@ export function ChatView() {
       messageTopAnchorStartedAtRef.current = 0
       let attempts = 0
       let animationStarted = false
+      // rAF callbacks queued while the tab is hidden fire on the first frame
+      // after the user returns — a smooth scroll scheduled in the background
+      // would play as a visible animation right at that moment. Snap instead.
+      const scheduledWhileHidden = document.visibilityState === "hidden"
       const run = () => {
         const didStart = scrollMessageToTop(
           messageId,
-          animationStarted ? "auto" : "smooth"
+          animationStarted || scheduledWhileHidden ? "auto" : "smooth"
         )
 
         if (!didStart && attempts < 120) {
@@ -1869,6 +1882,10 @@ export function ChatView() {
       return
     }
 
+    // An anchor-settle loop from this conversation's restore is still running;
+    // it owns the restore and sets the latch once the layout reads stable.
+    if (anchorSettleRef.current?.conversationId === conversationId) return
+
     ignoreSyncRef.current = true
     setIsRestoringScroll(true)
     setScrollButtonVisible(false)
@@ -1927,24 +1944,46 @@ export function ChatView() {
       savedAnchor &&
       !document.getElementById(`message-${savedAnchor.messageId}`)
     ) {
-      const previousAttempt = restoreOlderAttemptRef.current
-      const attempts =
-        previousAttempt?.conversationId === conversationId
-          ? previousAttempt.attempts
-          : 0
-
-      if (isLoadingOlderMessages || olderLoadRequestedRef.current) return
-      const maxRestoreOlderPages = isMobile
-        ? MAX_MOBILE_RESTORE_OLDER_PAGES
-        : MAX_RESTORE_OLDER_PAGES
-      if (hasOlderMessages && attempts < maxRestoreOlderPages) {
-        restoreOlderAttemptRef.current = {
-          conversationId,
-          attempts: attempts + 1,
+      // The anchor message is older than the loaded page. Chase it with the
+      // shared largest-page loader (bounded internally), then re-run this
+      // effect and restore over the fully loaded range. The view stays hidden
+      // the whole time (isAwaitingInitialScrollRestore), so the user sees a
+      // single fade-in at the final position instead of paging jumps. Same
+      // budget on mobile and desktop — giving up early is what used to lose
+      // the reading position on long conversations.
+      const chase = restoreOlderAttemptRef.current
+      const exhausted =
+        chase?.conversationId === conversationId &&
+        chase.status === "exhausted"
+      if (!exhausted) {
+        if (
+          chase?.conversationId === conversationId ||
+          isLoadingOlderMessages ||
+          olderLoadRequestedRef.current
+        ) {
+          return
         }
-        requestOlderMessagesForRestore()
-        return
+        if (hasOlderMessages) {
+          const anchorMessageId = savedAnchor.messageId
+          restoreOlderAttemptRef.current = { conversationId, status: "chasing" }
+          void loadMessagesUntilPresent(conversationId, anchorMessageId).then(
+            (found) => {
+              if (
+                restoreOlderAttemptRef.current?.conversationId !==
+                conversationId
+              ) {
+                return
+              }
+              restoreOlderAttemptRef.current = found
+                ? null
+                : { conversationId, status: "exhausted" }
+              setRestoreChaseTick((tick) => tick + 1)
+            }
+          )
+          return
+        }
       }
+      // Exhausted or no more history: fall through to the fallback restore.
     }
 
     if (bottomSettleFrameIdRef.current !== null) {
@@ -2011,14 +2050,84 @@ export function ChatView() {
 
       element.scrollTop = targetScrollTop
       lastObservedScrollTopRef.current = element.scrollTop
+      const settleAnchorTarget =
+        !shouldRestoreBottom && anchorScrollTop != null ? savedAnchor : null
       if (shouldRestoreBottom) {
         bottomSettleFrameIdRef.current = window.requestAnimationFrame(() =>
           settleBottom(3)
         )
+        restoredScrollConversationRef.current = conversationId
+        setRestoredScrollConversationId(conversationId)
+      } else if (settleAnchorTarget) {
+        // Late reflows (fonts settling, "Show more" clamps, deferred blocks,
+        // width changes) keep shifting the content above the anchor after
+        // this first placement, drifting the restored position by hundreds of
+        // pixels. Hold the reveal (latch stays unset, so the list stays
+        // hidden) and re-derive the anchor position every frame until it
+        // reads stable for a few consecutive frames — one fade-in, at the
+        // settled spot. The loop is ref-owned so effect re-runs (e.g.
+        // hasOlderMessages flipping right after a chase) can't cancel it
+        // mid-flight; it self-terminates on conversation switch or unmount.
+        const anchor = settleAnchorTarget
+        let framesLeft = 30
+        let stableFrames = 0
+        const tick = () => {
+          const settleElement = scrollContainerRef.current
+          if (!settleElement || activeIdRef.current !== conversationId) {
+            anchorSettleRef.current = null
+            ignoreSyncRef.current = false
+            return
+          }
+          // Re-assert the sync hold every tick: an effect re-run's cleanup
+          // may have dropped it, and a save fired off a mid-settle layout
+          // would overwrite the real saved anchor with garbage.
+          ignoreSyncRef.current = true
+          const anchorElementNow = document.getElementById(
+            `message-${anchor.messageId}`
+          )
+          const offsetNow = anchorElementNow
+            ? anchorElementNow.getBoundingClientRect().top -
+              settleElement.getBoundingClientRect().top
+            : null
+          if (offsetNow != null && Math.abs(offsetNow - anchor.offset) <= 1) {
+            stableFrames += 1
+          } else {
+            stableFrames = 0
+            restoreScrollAnchor(anchor)
+            lastObservedScrollTopRef.current = settleElement.scrollTop
+          }
+          framesLeft -= 1
+          if (stableFrames >= 3 || framesLeft <= 0) {
+            anchorSettleRef.current = null
+            restoredScrollConversationRef.current = conversationId
+            setRestoredScrollConversationId(conversationId)
+            ignoreSyncRef.current = false
+            setIsRestoringScroll(false)
+            saveScrollAnchor()
+            syncScrollState()
+            return
+          }
+          anchorSettleRef.current = {
+            conversationId,
+            frameId: window.requestAnimationFrame(tick),
+          }
+        }
+        anchorSettleRef.current = {
+          conversationId,
+          frameId: window.requestAnimationFrame(tick),
+        }
+      } else {
+        restoredScrollConversationRef.current = conversationId
+        setRestoredScrollConversationId(conversationId)
       }
-      restoredScrollConversationRef.current = conversationId
-      setRestoredScrollConversationId(conversationId)
       restoreOlderAttemptRef.current = null
+      if (settleAnchorTarget) {
+        // The settle loop owns the rest: it keeps the sync hold, and only
+        // once the anchor position reads stable does it reveal + persist.
+        // Saving here would snapshot a mid-reflow layout over the user's
+        // real position.
+        return
+      }
       ignoreSyncRef.current = false
       if (!shouldPinBottom) setIsRestoringScroll(false)
       saveScrollAnchor()
@@ -2039,9 +2148,10 @@ export function ChatView() {
     conversationId,
     hasOlderMessages,
     isLoadingOlderMessages,
-    isMobile,
+    loadMessagesUntilPresent,
     messageCount,
-    requestOlderMessagesForRestore,
+    restoreChaseTick,
+    restoreScrollAnchor,
     saveScrollAnchor,
     setScrollButtonVisible,
     syncScrollState,
@@ -2200,7 +2310,21 @@ export function ChatView() {
 
             autoScrollEnabledRef.current = false
             followStreamingRef.current = false
-            scheduleMessageTopAnchor(lastMsg.id)
+            // This fallback only runs for out-of-band stream starts (another
+            // device/surface, a scheduled run, or a stream that began while
+            // this tab was away) — a local send consumed its submit anchor
+            // above. Only pin the user message to the top when the user was
+            // already reading at the bottom; otherwise honor the restored
+            // position instead of yanking the view with an animated scroll
+            // the moment they return.
+            const container = scrollContainerRef.current
+            const nearBottom =
+              !container ||
+              container.scrollHeight -
+                container.scrollTop -
+                container.clientHeight <=
+                STICKY_BOTTOM_THRESHOLD
+            if (nearBottom) scheduleMessageTopAnchor(lastMsg.id)
           } else if (
             isAssistantMessageInProgress(lastMsg) &&
             hasAssistantProgress(lastMsg) &&
