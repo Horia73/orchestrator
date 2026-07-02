@@ -1,6 +1,6 @@
 import type { Message } from '@/lib/types'
-import type { RequestLogRow } from '@/lib/observability/schema'
-import { normalizeLogTranscriptForPreview } from '@/lib/observability/log-transcript'
+import type { RequestLogRow, ToolLogRow } from '@/lib/observability/schema'
+import { normalizeLogTranscriptForPreview, withMissingToolLogReasoning } from '@/lib/observability/log-transcript'
 
 let failures = 0
 
@@ -91,6 +91,69 @@ check(
     streaming?.assistantMessage.content === mixedThreadTranscript.assistantMessage.content,
     streaming?.assistantMessage
 )
+
+const toolLogs = [
+    {
+        id: 1,
+        requestId: row.id,
+        toolName: 'Read',
+        success: true,
+        startedAt: 1_200,
+        durationMs: 25,
+        errorMessage: null,
+    },
+    {
+        id: 2,
+        requestId: row.id,
+        toolName: 'Bash',
+        success: true,
+        startedAt: 1_300,
+        durationMs: 50,
+        errorMessage: null,
+    },
+] satisfies ToolLogRow[]
+
+const synthesized = withMissingToolLogReasoning({
+    id: 'assistant_without_reasoning',
+    role: 'assistant',
+    content: 'final answer',
+    timestamp: 2_000,
+}, toolLogs)
+
+check('missing reasoning synthesizes every tool log', synthesized.reasoning?.length === 2, synthesized.reasoning)
+check(
+    'synthesized tool logs keep final answer after tool phases',
+    synthesized.contentSegments?.[0]?.phase === 2 && synthesized.contentSegments[0]?.content === 'final answer',
+    synthesized.contentSegments
+)
+check(
+    'synthesized successful tool logs explain compact output',
+    synthesized.reasoning?.every(entry => entry.type !== 'tool_call' || entry.content.includes('Full tool output was not persisted')),
+    synthesized.reasoning
+)
+
+const partialSource = {
+    id: 'assistant_with_one_tool',
+    role: 'assistant',
+    content: 'final answer',
+    timestamp: 2_000,
+    reasoning: [{
+        type: 'tool_call',
+        id: 'existing_read',
+        phase: 0,
+        toolCallId: 'existing_read',
+        title: 'Read',
+        content: 'already persisted',
+        toolName: 'Read',
+        success: true,
+        status: 'ok',
+    }],
+    contentSegments: [{ phase: 1, content: 'final answer' }],
+} satisfies Message
+
+const partial = withMissingToolLogReasoning(partialSource, toolLogs)
+check('partial reasoning appends only missing tool logs', partial.reasoning?.length === 2, partial.reasoning)
+check('partial reasoning preserves existing tool entry', partial.reasoning?.[0]?.id === 'existing_read', partial.reasoning)
 
 if (failures > 0) process.exit(1)
 console.log('Logs transcript smoke passed.')

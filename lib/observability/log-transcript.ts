@@ -1,5 +1,5 @@
-import type { ContentSegment, Message } from '@/lib/types'
-import type { RequestLogRow } from './schema'
+import type { ContentSegment, Message, ToolCallReasoningEntry } from '@/lib/types'
+import type { RequestLogRow, ToolLogRow } from './schema'
 
 export type RequestLogTranscript = {
     userMessage: Message | null
@@ -22,6 +22,73 @@ export function normalizeLogTranscriptForPreview(
         userMessage: messageFromLogInput(log) ?? transcript?.userMessage ?? null,
         assistantMessage: messageFromLogOutput(log, transcript?.assistantMessage ?? null),
     }
+}
+
+export function withMissingToolLogReasoning(message: Message, toolLogs: ToolLogRow[] | null): Message {
+    if (!toolLogs?.length) return message
+    const existing = message.reasoning ?? []
+
+    if (existing.length === 0) {
+        const reasoning = toolLogs.map((tool, index) => syntheticToolLogReasoning(tool, index, index))
+        return {
+            ...message,
+            reasoning,
+            contentSegments: message.content ? [{ phase: reasoning.length, content: message.content }] : message.contentSegments,
+        }
+    }
+
+    const existingCounts = new Map<string, number>()
+    for (const entry of existing) {
+        if (entry.type !== 'tool_call') continue
+        const key = toolIdentity(entry.toolName ?? entry.title)
+        existingCounts.set(key, (existingCounts.get(key) ?? 0) + 1)
+    }
+
+    const missing: ToolLogRow[] = []
+    for (const tool of toolLogs) {
+        const key = toolIdentity(tool.toolName)
+        const remaining = existingCounts.get(key) ?? 0
+        if (remaining > 0) {
+            existingCounts.set(key, remaining - 1)
+            continue
+        }
+        missing.push(tool)
+    }
+
+    if (missing.length === 0) return message
+    const phase = finalContentPhase(existing)
+    return {
+        ...message,
+        reasoning: [
+            ...existing,
+            ...missing.map((tool, index) => syntheticToolLogReasoning(tool, index, phase)),
+        ],
+    }
+}
+
+function syntheticToolLogReasoning(tool: ToolLogRow, index: number, phase: number): ToolCallReasoningEntry {
+    return {
+        type: 'tool_call',
+        id: `log_tool_fallback_${tool.id}_${index}`,
+        phase,
+        toolCallId: `log_tool_fallback_${tool.id}`,
+        title: tool.toolName,
+        content: tool.errorMessage
+            ? `Error: ${tool.errorMessage}`
+            : [
+                'Logged tool call completed.',
+                'Full tool output was not persisted in this compact trace.',
+            ].join('\n'),
+        toolName: tool.toolName,
+        success: tool.success,
+        status: tool.success ? 'ok' : 'error',
+        startedAt: tool.startedAt,
+        endedAt: tool.durationMs === null ? undefined : tool.startedAt + tool.durationMs,
+    }
+}
+
+function toolIdentity(value: string | undefined): string {
+    return (value ?? '').trim().toLowerCase()
 }
 
 function messageFromLogInput(log: RequestLogRow): Message | null {
