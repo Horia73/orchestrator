@@ -40,12 +40,14 @@ import type {
     WAMessageContent,
     WAMessageKey,
     WASocket,
+    WAVersion,
 } from 'baileys'
 
 const QR_TTL_MS = 60_000
 const READY_WAIT_TIMEOUT_MS = 120_000
 const DEFAULT_OPERATION_TIMEOUT_MS = 30_000
 const MEDIA_DOWNLOAD_TIMEOUT_MS = 60_000
+const WA_WEB_VERSION_TIMEOUT_MS = 5_000
 const FIND_MESSAGES_DEFAULT_MAX_RESULTS = 20
 const FIND_MESSAGES_MAX_RESULTS = 75
 const FIND_MESSAGES_DEFAULT_MAX_MESSAGES = 500
@@ -568,8 +570,10 @@ export class BaileysWhatsAppManager {
         this.saveCreds = auth.saveCreds
         this.state.phase = 'starting'
         this.state.lastError = null
+        const waWebVersion = await this.resolveWaWebVersion(baileys)
 
         const socket = baileys.makeWASocket({
+            ...(waWebVersion ? { version: waWebVersion } : {}),
             auth: auth.state,
             browser: baileys.Browsers.ubuntu('Orchestrator'),
             logger: nullLogger,
@@ -983,6 +987,26 @@ export class BaileysWhatsAppManager {
         if (!this.baileys) this.baileys = await import('baileys')
         return this.baileys
     }
+
+    private async resolveWaWebVersion(baileys: BaileysModule): Promise<WAVersion | undefined> {
+        try {
+            const result = await withTimeout(
+                baileys.fetchLatestWaWebVersion(),
+                WA_WEB_VERSION_TIMEOUT_MS,
+                'WhatsApp Web version lookup timed out.'
+            )
+            if (result.error || !isWaVersion(result.version)) return undefined
+            return result.version
+        } catch {
+            return undefined
+        }
+    }
+}
+
+function isWaVersion(value: unknown): value is WAVersion {
+    return Array.isArray(value)
+        && value.length === 3
+        && value.every(part => Number.isInteger(part) && part >= 0)
 }
 
 function authBaseDir(): string {
