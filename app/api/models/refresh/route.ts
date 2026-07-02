@@ -9,7 +9,8 @@ import {
 } from '@/lib/models/registry'
 import { readLiveRegistry, writeLiveRegistry } from '@/lib/models/store'
 import { fetchGoogleModels, fetchLMStudioModels, fetchOpenRouterModels } from '@/lib/models/fetcher'
-import { probeClaudeCodeModels, type ClaudeModelProbeKey, type ClaudeResolvedModel } from '@/lib/cli/model-probe'
+import { probeClaudeCodeModels, type ClaudeResolvedModel } from '@/lib/cli/model-probe'
+import type { LiveModelEntry } from '@/lib/models/schema'
 import { runWithAdminCookieProfile } from "@/lib/profiles/server"
 import { LM_STUDIO_API_KEY_ENV } from '@/lib/lm-studio'
 
@@ -27,44 +28,55 @@ interface ProviderRefreshResult {
     skipped?: 'no_api_key' | 'no_base_url' | 'not_implemented'
 }
 
-// Claude Code's picker entries are curated in seed.json keyed by the CLI's own
-// aliases. We can't list models from the CLI, but we can resolve each selector
-// entry to the concrete model id Claude Code reports and keep the labels honest.
-const CLAUDE_MODEL_LABELS: Array<{
-    modelId: string
-    probeKey: ClaudeModelProbeKey
-    label: (model: ClaudeResolvedModel) => string
-}> = [
-    { modelId: 'default', probeKey: 'default', label: model => `Default (${model.name})` },
-    { modelId: 'opus[1m]', probeKey: 'opus[1m]', label: model => model.name },
-    { modelId: 'sonnet', probeKey: 'sonnet', label: model => model.name },
-    { modelId: 'sonnet[1m]', probeKey: 'sonnet[1m]', label: model => model.name },
-    { modelId: 'haiku', probeKey: 'haiku', label: model => model.name },
-]
-
 /**
- * Relabel the existing claude-code entries to the names the CLI currently
- * resolves, and auto-unarchive any whose name changed (the user archives
- * entries that have gone stale, so a model bump should bring the affected ones
- * back). Entries whose label is unchanged are left exactly as the user left
- * them (archived stays archived).
- * Returns how many entries we relabeled+unarchived.
+ * Sync the claude-code entries from the CLI probe:
+ *
+ *   • Aliases that already exist in the registry are relabelled to the name
+ *     the CLI currently resolves, and auto-unarchived when the name changed
+ *     (the user archives entries that went stale, so a model bump should
+ *     bring the affected ones back). Unchanged entries are left exactly as
+ *     the user left them (archived stays archived).
+ *   • Aliases the registry has never seen (a brand-new model family the CLI
+ *     documents, e.g. `fable`) get a live-registry entry — the effective
+ *     registry grows from live under an existing seed provider. Pricing is
+ *     `subscription` (it's the CLI plan); context window and the rest stay
+ *     unset so the research flow can fill them in.
+ *
+ * Existing live entries are never dropped on probe failure — a flaky or
+ * logged-out CLI must not empty the picker. Returns how many entries changed.
  */
-function syncClaudeCodeModelLabels(models: Record<ClaudeModelProbeKey, ClaudeResolvedModel | null>): number {
+function syncClaudeCodeModels(
+    probed: Record<string, ClaudeResolvedModel | null>,
+    liveModels: Record<string, LiveModelEntry>
+): number {
     let changed = 0
-    for (const { modelId, probeKey, label } of CLAUDE_MODEL_LABELS) {
-        const resolved = models[probeKey]
+    for (const [alias, resolved] of Object.entries(probed)) {
         if (!resolved) continue
-        const model = getEffectiveModel('claude-code', modelId)
-        if (!model) continue
+        const freshLabel = alias === 'default' ? `Default (${resolved.name})` : resolved.name
 
-        const freshLabel = label(resolved)
-        // The live label isn't reflected in the current label → it changed
-        // (or was never set). Relabel and bring the entry back into the picker.
-        if (model.name !== freshLabel) {
-            patchCuratedModel('claude-code', modelId, { displayNameOverride: freshLabel, archived: false })
-            changed++
+        const existing = getEffectiveModel('claude-code', alias)
+        if (existing) {
+            // The live label isn't reflected in the current label → it changed
+            // (or was never set). Relabel and bring the entry back into the picker.
+            if (existing.name !== freshLabel) {
+                patchCuratedModel('claude-code', alias, { displayNameOverride: freshLabel, archived: false })
+                changed++
+            }
+            if (liveModels[alias]) {
+                liveModels[alias] = { ...liveModels[alias], name: freshLabel }
+            }
+            continue
         }
+
+        liveModels[alias] = {
+            name: freshLabel,
+            pricing: { kind: 'subscription' },
+            thinkingLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+            defaultThinkingLevel: 'high',
+            capabilities: ['text', 'function_calling'],
+            rawDescription: `Discovered from \`claude --model ${alias}\` (resolves to ${resolved.id}).`,
+        }
+        changed++
     }
     return changed
 }
@@ -126,18 +138,20 @@ export async function POST() {
         }
 
         // ---------- Claude Code (CLI) ----------
-        // No model-list API — probe the selector entries for the concrete model
-        // each resolves to, then relabel existing seed entries and unarchive any
-        // whose label changed. We never invent new models; the set mirrors
-        // `claude /models`. Also purge any stale live entries a former probe
-        // experiment wrote.
-        for (const cliProvider of ['claude-code', 'codex']) {
-            if (live.providers[cliProvider]) delete live.providers[cliProvider]
-        }
+        // No model-list API — discover the CLI's documented `--model` aliases
+        // (plus every claude-code entry already in the registry), resolve each
+        // to the concrete model id the CLI reports, then relabel existing
+        // entries and add live entries for new families (see
+        // syncClaudeCodeModels). Codex still has no list surface — purge any
+        // stale live entries a former probe experiment wrote.
+        if (live.providers.codex) delete live.providers.codex
         try {
-            const models = await probeClaudeCodeModels()
-            if (Object.values(models).some(Boolean)) {
-                const synced = syncClaudeCodeModelLabels(models)
+            const knownAliases = Object.keys(getEffectiveRegistry()['claude-code']?.models ?? {})
+            const probed = await probeClaudeCodeModels(knownAliases)
+            if (Object.values(probed).some(Boolean)) {
+                const liveModels = { ...(live.providers['claude-code']?.models ?? {}) }
+                const synced = syncClaudeCodeModels(probed, liveModels)
+                live.providers['claude-code'] = { fetchedAt: Date.now(), models: liveModels }
                 results['claude-code'] = { fetched: synced }
             } else {
                 results['claude-code'] = { fetched: 0, skipped: 'not_implemented' }

@@ -76,7 +76,7 @@ const CLAUDE_USAGE_TIMEOUT_MS = 30_000
 const CLAUDE_USAGE_RETRY_DELAY_MS = 500
 const CLAUDE_USAGE_HOST_BRIDGE_TIMEOUT_MS = 35_000
 const CLAUDE_API_BILLING_USAGE_ERROR =
-    'Claude /usage only reported session cost/activity and did not expose subscription quota windows. This usually means Claude Code is using API Usage Billing or has no plan quotas to show.'
+    'Claude Code is running on API-key billing here (the /usage panel shows no plan quota windows), so there is no subscription gauge to read.'
 
 interface ClaudeUsageRaw {
     /** Cleaned-up plain text of the /usage panel. */
@@ -262,7 +262,18 @@ async function captureClaudeUsagePanel(): Promise<ClaudeUsageRaw | { error: stri
                     finish({ text: cleanedSoFar, raw: cleanedSoFar })
                     return
                 }
-                if (isClaudeApiUsageBillingText(cleanedSoFar) && idleMs > 1200) {
+                // Since Claude 2.1.x, /usage opens a tabbed panel whose tab bar
+                // ("… Usage Stats") and session-cost section render on
+                // subscription accounts too — sometimes before the quota
+                // windows load. Only the welcome-banner billing mode
+                // ("· API Usage Billing") reliably distinguishes an account
+                // that will never show plan quotas, so gate on it: otherwise
+                // keep waiting for the quota windows until the timeout.
+                if (
+                    claudeUsageHeaderShowsApiBilling(cleanedSoFar)
+                    && isClaudeApiUsageBillingText(cleanedSoFar)
+                    && idleMs > 1200
+                ) {
                     finish({ error: CLAUDE_API_BILLING_USAGE_ERROR })
                     return
                 }
@@ -375,8 +386,13 @@ export function isClaudeApiUsageBillingText(text: string): boolean {
         && !hasClaudeUsageQuota(text)
 }
 
-function isClaudeApiUsageBillingError(error: string): boolean {
-    return error.includes(CLAUDE_API_BILLING_USAGE_ERROR)
+/**
+ * The welcome banner prints the billing mode next to the model name
+ * ("Opus 4.8 · API Usage Billing"). The TUI's absolute positioning sometimes
+ * swallows the spaces after ANSI stripping, hence \s*.
+ */
+export function claudeUsageHeaderShowsApiBilling(text: string): boolean {
+    return /API\s*Usage\s*Billing/i.test(text)
 }
 
 /**
@@ -576,75 +592,69 @@ function nowDayInTz(tz: string, when: Date): number {
 }
 
 /**
- * One actual read of the Claude /usage panel. In Docker we try the host bridge
- * first (for deployments where claude is installed on the host), then fall back
- * to scraping claude *inside the container* — which is where the binary and the
- * user's subscription login live on container installs, so the host bridge is
- * a no-op there. Always run via getClaudeCodeQuota(), never directly: this can
+ * One actual read of the Claude /usage panel. The CLI login the chat path
+ * actually consumes lives with the claude binary the app itself spawns (on
+ * Docker installs: inside the container), so that is the quota source of
+ * truth and gets scraped first. The token-protected host bridge remains as a
+ * fallback for Docker deployments where the subscription login only exists on
+ * the host. Always run via getClaudeCodeQuota(), never directly: this can
  * take 5-10s+ and must not block the request thread (see the cache below).
  */
 async function scrapeClaudeCodeQuota(): Promise<CliQuotaSnapshot> {
     const fetchedAt = Date.now()
     const runningInDocker = process.env.ORCHESTRATOR_SERVICE_MANAGER === 'docker'
-    let captured: ClaudeUsageRaw | { error: string } | null = null
-    let source: CliQuotaSnapshot['source'] = 'tui'
 
+    // ---- 1. Scrape the CLI the app spawns (the login chat consumes). ----
+    const status = await getClaudeStatusForUsage()
+    const statusError = claudeStatusError(status)
+    let local: ClaudeUsageRaw | { error: string } | null = null
+    if (!statusError) {
+        local = await captureClaudeUsagePanel()
+        if ('error' in local && local.error.includes('Timed out')) {
+            await sleep(CLAUDE_USAGE_RETRY_DELAY_MS)
+            local = await captureClaudeUsagePanel()
+        }
+        if (!('error' in local)) {
+            const snapshot = snapshotFromUsagePanel(local.text, 'tui', fetchedAt)
+            if (snapshot) return snapshot
+            local = { error: 'Couldn\'t parse the /usage panel — claude\'s output may have changed.' }
+        }
+    }
+
+    // ---- 2. Docker fallback: the host bridge, for installs where the ----
+    // ---- subscription login lives on the host instead of in the container.
+    let bridged: ClaudeUsageRaw | { error: string } | null = null
     if (runningInDocker) {
-        captured = await captureClaudeUsagePanelFromHostBridge()
-        if (captured && !('error' in captured)) source = 'host-bridge'
-    }
-
-    if (!captured || 'error' in captured) {
-        if (captured && isClaudeApiUsageBillingError(captured.error)) {
-            return {
-                cliId: 'claude-code',
-                available: false,
-                error: CLAUDE_API_BILLING_USAGE_ERROR,
-                source,
-                fetchedAt,
-            }
-        }
-        const status = await getClaudeStatusForUsage()
-        const statusError = claudeStatusError(status)
-        if (statusError) {
-            return {
-                cliId: 'claude-code',
-                available: false,
-                error: withBridgeError(statusError, captured),
-                source: 'none',
-                fetchedAt,
-            }
+        bridged = await captureClaudeUsagePanelFromHostBridge()
+        if (bridged && !('error' in bridged)) {
+            const snapshot = snapshotFromUsagePanel(bridged.text, 'host-bridge', fetchedAt)
+            if (snapshot) return snapshot
+            bridged = { error: 'Couldn\'t parse the host /usage panel — claude\'s output may have changed.' }
         }
     }
 
-    if (!captured || 'error' in captured) {
-        captured = await captureClaudeUsagePanel()
-        source = 'tui'
+    // ---- 3. Nothing yielded quota — compose the most actionable error. ----
+    const parts = [
+        statusError,
+        local && 'error' in local ? local.error : null,
+        bridged && 'error' in bridged ? `Host bridge fallback: ${bridged.error}` : null,
+    ].filter(Boolean)
+    return {
+        cliId: 'claude-code',
+        available: false,
+        error: parts.join(' ') || 'Failed to read Claude usage.',
+        source: 'none',
+        fetchedAt,
     }
-    if ('error' in captured && captured.error.includes('Timed out')) {
-        await sleep(CLAUDE_USAGE_RETRY_DELAY_MS)
-        captured = await captureClaudeUsagePanel()
-    }
-    if ('error' in captured) {
-        return {
-            cliId: 'claude-code',
-            available: false,
-            error: captured.error,
-            source,
-            fetchedAt,
-        }
-    }
+}
 
-    const parsed = parseClaudeUsageText(captured.text)
-    if (!parsed.fiveHour && !parsed.weekly) {
-        return {
-            cliId: 'claude-code',
-            available: false,
-            error: 'Couldn\'t parse the /usage panel — claude\'s output may have changed.',
-            source,
-            fetchedAt,
-        }
-    }
+function snapshotFromUsagePanel(
+    text: string,
+    source: CliQuotaSnapshot['source'],
+    fetchedAt: number
+): CliQuotaSnapshot | null {
+    const parsed = parseClaudeUsageText(text)
+    if (!parsed.fiveHour && !parsed.weekly) return null
     return {
         cliId: 'claude-code',
         available: true,
@@ -756,11 +766,6 @@ function claudeStatusError(status: Awaited<ReturnType<typeof getClaudeStatusForU
             : 'Claude Code CLI is installed but not logged in.'
     }
     return null
-}
-
-function withBridgeError(message: string, captured: ClaudeUsageRaw | { error: string } | null): string {
-    if (!captured || !('error' in captured)) return message
-    return `${message} Host bridge error: ${captured.error}`
 }
 
 function sleep(ms: number): Promise<void> {

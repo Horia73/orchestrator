@@ -53,9 +53,13 @@ ROLLBACK_STATE_PATH = Path(
 )
 CLAUDE_USAGE_TIMEOUT_SECONDS = float(os.environ.get("ORCHESTRATOR_CLAUDE_USAGE_TIMEOUT_SECONDS", "30"))
 CLAUDE_API_BILLING_USAGE_ERROR = (
-    "Claude /usage only reported session cost/activity and did not expose subscription "
-    "quota windows. This usually means Claude Code is using API Usage Billing or has no "
-    "plan quotas to show."
+    "The host claude is running on API-key billing (its /usage panel shows no plan "
+    "quota windows), so the host fallback has no subscription gauge to read."
+)
+CLAUDE_LOGGED_OUT_USAGE_ERROR = (
+    "The host claude is logged out (its OAuth credentials are empty). The app reads "
+    "usage from its own CLI login first, so this fallback only matters when that "
+    "login is unavailable — run `claude` on the host and use /login to restore it."
 )
 CLAUDE_USAGE_CWD = Path(
     os.environ.get("ORCHESTRATOR_CLAUDE_USAGE_CWD", str(Path.home() / ".orchestrator" / "claude-usage-cwd"))
@@ -396,6 +400,31 @@ def is_claude_api_usage_billing(value: str) -> bool:
     )
 
 
+def claude_header_shows_api_billing(value: str) -> bool:
+    # The welcome banner prints the billing mode next to the model name
+    # ("Opus 4.8 · API Usage Billing"). The TUI's absolute positioning sometimes
+    # swallows the spaces after ANSI stripping, hence \s*.
+    return re.search(r"API\s*Usage\s*Billing", value, re.IGNORECASE) is not None
+
+
+def claude_login_state() -> str:
+    """Best-effort read of the host claude OAuth state: 'ok', 'logged_out', or
+    'unknown' (missing/unreadable file — do not block the scrape on it)."""
+    creds_path = Path.home() / ".claude" / ".credentials.json"
+    try:
+        data = json.loads(creds_path.read_text(encoding="utf-8"))
+    except Exception:
+        return "unknown"
+    oauth = data.get("claudeAiOauth")
+    if not isinstance(oauth, dict):
+        return "unknown"
+    access = str(oauth.get("accessToken") or "").strip()
+    refresh = str(oauth.get("refreshToken") or "").strip()
+    if not access and not refresh:
+        return "logged_out"
+    return "ok"
+
+
 def terminate_process(proc: subprocess.Popen) -> None:
     if proc.poll() is not None:
         return
@@ -425,6 +454,8 @@ def capture_claude_usage() -> dict:
     proc: Optional[subprocess.Popen] = None
     try:
         claude_bin = resolve_claude_bin()
+        if claude_login_state() == "logged_out":
+            return {"ok": False, "error": CLAUDE_LOGGED_OUT_USAGE_ERROR}
         ensure_claude_usage_workspace()
         master_fd, slave_fd = pty.openpty()
         fcntl_winsize(slave_fd, rows=50, cols=140)
@@ -489,7 +520,17 @@ def capture_claude_usage() -> dict:
             if phase == "wait-panel" and has_claude_usage_quota(cleaned) and idle > 1.2:
                 return {"ok": True, "text": cleaned, "raw": cleaned, "fetchedAt": int(time.time() * 1000)}
 
-            if phase == "wait-panel" and is_claude_api_usage_billing(cleaned) and idle > 1.2:
+            # Since Claude 2.1.x, /usage opens a tabbed panel whose tab bar
+            # ("… Usage Stats") and session-cost section render on subscription
+            # accounts too — sometimes before the quota windows load. Only the
+            # welcome-banner billing mode reliably marks an account that will
+            # never show plan quotas; otherwise keep waiting until the timeout.
+            if (
+                phase == "wait-panel"
+                and claude_header_shows_api_billing(cleaned)
+                and is_claude_api_usage_billing(cleaned)
+                and idle > 1.2
+            ):
                 return {"ok": False, "error": CLAUDE_API_BILLING_USAGE_ERROR}
 
             if proc.poll() is not None:
