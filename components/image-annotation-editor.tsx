@@ -1355,10 +1355,6 @@ export function ImageAnnotationEditor({
 
       if (interaction.kind === "draw") {
         const mark = interaction.mark
-        if (mark.kind === "path" && mark.points.length < 2) {
-          drawAll()
-          return
-        }
         if (
           mark.kind === "shape" &&
           distance(mark.start, mark.end) < mark.size * 1.5
