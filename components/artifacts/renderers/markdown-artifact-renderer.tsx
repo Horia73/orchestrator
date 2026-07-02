@@ -5,8 +5,8 @@ import ReactMarkdown, { type Components } from "react-markdown"
 import remarkGfm from "remark-gfm"
 import remarkMath from "remark-math"
 import type { Options as RemarkMathOptions } from "remark-math"
-import rehypeKatex from "rehype-katex"
 
+import { useLazyRehypeKatex } from "@/components/markdown-renderer"
 import { appPath } from "@/lib/app-path"
 import { cn } from "@/lib/utils"
 
@@ -29,17 +29,6 @@ import { cn } from "@/lib/utils"
  */
 
 const remarkMathOptions: RemarkMathOptions = { singleDollarTextMath: false }
-
-let katexCssLoaded = false
-function ensureKatexCss(): void {
-    if (katexCssLoaded || typeof document === "undefined") return
-    katexCssLoaded = true
-    const link = document.createElement("link")
-    link.rel = "stylesheet"
-    link.href = "https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.css"
-    link.crossOrigin = "anonymous"
-    document.head.appendChild(link)
-}
 
 const components: Components = {
     // Open external links in a new tab; let in-page anchors behave normally.
@@ -70,11 +59,9 @@ export function MarkdownArtifactRenderer({
     source: string
     className?: string
 }) {
-    React.useEffect(() => {
-        if (source.includes("$") || source.includes("\\(") || source.includes("\\[")) {
-            ensureKatexCss()
-        }
-    }, [source])
+    // Lazy rehype-katex (shared module cache with the chat renderer): the
+    // plugin + stylesheet only load when the source actually contains math.
+    const rehypeKatex = useLazyRehypeKatex(source)
 
     return (
         <div
@@ -108,7 +95,7 @@ export function MarkdownArtifactRenderer({
         >
             <ReactMarkdown
                 remarkPlugins={[remarkGfm, [remarkMath, remarkMathOptions]]}
-                rehypePlugins={[rehypeKatex]}
+                rehypePlugins={rehypeKatex ? [rehypeKatex] : []}
                 components={components}
             >
                 {source}

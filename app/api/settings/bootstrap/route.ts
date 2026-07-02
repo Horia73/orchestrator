@@ -48,7 +48,12 @@ export async function GET() {
             canCallAgents: a.canCallAgents ?? [],
         }))
 
-        const providerStatus = await getProviderReadinessMap(registry)
+        // fast: serve last-known CLI/LM Studio state instead of blocking the
+        // whole settings page behind process spawns; a background probe
+        // refreshes the truth and the next bootstrap refresh picks it up.
+        const providerStatus = await getProviderReadinessMap(registry, {
+            fast: true,
+        })
 
         return NextResponse.json({
             profileId: current.profile.id,

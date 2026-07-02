@@ -338,6 +338,14 @@ async function probeAllCliStatuses(): Promise<Record<CliId, CliStatus>> {
 export async function getAllCliStatuses(options?: {
     force?: boolean
     ttlMs?: number
+    /**
+     * Serve whatever cache exists (regardless of age) and refresh it in the
+     * background. For latency-sensitive read paths (the Settings bootstrap)
+     * where blocking on CLI process spawns would hold the whole page behind a
+     * skeleton; the next poll/refresh picks up the fresh truth. Only a truly
+     * cold process (no snapshot yet) still probes synchronously.
+     */
+    staleWhileRevalidate?: boolean
 }): Promise<Record<CliId, CliStatus>> {
     // A forced refresh (Settings → Models "Recheck", usage accounting) always
     // runs its own probe so it stays authoritative — it never piggybacks on an
@@ -348,6 +356,13 @@ export async function getAllCliStatuses(options?: {
 
     const ttlMs = options?.ttlMs ?? STATUS_CACHE_TTL_MS
     if (cachedStatuses && Date.now() - cachedStatuses.at < ttlMs) {
+        return cachedStatuses.data
+    }
+
+    if (options?.staleWhileRevalidate && cachedStatuses) {
+        if (!inflight) {
+            inflight = probeAllCliStatuses().finally(() => { inflight = null })
+        }
         return cachedStatuses.data
     }
 

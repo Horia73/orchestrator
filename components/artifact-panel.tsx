@@ -7,7 +7,6 @@ import {
     Folder, FolderOpen, File as FileIcon, AlertTriangle, SquareTerminal,
     Pencil, Search, Globe,
 } from "lucide-react"
-import { codeToHtml } from "shiki"
 import { cn } from "@/lib/utils"
 import { copyTextToClipboard } from "@/lib/clipboard"
 import { MarkdownRenderer } from "@/components/markdown-renderer"
@@ -374,7 +373,12 @@ function HighlightedCode({
         const cached = highlightCache.get(cacheKey)
         if (cached !== undefined) { setHtml(cached); return }
         let cancelled = false
-        codeToHtml(code, { lang: language, theme: "github-light" })
+        // Dynamic import keeps Shiki out of the chat route's initial bundle;
+        // the plain <pre> fallback below already shows the code instantly.
+        import("shiki")
+            .then(({ codeToHtml }) =>
+                codeToHtml(code, { lang: language, theme: "github-light" })
+            )
             .then((result) => {
                 if (cancelled) return
                 highlightCache.set(cacheKey, result)

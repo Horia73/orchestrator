@@ -39,9 +39,20 @@ function isNoApiKeyProvider(provider: EffectiveProviderEntry): boolean {
     return provider.apiKeyEnv.includes('NO_API_KEY')
 }
 
+export interface ProviderReadinessOptions {
+    /**
+     * Latency-sensitive read path (Settings bootstrap): serve the last known
+     * CLI/LM Studio state immediately and refresh it in the background,
+     * instead of blocking the response on process spawns / health probes.
+     * Chat routes keep the default (authoritative) behavior.
+     */
+    fast?: boolean
+}
+
 export async function getProviderReadiness(
     providerId: string,
-    provider: EffectiveProviderEntry | undefined
+    provider: EffectiveProviderEntry | undefined,
+    options?: ProviderReadinessOptions
 ): Promise<ProviderReadiness> {
     if (!provider) {
         return {
@@ -55,7 +66,9 @@ export async function getProviderReadiness(
     }
 
     if (isCliProviderId(providerId)) {
-        const statuses = await getAllCliStatuses()
+        const statuses = await getAllCliStatuses(
+            options?.fast ? { staleWhileRevalidate: true } : undefined
+        )
         const status = statuses[providerId]
         const spec = CLI_SPECS[providerId]
         // A token that's expired-or-expiring-imminently is functionally
@@ -117,7 +130,9 @@ export async function getProviderReadiness(
         }
 
         const apiKey = getEnvValue(LM_STUDIO_API_KEY_ENV)
-        const health = await getCachedLMStudioReadiness(url, apiKey)
+        const health = await getCachedLMStudioReadiness(url, apiKey, {
+            staleWhileRevalidate: options?.fast,
+        })
         const available = health.online
         return {
             available,
@@ -150,7 +165,13 @@ export async function getProviderReadiness(
     }
 }
 
-async function getCachedLMStudioReadiness(baseUrl: string, apiKey: string | null): Promise<LMStudioHealth> {
+let lmStudioProbeInflight: Promise<LMStudioHealth> | null = null
+
+async function getCachedLMStudioReadiness(
+    baseUrl: string,
+    apiKey: string | null,
+    options?: { staleWhileRevalidate?: boolean }
+): Promise<LMStudioHealth> {
     const key = `${baseUrl}\n${apiKey ?? ''}`
     const now = Date.now()
     if (
@@ -160,18 +181,36 @@ async function getCachedLMStudioReadiness(baseUrl: string, apiKey: string | null
     ) {
         return lmStudioReadinessCache.health
     }
-    const health = await checkLMStudioServer(baseUrl, apiKey, { timeoutMs: 900 })
-    lmStudioReadinessCache = { key, at: now, health }
-    return health
+
+    const probe = () =>
+        checkLMStudioServer(baseUrl, apiKey, { timeoutMs: 900 }).then(health => {
+            lmStudioReadinessCache = { key, at: Date.now(), health }
+            return health
+        })
+
+    // Serve the stale snapshot (same server) and refresh it in the background
+    // — the Settings bootstrap must not block ~900ms on an offline LM Studio.
+    if (options?.staleWhileRevalidate && lmStudioReadinessCache?.key === key) {
+        if (!lmStudioProbeInflight) {
+            lmStudioProbeInflight = probe().finally(() => {
+                lmStudioProbeInflight = null
+            })
+            lmStudioProbeInflight.catch(() => { /* keep last snapshot */ })
+        }
+        return lmStudioReadinessCache.health
+    }
+
+    return probe()
 }
 
 export async function getProviderReadinessMap(
-    registry: Record<string, EffectiveProviderEntry>
+    registry: Record<string, EffectiveProviderEntry>,
+    options?: ProviderReadinessOptions
 ): Promise<Record<string, ProviderReadiness>> {
     const entries = await Promise.all(
         Object.entries(registry).map(async ([providerId, provider]) => [
             providerId,
-            await getProviderReadiness(providerId, provider),
+            await getProviderReadiness(providerId, provider, options),
         ] as const)
     )
     return Object.fromEntries(entries)

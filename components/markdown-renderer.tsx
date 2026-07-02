@@ -5,7 +5,6 @@ import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import remarkMath from "remark-math"
 import type { Options as RemarkMathOptions } from "remark-math"
-import rehypeKatex from "rehype-katex"
 import { Copy, Check, FileText, FileSpreadsheet, Presentation, Image as ImageIcon, Video } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { copyTextToClipboard } from "@/lib/clipboard"
@@ -69,6 +68,62 @@ function ensureKatexCss() {
   link.href = "https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.css"
   link.crossOrigin = "anonymous"
   document.head.appendChild(link)
+}
+
+// ---------------------------------------------------------------------------
+// rehype-katex (lazy). KaTeX is ~280 KB and most messages contain no math, so
+// the plugin loads on demand the first time a message looks math-y. Until it
+// arrives, math nodes render as plain `language-math` code blocks — the same
+// graceful fallback rehype-katex itself uses for unparsable input.
+// ---------------------------------------------------------------------------
+
+type RehypeKatexPlugin = typeof import("rehype-katex").default
+
+let rehypeKatexCached: RehypeKatexPlugin | null = null
+let rehypeKatexLoading: Promise<RehypeKatexPlugin> | null = null
+
+function loadRehypeKatex(): Promise<RehypeKatexPlugin> {
+  if (!rehypeKatexLoading) {
+    rehypeKatexLoading = import("rehype-katex").then((mod) => {
+      rehypeKatexCached = mod.default
+      return mod.default
+    })
+  }
+  return rehypeKatexLoading
+}
+
+export function contentMayContainMath(content: string): boolean {
+  return (
+    content.includes("$") ||
+    content.includes("\\(") ||
+    content.includes("\\[")
+  )
+}
+
+/**
+ * Returns the rehype-katex plugin once loaded — and only kicks the load when
+ * `content` actually looks like it contains math. Module-cached, so after the
+ * first math-bearing message every render gets the plugin synchronously.
+ */
+export function useLazyRehypeKatex(content: string): RehypeKatexPlugin | null {
+  const mayContainMath = contentMayContainMath(content)
+  const [plugin, setPlugin] = React.useState<RehypeKatexPlugin | null>(
+    () => (mayContainMath ? rehypeKatexCached : null)
+  )
+
+  React.useEffect(() => {
+    if (!mayContainMath || plugin) return
+    ensureKatexCss()
+    let cancelled = false
+    void loadRehypeKatex().then((loaded) => {
+      if (!cancelled) setPlugin(() => loaded)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [mayContainMath, plugin])
+
+  return mayContainMath ? (plugin ?? rehypeKatexCached) : null
 }
 
 // ---------------------------------------------------------------------------
@@ -731,20 +786,12 @@ export const MarkdownRenderer = React.memo(function MarkdownRenderer({
   content: string
   compact?: boolean
 }) {
-  React.useEffect(() => {
-    if (
-      content.includes("$") ||
-      content.includes("\\(") ||
-      content.includes("\\[")
-    ) {
-      ensureKatexCss()
-    }
-  }, [content])
+  const rehypeKatex = useLazyRehypeKatex(content)
 
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, [remarkMath, remarkMathOptions]]}
-      rehypePlugins={[rehypeKatex]}
+      rehypePlugins={rehypeKatex ? [rehypeKatex] : []}
       components={compact ? compactComponents : contextComponents}
     >
       {content}

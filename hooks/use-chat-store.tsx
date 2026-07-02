@@ -1061,9 +1061,24 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "SET_ACTIVE_CHAT_STREAMS", streams: [] })
       return
     }
-    void refreshActiveChatStreams()
-    const interval = window.setInterval(refreshActiveChatStreams, 5000)
-    return () => window.clearInterval(interval)
+    // Skip poll ticks while the tab is hidden (12 req/min per backgrounded
+    // tab adds up — battery on mobile, load on the server) and refresh
+    // immediately on return so stream badges are fresh the moment the user
+    // looks at them.
+    const tick = () => {
+      if (document.visibilityState === "hidden") return
+      void refreshActiveChatStreams()
+    }
+    tick()
+    const interval = window.setInterval(tick, 5000)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") void refreshActiveChatStreams()
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+    return () => {
+      window.clearInterval(interval)
+      document.removeEventListener("visibilitychange", handleVisibilityChange)
+    }
   }, [pathname, refreshActiveChatStreams])
 
   React.useEffect(() => {

@@ -1,7 +1,6 @@
 "use client"
 
 import * as React from "react"
-import { codeToHtml } from "shiki"
 
 import { cn } from "@/lib/utils"
 
@@ -34,7 +33,12 @@ export function CodeRenderer({
             return
         }
         let cancelled = false
-        codeToHtml(source, { lang, theme: 'github-light' })
+        // Dynamic import keeps Shiki out of the chat route's initial bundle;
+        // the plain <pre> fallback below already shows the code instantly.
+        import("shiki")
+            .then(({ codeToHtml }) =>
+                codeToHtml(source, { lang, theme: 'github-light' })
+            )
             .then(result => {
                 if (cancelled) return
                 highlightCache.set(cacheKey, result)
