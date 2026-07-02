@@ -42,12 +42,19 @@ import {
 import { publishLocalSubmitAnchor } from "@/lib/chat-local-submit-anchor"
 import {
   ChatFetchError,
+  CHAT_SEND_RETRY_ATTEMPTS,
   INITIAL_MESSAGE_FULL_TAIL_SIZE,
   CLIENT_MAX_MESSAGE_PAGE_SIZE,
   INITIAL_MESSAGE_PAGE_SIZE,
+  OFFLINE_WAIT_SLICE_MS,
   OLDER_MESSAGE_PAGE_SIZE,
   STREAM_RECOVERY_ATTEMPTS,
   STREAM_RECOVERY_DELAY_MS,
+  STREAM_RECOVERY_MAX_DELAY_MS,
+  STREAM_RECOVERY_UNREACHABLE_DEADLINE_MS,
+  STREAM_RESUME_STALL_MS,
+  STREAM_STALL_CHECK_INTERVAL_MS,
+  STREAM_STALL_TIMEOUT_MS,
   agentCallEntryFromStartEvent,
   appendAgentContent,
   appendAgentThought,
@@ -57,9 +64,11 @@ import {
   isLikelyStreamInterruption,
   isTerminalAssistantMessage,
   markReasoningStopped,
+  postWithRetry,
   readUnreadConversationIds,
   showChatCompletionNotification,
   sleep,
+  sleepUntilOnline,
   unreadSetsEqual,
   writeUnreadConversationIds,
   type ActiveChatStream,
@@ -192,6 +201,21 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   const streamDoneRef = React.useRef(false)
   const clientStreamMessageIdRef = React.useRef<string | null>(null)
   const streamPageWasHiddenRef = React.useRef(false)
+  // Dead-radio detection for the owned chat stream: on a silently dropped
+  // mobile connection the fetch reader hangs forever without erroring, and
+  // while streamingRef is true every other recovery path is gated off — the
+  // "have to restart the app" trap. These track reader liveness so the stall
+  // watchdog (and the foreground/online reconciler) can abort a hung reader
+  // and hand the turn to recoverInterruptedStream.
+  const streamLastActivityRef = React.useRef(0)
+  const streamReaderActiveRef = React.useRef(false)
+  const streamStallRequestedRef = React.useRef(false)
+  // Single-flight per conversation: focus/online/poll triggers can all ask
+  // for recovery at once; they join the in-flight run instead of stacking
+  // loops that re-dispatch streaming state over each other.
+  const recoveryInFlightRef = React.useRef<
+    Map<string, Promise<"final" | "running" | null>>
+  >(new Map())
   const streamSnapshotRefreshAtRef = React.useRef(0)
   const activeConversationIdRef = React.useRef<string | null>(null)
   const pathnameRef = React.useRef(pathname)
@@ -902,7 +926,24 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       conversationId: string,
       messageId?: string | null
     ): Promise<"final" | "running" | null> => {
-      for (let attempt = 0; attempt < STREAM_RECOVERY_ATTEMPTS; attempt += 1) {
+      // Single-flight: concurrent triggers (focus + online + poll tick) join
+      // the run already in progress instead of racing dispatches.
+      const inFlight = recoveryInFlightRef.current.get(conversationId)
+      if (inFlight) return inFlight
+
+      const run = (async (): Promise<"final" | "running" | null> => {
+      const recoveryStartedAt = Date.now()
+      // Attempts where the server actually answered are budgeted by
+      // STREAM_RECOVERY_ATTEMPTS; stretches where it was unreachable (flaky
+      // mobile signal) retry with backoff against a much longer deadline —
+      // giving up after ~6s of airplane mode was what left the UI stuck.
+      let reachableAttempts = 0
+      let unreachableStreak = 0
+      // With a known target messageId, consecutive server answers confirming
+      // "no run, no row for that id" mean the start POST never arrived — exit
+      // early so the send path can re-send instead of polling out the budget.
+      let confirmedMissingTurn = 0
+      while (true) {
         // Fetch BEFORE touching streaming state. Flipping isStreaming on up
         // front would re-light the "..." cursor and auto-open every reasoning/
         // tool card on a conversation that already finished — exactly the
@@ -913,16 +954,25 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           refreshConversationMessages(conversationId),
           checkServerStreaming(conversationId),
         ])
+        // fetchActiveChatStream swallows network errors into null, so the
+        // messages fetch (which rejects on failure) is the reachability
+        // canary. Without it, a dead radio read as "server says nothing is
+        // running" and recovery marked live runs as aborted.
+        const serverReachable = messagesResult.status === "fulfilled"
         const messages =
           messagesResult.status === "fulfilled" ? messagesResult.value : []
-        const recoveredMessage =
-          (messageId
-            ? messages.find((message) => message.id === messageId)
-            : null) ??
-          [...messages]
-            .reverse()
-            .find((message) => message.role === "assistant") ??
-          null
+        // When the caller knows which assistant message this turn owns, only
+        // that row counts. Falling back to "the last assistant message" here
+        // used to resurface the PREVIOUS turn's reply as this turn's result
+        // when the start POST was lost on flaky signal — recovery reported
+        // "final", the resend never fired, and the user's message sat
+        // unanswered. The fallback remains for callers without an id (e.g.
+        // another tab's stream observed as "unknown").
+        const recoveredMessage = messageId
+          ? messages.find((message) => message.id === messageId) ?? null
+          : [...messages]
+              .reverse()
+              .find((message) => message.role === "assistant") ?? null
         const activeStream = stream.status === "fulfilled" ? stream.value : null
 
         if (activeStream) {
@@ -972,6 +1022,25 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           return "running"
         }
 
+        if (serverReachable) {
+          reachableAttempts += 1
+          unreachableStreak = 0
+        } else {
+          unreachableStreak += 1
+        }
+
+        if (messageId && serverReachable && !activeStream && !recoveredMessage) {
+          // The server answered and has neither a live run nor any row for
+          // this turn's id — the start POST almost certainly never arrived.
+          // Two consecutive confirmations (a backoff apart) rule out the race
+          // where the POST landed but its run hasn't registered yet; then let
+          // the caller re-send instead of polling out the whole budget.
+          confirmedMissingTurn += 1
+          if (confirmedMissingTurn >= 2) return null
+        } else {
+          confirmedMissingTurn = 0
+        }
+
         if (recoveredMessage) {
           const hydratedMessage =
             (await hydrateStreamMessage(
@@ -996,7 +1065,14 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             hydratedMessage.contentSegments?.some(
               (segment) => segment.content.length > 0
             )
-          if (attempt === STREAM_RECOVERY_ATTEMPTS - 1 && hasProgress) {
+          // Only declare the run dead after the server itself has repeatedly
+          // answered "nothing is running" — never off failed fetches, which
+          // just mean WE were offline while the run may have kept going.
+          if (
+            serverReachable &&
+            reachableAttempts >= STREAM_RECOVERY_ATTEMPTS &&
+            hasProgress
+          ) {
             const abortedMessage: Message = {
               ...hydratedMessage,
               status: "aborted",
@@ -1018,22 +1094,54 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           }
         }
 
+        if (serverReachable && reachableAttempts >= STREAM_RECOVERY_ATTEMPTS) {
+          return null
+        }
+        if (
+          !serverReachable &&
+          Date.now() - recoveryStartedAt >=
+            STREAM_RECOVERY_UNREACHABLE_DEADLINE_MS
+        ) {
+          return null
+        }
+        // The user moved to another conversation: stop churning its streaming
+        // state from here. Re-opening the conversation re-checks the server
+        // (mount effect) and the sync stream delivers the final message.
+        if (activeConversationIdRef.current !== conversationId) return null
+
         // No terminal message and no active server stream yet: this is a
         // genuine mid-flight interruption (e.g. a mobile PWA that dropped the
         // EventSource). Only now show the recovering indicator, then retry.
-        if (attempt < STREAM_RECOVERY_ATTEMPTS - 1) {
-          dispatch({
-            type: "SET_STREAMING",
-            isStreaming: true,
-            conversationId,
-            messageId: messageId ?? undefined,
-            status: recoveryStreamingStatus(),
-          })
-          await sleep(STREAM_RECOVERY_DELAY_MS)
+        dispatch({
+          type: "SET_STREAMING",
+          isStreaming: true,
+          conversationId,
+          messageId: messageId ?? undefined,
+          status: recoveryStreamingStatus(),
+        })
+        if (typeof navigator !== "undefined" && !navigator.onLine) {
+          // Known-offline: park until the radio returns (or the slice ends)
+          // instead of burning backoff sleeps nobody can answer.
+          await sleepUntilOnline(OFFLINE_WAIT_SLICE_MS)
+        } else {
+          const backoffStep = serverReachable
+            ? reachableAttempts
+            : unreachableStreak
+          await sleep(
+            Math.min(
+              STREAM_RECOVERY_MAX_DELAY_MS,
+              STREAM_RECOVERY_DELAY_MS * 2 ** Math.min(backoffStep - 1, 3)
+            )
+          )
         }
       }
+      })()
 
-      return null
+      const tracked = run.finally(() => {
+        recoveryInFlightRef.current.delete(conversationId)
+      })
+      recoveryInFlightRef.current.set(conversationId, tracked)
+      return tracked
     },
     [
       checkServerStreaming,
@@ -1091,7 +1199,22 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       if (document.visibilityState !== "visible") return
       const conversationId = activeConversationIdRef.current
       if (!conversationId) return
-      if (streamingRef.current) return
+      if (streamingRef.current) {
+        // This tab owns a live fetch reader. A silently dropped mobile
+        // connection leaves that reader hanging forever without an error —
+        // and with streamingRef up, every other recovery path is gated off.
+        // If nothing has arrived for longer than the keepalive cadence
+        // tolerates, abort the fetch; the send path's catch sees the stall
+        // flag and runs stream recovery instead of surfacing "stopped".
+        if (
+          streamReaderActiveRef.current &&
+          Date.now() - streamLastActivityRef.current > STREAM_RESUME_STALL_MS
+        ) {
+          streamStallRequestedRef.current = true
+          abortControllerRef.current?.abort()
+        }
+        return
+      }
       // A tab return fires visibilitychange + pageshow + focus back-to-back;
       // without a single-flight + cooldown each one kicked off its own
       // refresh/recover pass, and the overlapping recoveries re-dispatched
@@ -1127,11 +1250,15 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     document.addEventListener("visibilitychange", reconcileAfterResume)
     window.addEventListener("pageshow", reconcileAfterResume)
     window.addEventListener("focus", reconcileAfterResume)
+    // The radio coming back is the same resume signal on flaky mobile —
+    // reconcile immediately instead of waiting for the next focus change.
+    window.addEventListener("online", reconcileAfterResume)
     return () => {
       sequence += 1
       document.removeEventListener("visibilitychange", reconcileAfterResume)
       window.removeEventListener("pageshow", reconcileAfterResume)
       window.removeEventListener("focus", reconcileAfterResume)
+      window.removeEventListener("online", reconcileAfterResume)
     }
   }, [pathname, recoverInterruptedStream, refreshActiveChatStreams])
 
@@ -1257,8 +1384,21 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     let eventSource: EventSource | null = null
     let disposed = false
 
+    let hadError = false
+
     const handleOpen = () => {
       reconcileConversationSummaries("after chat sync reconnect")
+      // /api/sync has no event replay: anything emitted while the stream was
+      // down is gone. After a real gap (not the initial connect), refetch the
+      // open conversation so messages that landed during the outage appear
+      // without leaving and re-entering the chat.
+      if (hadError) {
+        hadError = false
+        const conversationId = activeConversationIdRef.current
+        if (conversationId && !streamingRef.current) {
+          refreshConversationMessages(conversationId).catch(() => {})
+        }
+      }
     }
 
     const handleMessage = (event: MessageEvent) => {
@@ -1418,6 +1558,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     const handleError = () => {
       // EventSource emits "error" for transient disconnects and auto-retries.
       // Logging it as console.error trips the Next.js dev overlay with no useful detail.
+      hadError = true
     }
 
     const connect = () => {
@@ -1444,12 +1585,15 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     document.addEventListener("visibilitychange", reconnectIfDead)
     window.addEventListener("focus", reconnectIfDead)
     window.addEventListener("pageshow", reconnectIfDead)
+    // The radio coming back on a visible tab won't fire any of the above.
+    window.addEventListener("online", reconnectIfDead)
 
     return () => {
       disposed = true
       document.removeEventListener("visibilitychange", reconnectIfDead)
       window.removeEventListener("focus", reconnectIfDead)
       window.removeEventListener("pageshow", reconnectIfDead)
+      window.removeEventListener("online", reconnectIfDead)
       eventSource?.close()
     }
   }, [
@@ -1462,6 +1606,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     reconcileConversationSummaries,
     reconcileUnknownConversation,
     recoverInterruptedStream,
+    refreshConversationMessages,
   ])
 
   const newChat = React.useCallback(() => {
@@ -1755,9 +1900,12 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           lastMessageAt: userMessage.timestamp,
           readAt: userMessage.timestamp,
         }
-        const createPromise = createConversationRequest(newConv).catch(
-          console.error
-        )
+        // Retried on transient network failure (waiting for `online` when the
+        // device knows it's offline) — a flaky send must not lose the
+        // conversation row while the optimistic UI shows it as created.
+        const createPromise = postWithRetry(() =>
+          createConversationRequest(newConv)
+        ).catch(console.error)
 
         dispatch({
           type: "CREATE_CONVERSATION",
@@ -1787,9 +1935,20 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           void createPromise.then(() => autoNameConversation(nameSeed))
         }
       } else {
-        addConversationMessageRequest(conversationId, userMessage).catch(
-          console.error
-        )
+        // Fire-and-forget with retries: the turn itself rides in the /api/chat
+        // body, but this row is what a refresh loads — losing it to one failed
+        // POST on weak signal silently dropped the user's message from
+        // history. addMessage upserts by id, so repeats are safe.
+        void postWithRetry(() =>
+          addConversationMessageRequest(conversationId!, userMessage)
+        ).then((response) => {
+          if (!response?.ok) {
+            console.error(
+              "Failed to persist user message",
+              response?.status ?? "network"
+            )
+          }
+        })
 
         dispatch({
           type: "ADD_USER_MESSAGE",
@@ -1815,12 +1974,13 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
       // Start streaming
       const assistantMsgId = generateId()
-      const abortController = new AbortController()
-      abortControllerRef.current = abortController
       clientStreamMessageIdRef.current = assistantMsgId
       streamingRef.current = true
       streamDoneRef.current = false
       streamPageWasHiddenRef.current = document.visibilityState !== "visible"
+      streamStallRequestedRef.current = false
+      streamReaderActiveRef.current = false
+      streamLastActivityRef.current = Date.now()
 
       dispatch({
         type: "SET_STREAMING",
@@ -1844,17 +2004,40 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         },
       })
 
+      // Dead-radio watchdog: a reader on a silently dropped connection hangs
+      // forever with no error. The server sends `: ping` keepalives, so a
+      // visible stream that has been byte-silent past the stall timeout is
+      // dead — abort it and let the catch below run recovery/resend.
+      const stallWatchdog = window.setInterval(() => {
+        if (!streamReaderActiveRef.current) return
+        if (document.visibilityState === "hidden") return
+        if (
+          Date.now() - streamLastActivityRef.current <=
+          STREAM_STALL_TIMEOUT_MS
+        )
+          return
+        streamStallRequestedRef.current = true
+        abortControllerRef.current?.abort()
+      }, STREAM_STALL_CHECK_INTERVAL_MS)
+
+      let sendRetriesLeft = CHAT_SEND_RETRY_ATTEMPTS
+
       // Pass the full local conversation for normal turns; the request helper
       // falls back to a provider-relevant slim shape only near size limits.
-      startChatStreamRequest({
-        conversationId: finalConvId,
-        messageId: assistantMsgId,
-        messages: allMessages,
-        promptContext: options?.promptContext,
-        promptContextSource: options?.promptContextSource,
-        activateIntegrations: options?.activateIntegrations,
-        signal: abortController.signal,
-      })
+      // Wrapped so a network-interrupted start can re-send the same turn with
+      // a fresh AbortController (a stall abort burns the previous one).
+      const runStreamTurn = (): Promise<void> => {
+        const attemptController = new AbortController()
+        abortControllerRef.current = attemptController
+        return startChatStreamRequest({
+          conversationId: finalConvId,
+          messageId: assistantMsgId,
+          messages: allMessages,
+          promptContext: options?.promptContext,
+          promptContextSource: options?.promptContextSource,
+          activateIntegrations: options?.activateIntegrations,
+          signal: attemptController.signal,
+        })
         .then(async (response) => {
           if (!response.ok) {
             const err = await response
@@ -1879,6 +2062,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             messageId: assistantMsgId,
             status: null,
           })
+
+          streamReaderActiveRef.current = true
+          streamLastActivityRef.current = Date.now()
 
           const decoder = new TextDecoder()
           let buffer = ""
@@ -1944,6 +2130,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
           while (true) {
             const { done, value } = await reader.read()
+            // Any bytes — including `: ping` keepalive comments the parser
+            // below skips — count as liveness for the stall watchdog.
+            streamLastActivityRef.current = Date.now()
             if (done) break
 
             buffer += decoder.decode(value, { stream: true })
@@ -2632,20 +2821,24 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
               }
             }
           }
+
+          streamReaderActiveRef.current = false
         })
         .catch(async (err) => {
-          if (err.name === "AbortError") return
+          streamReaderActiveRef.current = false
+          const stallAborted = streamStallRequestedRef.current
+          streamStallRequestedRef.current = false
+          // A plain abort is the user's Stop (or unmount); a stall-requested
+          // abort is the watchdog cutting a dead connection loose — that one
+          // must fall through to recovery.
+          if (err.name === "AbortError" && !stallAborted) return
           console.error("Chat fetch error:", err)
 
-          if (
-            isLikelyStreamInterruption(err) &&
-            (streamPageWasHiddenRef.current ||
-              document.visibilityState !== "visible" ||
-              !navigator.onLine ||
-              errorMessageFromUnknown(err)
-                .toLowerCase()
-                .includes("load failed"))
-          ) {
+          // Treat every network-shaped failure as recoverable, regardless of
+          // visibility. The old visibility/offline gate missed the common
+          // flaky-mobile case: visible tab, navigator.onLine still true, and
+          // a fetch that died with a bare "Failed to fetch".
+          if (stallAborted || isLikelyStreamInterruption(err)) {
             dispatch({
               type: "SET_STREAMING",
               isStreaming: true,
@@ -2660,6 +2853,29 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             if (recovered) {
               streamDoneRef.current = true
               return
+            }
+
+            // Nothing recoverable server-side — the start POST most likely
+            // never arrived. While this turn is still the live one (no Stop,
+            // no navigation, same conversation), re-send it: message ids are
+            // stable and persistence upserts by id, so a duplicate start is
+            // the same turn, not a second one.
+            if (
+              sendRetriesLeft > 0 &&
+              streamingRef.current &&
+              clientStreamMessageIdRef.current === assistantMsgId &&
+              activeConversationIdRef.current === finalConvId
+            ) {
+              sendRetriesLeft -= 1
+              dispatch({
+                type: "SET_STREAMING",
+                isStreaming: true,
+                conversationId: finalConvId,
+                messageId: assistantMsgId,
+                status: "connecting",
+              })
+              streamLastActivityRef.current = Date.now()
+              return runStreamTurn()
             }
 
             dispatch({ type: "SET_STREAMING", isStreaming: false })
@@ -2691,26 +2907,30 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           })
           handleAssistantFinished(finalConvId, finalMsg)
         })
-        .finally(() => {
-          if (clientStreamMessageIdRef.current === assistantMsgId) {
-            streamingRef.current = false
-            abortControllerRef.current = null
-            clientStreamMessageIdRef.current = null
-            // The thinking counter is owned by a dedicated effect keyed on
-            // state.isStreaming, so it tears its own interval down when
-            // streaming ends — and it must NOT be killed here, or a stream
-            // that was interrupted and recovered would freeze the counter.
-            // Only dispatch SET_STREAMING if 'done' didn't already handle it
-            // (ADD_ASSISTANT_MESSAGE includes stoppedStreamState)
-            if (!streamDoneRef.current) {
-              dispatch({ type: "SET_STREAMING", isStreaming: false })
-              dispatch({
-                type: "CHAT_STREAM_ENDED",
-                conversationId: finalConvId,
-              })
-            }
+      }
+
+      void runStreamTurn().finally(() => {
+        window.clearInterval(stallWatchdog)
+        streamReaderActiveRef.current = false
+        if (clientStreamMessageIdRef.current === assistantMsgId) {
+          streamingRef.current = false
+          abortControllerRef.current = null
+          clientStreamMessageIdRef.current = null
+          // The thinking counter is owned by a dedicated effect keyed on
+          // state.isStreaming, so it tears its own interval down when
+          // streaming ends — and it must NOT be killed here, or a stream
+          // that was interrupted and recovered would freeze the counter.
+          // Only dispatch SET_STREAMING if 'done' didn't already handle it
+          // (ADD_ASSISTANT_MESSAGE includes stoppedStreamState)
+          if (!streamDoneRef.current) {
+            dispatch({ type: "SET_STREAMING", isStreaming: false })
+            dispatch({
+              type: "CHAT_STREAM_ENDED",
+              conversationId: finalConvId,
+            })
           }
-        })
+        }
+      })
       return finalConvId
     },
     [

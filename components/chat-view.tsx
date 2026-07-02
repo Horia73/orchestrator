@@ -267,9 +267,27 @@ export function ChatView() {
     state.streamingConversationId === conversationId
   )
   const isStreamingThisConversationRef = React.useRef(false)
-  // Real device→server reachability while a response is streaming — drives the
-  // "Reconnecting…" hint independently of the stream-recovery state machine.
-  const isReconnecting = useServerConnection(isStreamingThisConversation)
+  // Track the browser's own offline signal so the hint can also appear when
+  // the radio drops while nothing is streaming — otherwise a user typing into
+  // a dead connection gets no warning until after they hit send.
+  const [deviceOffline, setDeviceOffline] = React.useState(false)
+  React.useEffect(() => {
+    const update = () => setDeviceOffline(!navigator.onLine)
+    update()
+    window.addEventListener("online", update)
+    window.addEventListener("offline", update)
+    return () => {
+      window.removeEventListener("online", update)
+      window.removeEventListener("offline", update)
+    }
+  }, [])
+  // Real device→server reachability while a response is streaming (or the
+  // device reports itself offline) — drives the "Reconnecting…" hint
+  // independently of the stream-recovery state machine. While offline-idle
+  // the probe short-circuits on navigator.onLine, so no requests are made.
+  const isReconnecting = useServerConnection(
+    isStreamingThisConversation || deviceOffline
+  )
   const messageCount = activeConversation?.messages.length ?? 0
   const messagePage = conversationId
     ? state.conversationMessagePages[conversationId]

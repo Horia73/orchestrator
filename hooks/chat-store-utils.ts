@@ -157,6 +157,26 @@ export const OLDER_MESSAGE_PAGE_SIZE = 64
 export const CLIENT_MAX_MESSAGE_PAGE_SIZE = 200
 export const STREAM_RECOVERY_ATTEMPTS = 8
 export const STREAM_RECOVERY_DELAY_MS = 750
+export const STREAM_RECOVERY_MAX_DELAY_MS = 5_000
+/** Keep retrying recovery while the server is unreachable (flaky mobile
+ *  signal) for up to this long before giving up. Attempts where the server
+ *  actually responded are budgeted by STREAM_RECOVERY_ATTEMPTS instead. */
+export const STREAM_RECOVERY_UNREACHABLE_DEADLINE_MS = 10 * 60_000
+/** While offline, recovery waits for the `online` event in slices of this
+ *  size instead of burning backoff attempts. */
+export const OFFLINE_WAIT_SLICE_MS = 30_000
+/** The chat stream sends `: ping` keepalives every ~10s. A visible reader
+ *  that has received no bytes for this long is a dead connection (mobile
+ *  radio dropped without RST) — abort it and run stream recovery. */
+export const STREAM_STALL_TIMEOUT_MS = 30_000
+export const STREAM_STALL_CHECK_INTERVAL_MS = 5_000
+/** On tab foreground/online, a hung reader is aborted after a shorter quiet
+ *  window — the OS likely killed the connection while backgrounded. */
+export const STREAM_RESUME_STALL_MS = 15_000
+/** How many times a network-interrupted turn is re-sent (after recovery
+ *  confirmed the server never started it). Ids are stable, so re-sending is
+ *  idempotent. */
+export const CHAT_SEND_RETRY_ATTEMPTS = 2
 
 const CHAT_UNREAD_IDS_KEY = "chat:unread-ids"
 
@@ -349,6 +369,54 @@ export function isLikelyStreamInterruption(error: unknown): boolean {
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+/** Sleep up to `maxMs`, resolving immediately when the browser reports the
+ *  network came back — so offline waits end the moment the radio recovers. */
+export function sleepUntilOnline(maxMs: number): Promise<void> {
+  if (typeof navigator === "undefined" || navigator.onLine) return sleep(maxMs)
+  return new Promise((resolve) => {
+    let timer = 0
+    const done = () => {
+      window.clearTimeout(timer)
+      window.removeEventListener("online", done)
+      resolve()
+    }
+    timer = window.setTimeout(done, maxMs)
+    window.addEventListener("online", done)
+  })
+}
+
+/**
+ * Run a fetch-returning request with retries for transient failures: network
+ * errors and 5xx retry with exponential backoff (waiting for `online` first
+ * when the device knows it is offline); 2xx/4xx are real answers and return
+ * as-is. Returns null when every attempt failed.
+ */
+export async function postWithRetry(
+  request: () => Promise<Response>,
+  {
+    retries = 4,
+    baseDelayMs = 1_000,
+    maxDelayMs = 15_000,
+  }: { retries?: number; baseDelayMs?: number; maxDelayMs?: number } = {}
+): Promise<Response | null> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const response = await request()
+      if (response.ok || (response.status >= 400 && response.status < 500)) {
+        return response
+      }
+    } catch {
+      /* network failure — retry below */
+    }
+    if (attempt >= retries) return null
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      await sleepUntilOnline(OFFLINE_WAIT_SLICE_MS)
+    } else {
+      await sleep(Math.min(maxDelayMs, baseDelayMs * 2 ** attempt))
+    }
+  }
 }
 
 export function isTerminalAssistantMessage(message: Message | null | undefined) {

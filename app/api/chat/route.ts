@@ -118,6 +118,12 @@ import { runWithRequestProfile } from "@/lib/profiles/server"
 
 /** Persist in-progress assistant output periodically so reloads can catch up */
 const STREAM_PROGRESS_PERSIST_INTERVAL_MS = 250
+/** SSE comment keepalive cadence. Long tool calls can be event-silent for
+ *  minutes; without bytes on the wire the client cannot tell "model is busy"
+ *  from "mobile radio silently died", and its stall watchdog (which frees a
+ *  hung reader) needs a heartbeat to measure against. Comment lines (`: …`)
+ *  are invisible to the client's `data: ` parser. */
+const STREAM_KEEPALIVE_INTERVAL_MS = 10_000
 
 function currentMessageMissingUploads(message: Message | undefined): Attachment[] {
   const attachments = Array.isArray(message?.attachments) ? message.attachments : []
@@ -941,6 +947,13 @@ export async function POST(request: Request) {
               /* controller closed */
             }
           }
+          const keepalive = setInterval(() => {
+            try {
+              controller.enqueue(enc.encode(`: ping\n\n`))
+            } catch {
+              /* controller closed — run may outlive the client; cleared below */
+            }
+          }, STREAM_KEEPALIVE_INTERVAL_MS)
           const artifactStream = createArtifactStreamBridge({
             conversationId,
             messageId,
@@ -1970,6 +1983,7 @@ export async function POST(request: Request) {
                   }
             )
           } finally {
+            clearInterval(keepalive)
             clearChatStream(conversationId, messageId)
           }
 
