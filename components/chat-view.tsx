@@ -3012,7 +3012,11 @@ export function ChatView() {
                 <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
               </button>
             </div>
-            <div className="pointer-events-none absolute inset-x-0 bottom-[-20px] h-5 bg-gradient-to-b from-background via-background/70 to-background/0" />
+            {/* Solid fill faded by an alpha-only mask instead of a color
+                gradient to transparent: gradient stops interpolate through
+                transparent *black* on engines without premultiplied alpha
+                (iOS 27 beta WebKit), which rendered this fade as a gray bar. */}
+            <div className="pointer-events-none absolute inset-x-0 bottom-[-20px] h-5 bg-background [mask-image:linear-gradient(to_bottom,black,rgba(0,0,0,0.7)_50%,transparent)]" />
           </div>
 
           <div

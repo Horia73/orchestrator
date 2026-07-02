@@ -628,12 +628,16 @@ function ThoughtBlock({
 
                                 {isCollapsible && !isExpanded && (
                                     <>
+                                        {/* Alpha-only masks over solid fills, not color gradients
+                                            to transparent — those interpolate through transparent
+                                            black and render as gray bars on engines without
+                                            premultiplied alpha (iOS 27 beta WebKit). */}
                                         {isLiveStreaming && (
-                                            <div className="absolute top-0 left-0 right-0 h-6 bg-gradient-to-b from-background to-transparent z-10 pointer-events-none" />
+                                            <div className="absolute top-0 left-0 right-0 h-6 bg-background [mask-image:linear-gradient(to_bottom,black,transparent)] z-10 pointer-events-none" />
                                         )}
                                         <div className="absolute left-0 right-0 bottom-0 z-10 flex flex-col pointer-events-none">
                                             <div className={cn(
-                                                "w-full bg-gradient-to-t from-background to-transparent",
+                                                "w-full bg-background [mask-image:linear-gradient(to_top,black,transparent)]",
                                                 isLiveStreaming ? "h-10" : "h-16"
                                             )} />
                                             {!isLiveStreaming && <div className="w-full h-8 bg-background" />}
@@ -1408,7 +1412,7 @@ function UserMessageContent({ messageId, content }: { messageId: string; content
                     <div ref={contentRef} className="whitespace-pre-wrap break-words">{content}</div>
                 </div>
                 {isCollapsible && !isExpanded && (
-                    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-[#f0ede6] to-transparent dark:from-muted" />
+                    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-[#f0ede6] dark:bg-muted [mask-image:linear-gradient(to_top,black,transparent)]" />
                 )}
             </div>
             {isCollapsible && (

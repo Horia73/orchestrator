@@ -584,6 +584,20 @@ button:not(:disabled),
         linear-gradient(to left, color-mix(in oklch, var(--foreground) 14%, transparent), transparent 18px) right / 28px 100% scroll;
       background-repeat: no-repeat;
     }
+
+    /* `transparent` is transparent *black*; engines that interpolate gradient
+       stops without premultiplied alpha (iOS 27 beta WebKit) drag the fade
+       through visible gray. Restating the zero-alpha stop with the source hue
+       keeps the fade hue-constant on any interpolation. */
+    @supports (color: rgb(from red r g b / 0)) {
+      .tool-call-scroll-x {
+        background:
+          linear-gradient(to right, var(--background), rgb(from var(--background) r g b / 0) 16px) left / 22px 100% local,
+          linear-gradient(to left, var(--background), rgb(from var(--background) r g b / 0) 16px) right / 22px 100% local,
+          linear-gradient(to right, color-mix(in oklch, var(--foreground) 14%, transparent), rgb(from var(--foreground) r g b / 0) 18px) left / 28px 100% scroll,
+          linear-gradient(to left, color-mix(in oklch, var(--foreground) 14%, transparent), rgb(from var(--foreground) r g b / 0) 18px) right / 28px 100% scroll;
+      }
+    }
   }
 
   .sidebar-conversation-scroll {
@@ -744,6 +758,49 @@ html[data-orch-home-page="true"] body {
     height: 100dvh;
     min-height: 0;
     overflow: hidden;
+  }
+}
+
+/* iOS 26 standalone (installed webapp) sizes the layout viewport as if
+   Safari's collapsible chrome existed, so 100dvh/100svh land roughly an
+   address bar short of the screen: the chat input floats above the bottom
+   edge and the mobile sidebar sheet stops early, exposing an off-color strip.
+   An installed app can never show that chrome, so the large viewport (lvh) is
+   its true height — and on engines that report standalone correctly
+   (iOS 27+) lvh === dvh === svh there, making every rule below a strict
+   no-op. Browser tabs keep their dvh/svh semantics via the display-mode gate.
+   Keep this CSS-only: the JS screen-height patch was reverted (ea92fd90)
+   after breaking layouts on both healthy and buggy devices. */
+:root {
+  --orch-sheet-viewport-height: 100svh;
+}
+
+@media (display-mode: standalone), (display-mode: fullscreen) {
+  :root {
+    --orch-sheet-viewport-height: 100lvh;
+  }
+
+  .h-dvh,
+  .h-svh {
+    height: 100lvh;
+  }
+
+  .min-h-dvh,
+  .min-h-svh {
+    min-height: 100lvh;
+  }
+
+  /* The sheet overlay is `fixed inset-0`, i.e. anchored to the lying layout
+     viewport — stretch it so the dim layer reaches the real bottom edge. */
+  [data-slot="sheet-overlay"] {
+    min-height: 100lvh;
+  }
+
+  @media (max-width: 767px) {
+    html[data-orch-viewport-lock="true"] body,
+    html[data-orch-viewport-lock="true"] [data-slot="sidebar-wrapper"] {
+      height: 100lvh;
+    }
   }
 }
 
