@@ -7,6 +7,7 @@ export type IntegrationConnectionProvider =
   | "gmail"
   | "google_calendar"
   | "google_drive"
+  | "whatsapp"
   | "home_assistant"
 export type GrantableIntegrationAccess = Exclude<IntegrationAccess, "none">
 
@@ -64,10 +65,6 @@ const ACCESS_RANK: Record<GrantableIntegrationAccess, number> = {
   write: 2,
   setup: 3,
 }
-const SHAREABLE_CONNECTION_PROVIDERS = new Set<IntegrationConnectionProvider>([
-  "home_assistant",
-])
-
 let schemaReady = false
 
 export function ensureIntegrationConnectionSchema(): void {
@@ -116,8 +113,12 @@ export function homeAssistantConnectionId(ownerProfileId: string): string {
   return `home_assistant_${normalizeProfileId(ownerProfileId)}`
 }
 
+export function whatsAppConnectionId(ownerProfileId: string): string {
+  return `whatsapp_${normalizeProfileId(ownerProfileId)}`
+}
+
 export function oauthConnectionId(
-  provider: Exclude<IntegrationConnectionProvider, "home_assistant">,
+  provider: Exclude<IntegrationConnectionProvider, "home_assistant" | "whatsapp">,
   ownerProfileId: string,
   accountEmail: string
 ): string {
@@ -125,7 +126,7 @@ export function oauthConnectionId(
 }
 
 export function ensureOAuthConnectionForProfile(input: {
-  provider: Exclude<IntegrationConnectionProvider, "home_assistant">
+  provider: Exclude<IntegrationConnectionProvider, "home_assistant" | "whatsapp">
   ownerProfileId?: string
   accountEmail: string
   displayName?: string
@@ -158,6 +159,23 @@ export function ensureHomeAssistantConnectionForProfile(
     displayName:
       displayName?.trim() ||
       `${profile.name}'s Home Assistant`,
+  })
+}
+
+export function ensureWhatsAppConnectionForProfile(
+  ownerProfileId = getActiveProfileId(),
+  displayName?: string
+): IntegrationConnectionRecord {
+  const profileId = normalizeProfileId(ownerProfileId)
+  const profile = getProfile(profileId)
+  if (!profile) throw new Error(`Profile not found: ${profileId}`)
+  return ensureIntegrationConnection({
+    provider: "whatsapp",
+    ownerProfileId: profileId,
+    id: whatsAppConnectionId(profileId),
+    displayName:
+      displayName?.trim() ||
+      `${profile.name}'s WhatsApp`,
   })
 }
 
@@ -315,7 +333,6 @@ export function listAccessibleIntegrationConnections(
     access: "setup",
     source: "owned",
   }))
-  if (!SHAREABLE_CONNECTION_PROVIDERS.has(provider)) return owned
 
   const grantRows = getControlDb()
     .prepare(
@@ -430,11 +447,6 @@ export function grantIntegrationConnection(input: {
   ensureIntegrationConnectionSchema()
   const connection = getIntegrationConnection(input.connectionId)
   if (!connection) throw new Error("Connection not found.")
-  if (!SHAREABLE_CONNECTION_PROVIDERS.has(connection.provider)) {
-    throw new Error(
-      `${providerDisplayName(connection.provider)} connections cannot be shared across profiles. Connect that account under the target profile instead.`
-    )
-  }
   const profileId = normalizeProfileId(input.profileId)
   const target = getProfile(profileId)
   if (!target) throw new Error(`Profile not found: ${profileId}`)
@@ -563,6 +575,7 @@ function providerDisplayName(provider: IntegrationConnectionProvider): string {
   if (provider === "gmail") return "Gmail"
   if (provider === "google_calendar") return "Google Calendar"
   if (provider === "google_drive") return "Google Workspace"
+  if (provider === "whatsapp") return "WhatsApp"
   return "Home Assistant"
 }
 

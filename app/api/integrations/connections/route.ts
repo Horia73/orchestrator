@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
+import { resolveRequestOrigin } from "@/lib/app-origin"
+import { getGmailIntegrationStatus } from "@/lib/integrations/gmail"
+import { getGoogleCalendarIntegrationStatus } from "@/lib/integrations/google-calendar"
+import { getGoogleDriveIntegrationStatus } from "@/lib/integrations/google-drive"
+import { getHomeAssistantIntegrationStatus } from "@/lib/integrations/home-assistant"
+import { getWhatsAppIntegrationStatus } from "@/lib/integrations/whatsapp"
 import {
-  getHomeAssistantIntegrationStatus,
-} from "@/lib/integrations/home-assistant"
-import {
+  getIntegrationConnection,
   listConnectionProfiles,
   listIntegrationConnectionGrants,
   listIntegrationConnectionPreferences,
@@ -13,7 +17,7 @@ import {
   setPreferredIntegrationConnection,
 } from "@/lib/integrations/connection-store"
 import { requireAdminRequestProfile } from "@/lib/profiles/server"
-import { grantHomeAssistantConnectionToProfile } from "@/lib/profiles/access-management"
+import { grantIntegrationConnectionToProfile } from "@/lib/profiles/access-management"
 
 const BodySchema = z.discriminatedUnion("action", [
   z.object({
@@ -36,14 +40,12 @@ const BodySchema = z.discriminatedUnion("action", [
 
 export async function GET(request: Request) {
   return requireAdminRequestProfile(request, async () => {
-    await getHomeAssistantIntegrationStatus(false)
+    await warmConnectionRecords(request)
     return NextResponse.json({
       profiles: listConnectionProfiles(),
-      connections: listIntegrationConnections({ provider: "home_assistant" }),
+      connections: listIntegrationConnections(),
       grants: listIntegrationConnectionGrants(),
-      preferences: listIntegrationConnectionPreferences({
-        provider: "home_assistant",
-      }),
+      preferences: listIntegrationConnectionPreferences(),
     })
   })
 }
@@ -67,7 +69,7 @@ export async function POST(request: Request) {
 
     try {
       if (parsed.data.action === "grant") {
-        const grant = grantHomeAssistantConnectionToProfile({
+        const grant = grantIntegrationConnectionToProfile({
           connectionId: parsed.data.connectionId,
           profileId: parsed.data.profileId,
           access: parsed.data.access,
@@ -85,9 +87,11 @@ export async function POST(request: Request) {
         return NextResponse.json({ success: true, revoked })
       }
 
+      const connection = getIntegrationConnection(parsed.data.connectionId)
+      if (!connection) throw new Error("Connection not found.")
       const selected = setPreferredIntegrationConnection({
         profileId: parsed.data.profileId,
-        provider: "home_assistant",
+        provider: connection.provider,
         connectionId: parsed.data.connectionId,
         actorProfileId: current.profile.id,
       })
@@ -104,4 +108,15 @@ export async function POST(request: Request) {
       )
     }
   })
+}
+
+async function warmConnectionRecords(request: Request): Promise<void> {
+  const origin = resolveRequestOrigin(request)
+  await Promise.allSettled([
+    getGmailIntegrationStatus(origin, false),
+    getGoogleCalendarIntegrationStatus(origin, false),
+    getGoogleDriveIntegrationStatus(origin, false),
+    getHomeAssistantIntegrationStatus(false),
+    getWhatsAppIntegrationStatus(origin),
+  ])
 }

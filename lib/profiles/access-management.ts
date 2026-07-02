@@ -1,9 +1,14 @@
-import { grantIntegrationConnection } from "@/lib/integrations/connection-store"
+import {
+  getIntegrationConnection,
+  grantIntegrationConnection,
+  type IntegrationConnectionProvider,
+} from "@/lib/integrations/connection-store"
 
 import { getProfile, updateProfile } from "./store"
 import {
   normalizeProfilePermissions,
   type IntegrationAccess,
+  type IntegrationPermissionId,
 } from "./types"
 
 const ACCESS_RANK: Record<IntegrationAccess, number> = {
@@ -15,7 +20,7 @@ const ACCESS_RANK: Record<IntegrationAccess, number> = {
 
 export function ensureProfileIntegrationAccess(input: {
   profileId: string
-  integration: "home_assistant"
+  integration: IntegrationPermissionId
   access: IntegrationAccess
   actorProfileId: string
 }): void {
@@ -42,6 +47,17 @@ export function grantHomeAssistantConnectionToProfile(input: {
   access: Exclude<IntegrationAccess, "none">
   actorProfileId: string
 }) {
+  return grantIntegrationConnectionToProfile(input)
+}
+
+export function grantIntegrationConnectionToProfile(input: {
+  connectionId: string
+  profileId: string
+  access: Exclude<IntegrationAccess, "none">
+  actorProfileId: string
+}) {
+  const connection = getIntegrationConnection(input.connectionId)
+  if (!connection) throw new Error("Connection not found.")
   const grant = grantIntegrationConnection({
     connectionId: input.connectionId,
     profileId: input.profileId,
@@ -50,9 +66,19 @@ export function grantHomeAssistantConnectionToProfile(input: {
   })
   ensureProfileIntegrationAccess({
     profileId: input.profileId,
-    integration: "home_assistant",
+    integration: integrationPermissionForProvider(connection.provider),
     access: input.access,
     actorProfileId: input.actorProfileId,
   })
   return grant
+}
+
+function integrationPermissionForProvider(
+  provider: IntegrationConnectionProvider
+): IntegrationPermissionId {
+  if (provider === "google_calendar") return "google_calendar"
+  if (provider === "google_drive") return "google_drive"
+  if (provider === "whatsapp") return "whatsapp"
+  if (provider === "home_assistant") return "home_assistant"
+  return "gmail"
 }

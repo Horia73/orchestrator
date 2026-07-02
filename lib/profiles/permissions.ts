@@ -5,6 +5,7 @@ import { getProfile } from "./store"
 import {
   hasGrantAccess,
   resolveIntegrationConnectionForProfile,
+  type IntegrationConnectionProvider,
 } from "@/lib/integrations/connection-store"
 import type {
   IntegrationAccess,
@@ -107,14 +108,15 @@ export function deniedToolReason(
       if (!hasIntegrationAccess(permissions, integration, needed)) {
         return `Profile is not allowed to use ${integration} with ${needed} access.`
       }
-      if (integration === "home_assistant") {
+      const provider = connectionProviderForIntegration(integration)
+      if (provider && needed !== "setup") {
         const profileId = getActiveProfileId()
         const connection = resolveIntegrationConnectionForProfile(
           profileId,
-          "home_assistant"
+          provider
         )
         if (connection && !hasGrantAccess(connection.access, needed)) {
-          return `Profile is not allowed to use Home Assistant connection ${connection.connection.displayName} with ${needed} access.`
+          return `Profile is not allowed to use ${connection.connection.displayName} with ${needed} access.`
         }
       }
     }
@@ -144,4 +146,15 @@ function neededIntegrationAccess(tool: ToolDef): IntegrationAccess {
 
 function denied(permission: ToolPermissionId): string {
   return `Profile is not allowed to use ${permission}.`
+}
+
+function connectionProviderForIntegration(
+  integration: IntegrationPermissionId
+): IntegrationConnectionProvider | null {
+  if (integration === "gmail") return "gmail"
+  if (integration === "google_calendar") return "google_calendar"
+  if (integration === "google_drive") return "google_drive"
+  if (integration === "whatsapp") return "whatsapp"
+  if (integration === "home_assistant") return "home_assistant"
+  return null
 }

@@ -6,7 +6,15 @@ import { createRequire } from 'module'
 
 import { getEnvValue } from '@/lib/config'
 import { appEventEmitter } from '@/lib/events'
-import { runWithProfileContext } from '@/lib/profiles/context'
+import {
+    getActiveProfileId,
+    runWithProfileContext,
+} from '@/lib/profiles/context'
+import {
+    ensureWhatsAppConnectionForProfile,
+    resolveIntegrationConnectionForProfile,
+} from '@/lib/integrations/connection-store'
+import { getProfile } from '@/lib/profiles/store'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { normalizeTimezone } from '@/lib/timezone'
 
@@ -1565,6 +1573,38 @@ function manager(): WhatsAppRuntime {
     return created
 }
 
+function ensureWhatsAppConnectionRecord(status: WhatsAppIntegrationStatus): void {
+    if (status.provider === 'disabled') return
+    if (!status.sessionStored && !status.connected) return
+    const profileId = getActiveProfileId()
+    const labelParts = [
+        status.accountName?.trim(),
+        status.phoneNumber?.trim(),
+    ].filter((part): part is string => Boolean(part))
+    ensureWhatsAppConnectionForProfile(
+        profileId,
+        labelParts.length ? `WhatsApp ${labelParts.join(' / ')}` : undefined
+    )
+}
+
+function withWhatsAppOwnerProfile<T>(fn: () => T): T {
+    const activeProfileId = getActiveProfileId()
+    const connection = resolveIntegrationConnectionForProfile(
+        activeProfileId,
+        'whatsapp'
+    )
+    const ownerProfileId = connection?.connection.ownerProfileId
+    if (!ownerProfileId || ownerProfileId === activeProfileId) return fn()
+    const owner = getProfile(ownerProfileId)
+    if (!owner || owner.disabledAt) {
+        throw new Error('Selected WhatsApp connection owner is not available.')
+    }
+    return runWithProfileContext(
+        { profileId: owner.id, role: owner.role },
+        fn
+    )
+}
+
 function stopInactiveProfileManagers(profileId: string, activeProvider: WhatsAppProviderKind): void {
     const prefix = `${profileId}:`
     const managers = globalThis.__orchestratorWhatsAppManagers
@@ -1609,7 +1649,11 @@ function disabledError(): Error {
 }
 
 export function getWhatsAppIntegrationStatus(origin?: string): Promise<WhatsAppIntegrationStatus> {
-    return manager().getStatus(origin)
+    return withWhatsAppOwnerProfile(async () => {
+        const status = await manager().getStatus(origin)
+        ensureWhatsAppConnectionRecord(status)
+        return status
+    })
 }
 
 export function startWhatsApp(origin?: string): Promise<WhatsAppStartResult> {
@@ -1625,15 +1669,15 @@ export function getWhatsAppQrPng(): Promise<Buffer | null> {
 }
 
 export function whatsappListChats(maxResults: number): Promise<{ chats: WhatsAppChatSummary[] }> {
-    return manager().listChats(maxResults)
+    return withWhatsAppOwnerProfile(() => manager().listChats(maxResults))
 }
 
 export function whatsappUnreadSummary(maxResults: number): Promise<WhatsAppUnreadSummary> {
-    return manager().unreadSummary(maxResults)
+    return withWhatsAppOwnerProfile(() => manager().unreadSummary(maxResults))
 }
 
 export function whatsappReadChat(chatId: string, maxMessages: number, maxChars: number): Promise<WhatsAppReadChatResult> {
-    return manager().readChat(chatId, maxMessages, maxChars)
+    return withWhatsAppOwnerProfile(() => manager().readChat(chatId, maxMessages, maxChars))
 }
 
 export function whatsappSearchMessages(args: {
@@ -1643,15 +1687,15 @@ export function whatsappSearchMessages(args: {
     maxChats: number
     perChatLimit: number
 }): Promise<WhatsAppSearchResult> {
-    return manager().searchMessages(args)
+    return withWhatsAppOwnerProfile(() => manager().searchMessages(args))
 }
 
 export function whatsappFindMessages(args: WhatsAppFindMessagesArgs): Promise<WhatsAppFindMessagesResult> {
-    return manager().findMessages(args)
+    return withWhatsAppOwnerProfile(() => manager().findMessages(args))
 }
 
 export function whatsappSendMessage(chatId: string, body: string, options?: WhatsAppSendOptions): Promise<WhatsAppSendMessageResult> {
-    return manager().sendMessage(chatId, body, options)
+    return withWhatsAppOwnerProfile(() => manager().sendMessage(chatId, body, options))
 }
 
 export function whatsappSendMedia(
@@ -1660,23 +1704,23 @@ export function whatsappSendMedia(
     caption?: string,
     options?: WhatsAppSendOptions
 ): Promise<WhatsAppSendMediaResult> {
-    return manager().sendMedia(chatId, attachments, caption, options)
+    return withWhatsAppOwnerProfile(() => manager().sendMedia(chatId, attachments, caption, options))
 }
 
 export function whatsappDeleteMessageForEveryone(messageId: string): Promise<WhatsAppDeleteMessageResult> {
-    return manager().deleteMessageForEveryone(messageId)
+    return withWhatsAppOwnerProfile(() => manager().deleteMessageForEveryone(messageId))
 }
 
 export function whatsappDownloadMedia(messageId: string): Promise<WhatsAppDownloadedMedia> {
-    return manager().downloadMessageMedia(messageId)
+    return withWhatsAppOwnerProfile(() => manager().downloadMessageMedia(messageId))
 }
 
 export function whatsappMarkChatRead(chatId: string): Promise<WhatsAppMarkChatResult> {
-    return manager().markChatRead(chatId)
+    return withWhatsAppOwnerProfile(() => manager().markChatRead(chatId))
 }
 
 export function whatsappMarkChatUnread(chatId: string): Promise<WhatsAppMarkChatResult> {
-    return manager().markChatUnread(chatId)
+    return withWhatsAppOwnerProfile(() => manager().markChatUnread(chatId))
 }
 
 function clamp(value: number, min: number, max: number): number {

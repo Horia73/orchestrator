@@ -67,10 +67,16 @@ import {
 
 type IconType = React.ComponentType<{ className?: string }>
 type GrantAccess = "read" | "write" | "setup"
+type ConnectionProvider =
+  | "gmail"
+  | "google_calendar"
+  | "google_drive"
+  | "whatsapp"
+  | "home_assistant"
 
 interface IntegrationConnectionView {
   id: string
-  provider: "home_assistant"
+  provider: ConnectionProvider
   ownerProfileId: string
   displayName: string
   createdAt: number
@@ -88,7 +94,7 @@ interface IntegrationConnectionGrantView {
 
 interface IntegrationConnectionPreferenceView {
   profileId: string
-  provider: "home_assistant"
+  provider: ConnectionProvider
   connectionId: string
   updatedAt: number
 }
@@ -223,15 +229,66 @@ const TOOL_META: Record<
 
 const INTEGRATION_META: Record<
   IntegrationPermissionId,
-  { label: string; icon: IconType }
+  { label: string; icon: IconType; personal: string }
 > = {
-  gmail: { label: "Gmail", icon: Mail },
-  google_calendar: { label: "Google Calendar", icon: Calendar },
-  google_drive: { label: "Google Drive", icon: HardDrive },
-  whatsapp: { label: "WhatsApp", icon: MessageCircle },
-  home_assistant: { label: "Home Assistant", icon: House },
-  maps: { label: "Maps", icon: MapPin },
-  weather: { label: "Weather", icon: CloudSun },
+  gmail: {
+    label: "Gmail",
+    icon: Mail,
+    personal: "Own Gmail OAuth and Gmail tools",
+  },
+  google_calendar: {
+    label: "Google Calendar",
+    icon: Calendar,
+    personal: "Own Calendar OAuth and calendar tools",
+  },
+  google_drive: {
+    label: "Google Workspace",
+    icon: HardDrive,
+    personal: "Own Drive/Docs/Sheets/Slides OAuth",
+  },
+  whatsapp: {
+    label: "WhatsApp",
+    icon: MessageCircle,
+    personal: "Own Linked Devices session",
+  },
+  home_assistant: {
+    label: "Home Assistant",
+    icon: House,
+    personal: "Own URL/token and HA tools",
+  },
+  maps: {
+    label: "Maps",
+    icon: MapPin,
+    personal: "Own Maps key or inherited admin key",
+  },
+  weather: {
+    label: "Weather",
+    icon: CloudSun,
+    personal: "Weather access; Google Weather uses Maps key",
+  },
+}
+
+const CONNECTION_PROVIDER_META: Record<
+  ConnectionProvider,
+  { label: string; icon: IconType; integration: IntegrationPermissionId }
+> = {
+  gmail: { label: "Gmail", icon: Mail, integration: "gmail" },
+  google_calendar: {
+    label: "Google Calendar",
+    icon: Calendar,
+    integration: "google_calendar",
+  },
+  google_drive: {
+    label: "Google Workspace",
+    icon: HardDrive,
+    integration: "google_drive",
+  },
+  whatsapp: { label: "WhatsApp", icon: MessageCircle, integration: "whatsapp" },
+  home_assistant: {
+    label: "Home Assistant",
+    icon: House,
+    integration: "home_assistant",
+  },
 }
 
 const ACCESS_OPTIONS: { value: IntegrationAccess; label: string }[] = [
@@ -514,7 +571,7 @@ export function ProfilesTab() {
     }
   }
 
-  async function updateHomeAssistantGrant(
+  async function updateConnectionGrant(
     profile: AdminProfileView,
     connectionId: string,
     access: IntegrationAccess
@@ -534,20 +591,20 @@ export function ProfilesTab() {
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok)
-        throw new Error(data.error ?? "Failed to update Home Assistant access")
+        throw new Error(data.error ?? "Failed to update shared connection")
       await load()
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : "Failed to update Home Assistant access"
+          : "Failed to update shared connection"
       )
     } finally {
       setSaving(false)
     }
   }
 
-  async function setHomeAssistantDefault(
+  async function setConnectionDefault(
     profile: AdminProfileView,
     connectionId: string
   ) {
@@ -1022,8 +1079,26 @@ export function ProfilesTab() {
                   <SectionCard
                     icon={Globe}
                     title="Integrations"
-                    description="Per-connection access level for external services."
+                    description="Two separate controls: what this profile may connect itself, and which existing connections it may use."
                   >
+                    <div className="rounded-xl border border-border/60 bg-background/60 px-3.5 py-3 text-[12.5px] leading-relaxed text-foreground/60">
+                      <span className="font-medium text-foreground">
+                        Personal integrations
+                      </span>{" "}
+                      control the profile&apos;s own OAuth, WhatsApp session,
+                      Home Assistant token, and API-key setup.{" "}
+                      <span className="font-medium text-foreground">
+                        Shared connections
+                      </span>{" "}
+                      below let this profile use another profile&apos;s already
+                      connected account without copying tokens. Enable either
+                      one, or both.
+                    </div>
+
+                    <div>
+                      <div className="mb-2 text-[12px] font-medium uppercase tracking-[0.12em] text-foreground/40">
+                        Personal integrations
+                      </div>
                     <div className="grid gap-2 sm:grid-cols-2">
                       {INTEGRATION_PERMISSION_IDS.map((integration) => {
                         const meta = INTEGRATION_META[integration]
@@ -1039,6 +1114,9 @@ export function ProfilesTab() {
                               </span>
                               <span className="truncate text-[13.5px] font-medium text-foreground">
                                 {meta.label}
+                              </span>
+                              <span className="hidden truncate text-[12px] text-foreground/45 sm:block">
+                                {meta.personal}
                               </span>
                             </div>
                             <Select
@@ -1058,12 +1136,13 @@ export function ProfilesTab() {
                         )
                       })}
                     </div>
+                    </div>
 
                     <div className="mt-1 border-t border-border/50 pt-3">
                       <ToggleRow
                         icon={KeyRound}
                         label="Inherit all admin API keys"
-                        description="Use inherited env/API keys for models and integrations when this profile has access."
+                        description="Shares key-based setup such as Maps/Weather keys; OAuth and WhatsApp still use explicit shared connections below."
                         checked={selected.permissions.inheritAdminApiKeys}
                         onChange={(checked) =>
                           updateDraft((p) => {
@@ -1073,7 +1152,7 @@ export function ProfilesTab() {
                       />
                     </div>
 
-                    <HomeAssistantSharingPanel
+                    <SharedConnectionsPanel
                       profile={selected}
                       profiles={profiles}
                       connections={connections}
@@ -1081,14 +1160,14 @@ export function ProfilesTab() {
                       preferences={connectionPreferences}
                       saving={saving}
                       onAccessChange={(connectionId, access) =>
-                        void updateHomeAssistantGrant(
+                        void updateConnectionGrant(
                           selected,
                           connectionId,
                           access
                         )
                       }
                       onSetDefault={(connectionId) =>
-                        void setHomeAssistantDefault(selected, connectionId)
+                        void setConnectionDefault(selected, connectionId)
                       }
                     />
                   </SectionCard>
@@ -1247,7 +1326,7 @@ function PermanentProfileDeleteDialog({
   )
 }
 
-function HomeAssistantSharingPanel({
+function SharedConnectionsPanel({
   profile,
   profiles,
   connections,
@@ -1272,12 +1351,11 @@ function HomeAssistantSharingPanel({
   const grantsByConnection = new Map(
     profileGrants.map((grant) => [grant.connectionId, grant])
   )
-  const preferredConnectionId =
-    preferences.find(
-      (preference) =>
-        preference.profileId === profile.id &&
-        preference.provider === "home_assistant"
-    )?.connectionId ?? null
+  const preferredByProvider = new Map(
+    preferences
+      .filter((preference) => preference.profileId === profile.id)
+      .map((preference) => [preference.provider, preference.connectionId])
+  )
   const activeConnections = connections.filter((connection) =>
     profiles.some(
       (candidate) =>
@@ -1289,27 +1367,30 @@ function HomeAssistantSharingPanel({
     <div className="mt-1 border-t border-border/50 pt-3">
       <div className="mb-2 flex items-start gap-2">
         <span className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg bg-muted/70 text-foreground/70">
-          <House className="size-4" />
+          <Users className="size-4" />
         </span>
         <div className="min-w-0">
           <div className="text-[13.5px] font-medium text-foreground">
-            Home Assistant connections
+            Shared connections
           </div>
           <div className="text-[12px] text-foreground/50">
-            Let this profile use its own connection or a connection shared by
-            another profile. Tokens stay with the owner.
+            Grant access to another profile&apos;s Gmail, Calendar, Workspace,
+            WhatsApp, or Home Assistant connection. Tokens and sessions stay
+            with the owner.
           </div>
         </div>
       </div>
 
       {activeConnections.length === 0 ? (
         <div className="rounded-xl border border-border/60 bg-background/60 px-3.5 py-3 text-[12.5px] text-foreground/55">
-          No Home Assistant connection records yet. Connect Home Assistant from
-          Integrations first, then share it here.
+          No shareable connection records yet. Connect an integration from
+          Settings → Integrations first, then share it here.
         </div>
       ) : (
         <div className="grid gap-2">
           {activeConnections.map((connection) => {
+            const providerMeta = CONNECTION_PROVIDER_META[connection.provider]
+            const ProviderIcon = providerMeta.icon
             const owner = profiles.find(
               (candidate) => candidate.id === connection.ownerProfileId
             )
@@ -1319,6 +1400,8 @@ function HomeAssistantSharingPanel({
               ? "setup"
               : (grant?.access ?? "none")
             const canUse = owned || access !== "none"
+            const preferredConnectionId =
+              preferredByProvider.get(connection.provider) ?? null
             const isDefault =
               preferredConnectionId === connection.id ||
               (!preferredConnectionId && owned)
@@ -1330,8 +1413,14 @@ function HomeAssistantSharingPanel({
               >
                 <div className="min-w-0">
                   <div className="flex min-w-0 items-center gap-2">
+                    <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-muted/70 text-foreground/70">
+                      <ProviderIcon className="size-3.5" />
+                    </span>
                     <span className="truncate text-[13.5px] font-medium text-foreground">
                       {connection.displayName}
+                    </span>
+                    <span className="rounded-full bg-muted px-2 py-0.5 text-[10.5px] font-medium text-foreground/50">
+                      {providerMeta.label}
                     </span>
                     {owned && (
                       <span className="rounded-full bg-muted px-2 py-0.5 text-[10.5px] font-medium text-foreground/50">
@@ -1346,6 +1435,9 @@ function HomeAssistantSharingPanel({
                   </div>
                   <div className="mt-0.5 truncate text-[12px] text-foreground/45">
                     Owner: {owner?.name ?? connection.ownerProfileId}
+                    {owned
+                      ? " · Own connections always have full access"
+                      : ""}
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">

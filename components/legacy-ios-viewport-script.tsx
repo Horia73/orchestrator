@@ -1,3 +1,5 @@
+import Script from "next/script"
+
 const LEGACY_IOS_VIEWPORT_SCRIPT = `
 (() => {
   const root = document.documentElement;
@@ -62,8 +64,9 @@ const LEGACY_IOS_VIEWPORT_SCRIPT = `
 
 export function LegacyIosViewportScript() {
   return (
-    <script
+    <Script
       id="orch-legacy-ios-viewport"
+      strategy="beforeInteractive"
       dangerouslySetInnerHTML={{ __html: LEGACY_IOS_VIEWPORT_SCRIPT }}
     />
   )

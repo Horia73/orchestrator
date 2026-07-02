@@ -18,6 +18,7 @@ try {
   const { runWithProfileContext } = await import("@/lib/profiles/context")
   const { runtimePathsForProfile } = await import("@/lib/runtime-paths")
   const {
+    ensureWhatsAppConnectionForProfile,
     grantIntegrationConnection,
     getPreferredIntegrationConnectionId,
     listIntegrationConnections,
@@ -79,26 +80,69 @@ try {
     check("preference switch changes selected Gmail token", selectedAlpha.token?.accountEmail === "alpha@example.com", selectedAlpha)
 
     const member = createProfile({ name: "Member" }, ADMIN_PROFILE_ID)
-    let grantError = ""
-    try {
-      grantIntegrationConnection({
-        connectionId: migrated.connection?.id ?? "",
-        profileId: member.id,
-        access: "read",
-        actorProfileId: ADMIN_PROFILE_ID,
-      })
-    } catch (error) {
-      grantError = error instanceof Error ? error.message : String(error)
-    }
+    const grant = grantIntegrationConnection({
+      connectionId: migrated.connection?.id ?? "",
+      profileId: member.id,
+      access: "read",
+      actorProfileId: ADMIN_PROFILE_ID,
+    })
     check(
-      "Gmail connections cannot be granted across profiles",
-      grantError.includes("cannot be shared across profiles"),
-      grantError
+      "Gmail connections can be granted across profiles",
+      grant.connectionId === migrated.connection?.id && grant.profileId === member.id,
+      grant
+    )
+    const accessible = listAccessibleIntegrationConnections(member.id, "gmail")
+    check(
+      "member sees granted admin Gmail account as shared",
+      accessible.length === 1 &&
+        accessible[0]?.source === "shared" &&
+        accessible[0]?.access === "read",
+      accessible
+    )
+    setPreferredIntegrationConnection({
+      profileId: member.id,
+      provider: "gmail",
+      connectionId: migrated.connection?.id ?? "",
+      actorProfileId: ADMIN_PROFILE_ID,
+    })
+    const memberResolved = await runWithProfileContext(
+      { profileId: member.id, role: "member" },
+      () =>
+        resolveGoogleAccountToken({
+          provider: "gmail",
+          tokenProvider: "gmail",
+          legacyTokenPath: path.join(
+            runtimePathsForProfile(member.id).privateStateDir,
+            "auth",
+            "gmail.json"
+          ),
+        })
     )
     check(
-      "member does not see admin Gmail account as accessible",
-      listAccessibleIntegrationConnections(member.id, "gmail").length === 0,
-      listAccessibleIntegrationConnections(member.id, "gmail")
+      "member resolver uses shared Gmail token without copying it",
+      memberResolved.token?.accountEmail === "alpha@example.com" &&
+        memberResolved.connection?.source === "shared" &&
+        memberResolved.tokenPath.includes(runtimePathsForProfile(ADMIN_PROFILE_ID).privateStateDir),
+      memberResolved
+    )
+    const whatsAppConnection = ensureWhatsAppConnectionForProfile(
+      ADMIN_PROFILE_ID,
+      "Admin WhatsApp"
+    )
+    const whatsAppGrant = grantIntegrationConnection({
+      connectionId: whatsAppConnection.id,
+      profileId: member.id,
+      access: "write",
+      actorProfileId: ADMIN_PROFILE_ID,
+    })
+    check(
+      "WhatsApp connections can be granted across profiles",
+      whatsAppGrant.connectionId === whatsAppConnection.id &&
+        listAccessibleIntegrationConnections(member.id, "whatsapp")[0]?.source === "shared",
+      {
+        whatsAppGrant,
+        accessible: listAccessibleIntegrationConnections(member.id, "whatsapp"),
+      }
     )
   })
 } finally {
