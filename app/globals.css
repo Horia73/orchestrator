@@ -745,16 +745,6 @@ html[data-orch-home-page="true"] body {
     min-height: 0;
     overflow: hidden;
   }
-
-  html[data-orch-legacy-ios-webapp="true"][data-orch-viewport-lock="true"] body,
-  html[data-orch-legacy-ios-webapp="true"][data-orch-viewport-lock="true"] [data-slot="sidebar-wrapper"],
-  html[data-orch-legacy-ios-webapp="true"][data-orch-viewport-lock="true"] [data-slot="sidebar-inset"],
-  html[data-orch-legacy-ios-webapp="true"][data-orch-viewport-lock="true"] [data-slot="sheet-overlay"],
-  html[data-orch-legacy-ios-webapp="true"][data-orch-viewport-lock="true"] [data-slot="sheet-content"][data-mobile="true"],
-  html[data-orch-legacy-ios-webapp="true"][data-orch-viewport-lock="true"] [data-sidebar="sidebar"][data-mobile="true"] {
-    height: var(--orch-legacy-ios-webapp-height);
-    min-height: 0;
-  }
 }
 
 /* Map chrome on touch devices: the map (especially photorealistic 3D)
