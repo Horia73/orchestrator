@@ -257,6 +257,16 @@ export function persistUploadBytes(
             size: data.length,
             type: classifyUploadMime(resolvedMime),
         }
+        // Photo geotags feed the opt-in location journal (best-effort, async;
+        // dynamic import avoids an uploads<->scheduling module cycle).
+        void import('@/lib/location-intelligence/photo-points').then((mod) =>
+            mod.recordPhotoJournalPoint({
+                buffer: data,
+                mimeType: resolvedMime,
+                uploadId: id,
+                filename: attachment.filename,
+            })
+        )
         return { attachment, filePath, url: `/api/uploads/${id}` }
     }
 

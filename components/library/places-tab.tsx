@@ -3,6 +3,7 @@
 import * as React from "react"
 import {
   AlertCircle,
+  BookOpenText,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -15,6 +16,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { MarkdownRenderer } from "@/components/markdown-renderer"
 import { cn } from "@/lib/utils"
 import { LocationDayGoogleMap } from "@/components/library/location-day-google-map"
 import type { LibraryPlaceDayResponse } from "@/app/api/library/places/[date]/route"
@@ -208,6 +210,17 @@ export function PlacesTab() {
                 })
               }}
             />
+            {isDayDetail(selectedDay) && selectedDay.journal ? (
+              <div className="border-t border-border/70 px-4 py-3">
+                <div className="mb-1.5 flex items-center gap-1.5 text-[11.5px] font-medium uppercase tracking-wide text-muted-foreground">
+                  <BookOpenText className="size-3.5" strokeWidth={1.5} />
+                  Day journal
+                </div>
+                <div className="max-w-3xl text-[13.5px] leading-relaxed">
+                  <MarkdownRenderer content={selectedDay.journal} />
+                </div>
+              </div>
+            ) : null}
           </section>
         </>
       ) : null}

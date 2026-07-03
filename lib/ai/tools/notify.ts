@@ -7,6 +7,7 @@ const DIRECT_ACTION_TOOLS = new Set<InboxDirectAction['tool']>([
     'gmail.mark_read',
     'gmail.mark_unread',
     'gmail.archive',
+    'gmail.send_draft',
     'whatsapp.mark_chat_read',
     'whatsapp.mark_chat_unread',
 ])
@@ -25,6 +26,17 @@ function normalizeDirectAction(value: unknown): InboxDirectAction | undefined {
     const raw = value as Record<string, unknown>
     const tool = typeof raw.tool === 'string' ? raw.tool.trim() : ''
     if (!DIRECT_ACTION_TOOLS.has(tool as InboxDirectAction['tool'])) return undefined
+
+    if (tool === 'gmail.send_draft') {
+        const draftId =
+            typeof raw.draftId === 'string'
+                ? raw.draftId.trim()
+                : typeof raw.draft_id === 'string'
+                    ? (raw.draft_id as string).trim()
+                    : ''
+        if (!draftId) return undefined
+        return { tool: 'gmail.send_draft', draftId }
+    }
 
     if (tool.startsWith('gmail.')) {
         const messageId =
@@ -122,6 +134,7 @@ export const notifyInboxTool: ToolDef = {
         'Write `body` as the message the user reads in their Inbox — written to them, like an email, not a run log. Lead with the point (what changed, what you need, the decision to make), then include as much detail as is genuinely useful to the user; write as long as the content warrants, no artificial length limit. NEVER paste your run narration, step-by-step reasoning, internal bookkeeping, or run/tool ids into it (no "first I run the microscript", "now I read the journal", "I persisted task_state with..."). All of that stays in the run output / Past runs; the Inbox shows only this clean, user-facing message.',
         'When asking the user to choose, include short `actions` buttons. Each action carries a `value` text reply, optionally a `direct_action` that executes a small whitelisted tool WITHOUT invoking the model when clicked.',
         'Use `direct_action` for non-destructive housekeeping on the source item: gmail.mark_read/mark_unread/archive against a gmail messageId, or whatsapp.mark_chat_read/mark_chat_unread against a whatsapp chat_id. The source ids are available in the candidate context when the trigger came from a monitor watcher. Do not invent ids.',
+        'gmail.send_draft (against a draftId returned by GmailCreateDraft) is the one approved-send direct action: use it ONLY for a reply draft you composed yourself and quoted IN FULL in this notification body — the button tap is the user\'s explicit approval to send exactly what they read. Never attach it to a draft whose text the user cannot see in the body.',
         'Use direct_action only when the user has indicated (in memory, history, or this conversation) a preference for one-click housekeeping; otherwise leave it out and rely on the plain value reply, which routes back through the model. Direct actions skip all model-level reasoning, so they must be safe to perform without further confirmation.',
         'If the message contains obvious next decisions such as archive/keep, mark read/unread, approve/skip, reply/dismiss, summarize now/later, or review first, include `actions` so the user does not have to type the same decision manually.',
         'On Smart Monitor wakes, pass `watch_ids` with the watch id(s) from <detected_changes> this notification is about. That links the Inbox item to its watches so the user\'s behavior on it (opened, replied, dismissed without reading, quick actions) feeds back into each watch\'s engagement history and improves what gets surfaced next time. One notification about items from several watches lists all of them.',
@@ -159,12 +172,14 @@ export const notifyInboxTool: ToolDef = {
                                         'gmail.mark_read',
                                         'gmail.mark_unread',
                                         'gmail.archive',
+                                        'gmail.send_draft',
                                         'whatsapp.mark_chat_read',
                                         'whatsapp.mark_chat_unread',
                                     ],
                                     description: 'Whitelisted tool id.',
                                 },
-                                messageId: { type: 'string', description: 'Gmail message id (required for gmail.* tools).' },
+                                messageId: { type: 'string', description: 'Gmail message id (required for gmail.mark_*/archive).' },
+                                draftId: { type: 'string', description: 'Gmail draft id from GmailCreateDraft (required for gmail.send_draft).' },
                                 chatId: { type: 'string', description: 'WhatsApp chat id (required for whatsapp.* tools).' },
                             },
                             required: ['tool'],

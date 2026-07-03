@@ -235,6 +235,8 @@ fs.writeFileSync(
       timezone: "Europe/Bucharest",
       sample_count: 4,
       gym_detected: false,
+      journal:
+        "A quiet Friday: gym in the evening, then a photo stop at the field before heading home.",
       stops: [
         {
           label: "unknown",
@@ -343,6 +345,36 @@ try {
   const response = await getLocationPlaceDay("2026-05-30")
   const day = response.day
   check("day loads from temporary journal", day !== null)
+
+  check(
+    "narrative journal field round-trips",
+    day?.journal?.startsWith("A quiet Friday"),
+    { journal: day?.journal?.slice(0, 40) }
+  )
+
+  const { appendLocationJournalPoint } = await import(
+    "@/lib/location-intelligence/journal"
+  )
+  const appended = appendLocationJournalPoint({
+    event: "photo",
+    source: "photo_exif",
+    timestamp_ms: Date.parse("2026-05-30T20:00:00Z"),
+    lat: 46.7,
+    lng: 23.6,
+    upload_id: "smoke-upload.jpg",
+  })
+  check("photo journal point appends when enabled", appended === true)
+  const pointsTail = fs
+    .readFileSync(path.join(journalDir, "points.jsonl"), "utf-8")
+    .trim()
+    .split("\n")
+    .at(-1)
+  check(
+    "appended point lands in points.jsonl",
+    pointsTail?.includes('"photo_exif"') &&
+      pointsTail?.includes('"smoke-upload.jpg"'),
+    { pointsTail }
+  )
 
   const terrainStop = day?.stops[0]
   check("coordinate alias labels day stop", terrainStop?.label === "teren", {

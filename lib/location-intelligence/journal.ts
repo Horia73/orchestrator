@@ -225,6 +225,31 @@ export function getLocationIntelligenceStatus(): LocationIntelligenceIntegration
   }
 }
 
+/** Append one raw sample to the journal's points.jsonl. Used by non-webhook
+ *  producers (today: photo EXIF geotags at upload time). No-ops silently when
+ *  location intelligence is not enabled/configured — callers fire-and-forget.
+ *  The microscript remains the primary writer; this only ever appends. */
+export function appendLocationJournalPoint(
+  point: Record<string, unknown>
+): boolean {
+  const config = getConfig().locationIntelligence
+  if (!config?.enabled) return false
+  const journalPath = resolveJournalPath(config)
+  if (!journalPath.absolutePath) return false
+  try {
+    fs.mkdirSync(journalPath.absolutePath, { recursive: true })
+    fs.appendFileSync(
+      path.join(journalPath.absolutePath, "points.jsonl"),
+      `${JSON.stringify(point)}\n`,
+      "utf-8"
+    )
+    return true
+  } catch (err) {
+    console.error("[location] failed to append journal point", err)
+    return false
+  }
+}
+
 function resolveJournalPath(
   config: LocationIntelligenceSettings | undefined
 ): JournalResolution {
@@ -401,6 +426,8 @@ function buildDayDetail({
     stops,
     observations,
     route,
+    journal:
+      cleanText(stringFromKeys(raw, ["journal", "narrative"]), 12_000) || null,
   }
 }
 

@@ -162,6 +162,19 @@ export async function POST(request: Request) {
 
                 const id = writeUpload(normalized.buffer, normalized.extension)
 
+                // Photo geotags feed the opt-in location journal. Best-effort
+                // and fully async — the upload response never waits on EXIF.
+                // Dynamic import keeps the journal graph out of this route's
+                // module graph (and avoids upload<->scheduling import cycles).
+                void import('@/lib/location-intelligence/photo-points').then((mod) =>
+                    mod.recordPhotoJournalPoint({
+                        buffer: normalized.buffer,
+                        mimeType: normalized.mimeType,
+                        uploadId: id,
+                        filename: normalized.filename,
+                    })
+                )
+
                 attachments.push({
                     id,
                     filename: normalized.filename,

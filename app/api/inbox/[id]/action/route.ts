@@ -6,6 +6,7 @@ import {
   executeGmailArchive,
   executeGmailMarkRead,
   executeGmailMarkUnread,
+  executeGmailSendDraft,
 } from "@/lib/ai/tools/gmail"
 import {
   executeWhatsAppMarkChatRead,
@@ -72,6 +73,15 @@ async function dispatch(direct: InboxDirectAction): Promise<{
       })
       return { ...r, label: "Archived email" }
     }
+    case "gmail.send_draft": {
+      // The user tapped a button under a notification that quoted the draft
+      // in full — that tap IS the explicit approval GmailSendDraft requires.
+      const r = await executeGmailSendDraft({
+        draft_id: direct.draftId,
+        confirmed_by_user: true,
+      })
+      return { ...r, label: "Sent the reply" }
+    }
     case "whatsapp.mark_chat_read": {
       const r = await executeWhatsAppMarkChatRead({ chat_id: direct.chatId })
       return { ...r, label: "Marked WhatsApp chat as read" }
@@ -92,6 +102,8 @@ function describeTarget(direct: InboxDirectAction): {
     case "gmail.mark_unread":
     case "gmail.archive":
       return { sourceKind: "gmail", sourceTarget: direct.messageId }
+    case "gmail.send_draft":
+      return { sourceKind: "gmail", sourceTarget: direct.draftId }
     case "whatsapp.mark_chat_read":
     case "whatsapp.mark_chat_unread":
       return { sourceKind: "whatsapp", sourceTarget: direct.chatId }

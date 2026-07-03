@@ -147,13 +147,15 @@ export type InboxReplyActionStyle = "primary" | "secondary" | "destructive"
 
 /**
  * Whitelisted direct actions that an Inbox quick-reply button can execute
- * WITHOUT invoking the agent. Only non-destructive, read/unread/archive-style
- * operations on the message that produced the notification.
+ * WITHOUT invoking the agent. Read/unread/archive-style housekeeping on the
+ * source message, plus sending a Gmail draft the agent already composed and
+ * showed to the user — the button tap is the user's send approval.
  */
 export type InboxDirectAction =
   | { tool: "gmail.mark_read"; messageId: string }
   | { tool: "gmail.mark_unread"; messageId: string }
   | { tool: "gmail.archive"; messageId: string }
+  | { tool: "gmail.send_draft"; draftId: string }
   | { tool: "whatsapp.mark_chat_read"; chatId: string }
   | { tool: "whatsapp.mark_chat_unread"; chatId: string }
 

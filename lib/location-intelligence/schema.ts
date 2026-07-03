@@ -107,6 +107,9 @@ export interface LocationDayDetail extends LocationDaySummary {
   stops: LocationStop[]
   observations: LocationStop[]
   route: LocationCoordinate[]
+  /** Narrative day journal (markdown) written by the daily task: the day
+   *  across location, calendar, mail, messages, and photos. */
+  journal: string | null
 }
 
 export interface LocationPlacesList {
