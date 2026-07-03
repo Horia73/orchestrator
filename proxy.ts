@@ -18,6 +18,9 @@ const PROFILE_EXEMPT_PATH_PREFIXES = [
   "/api/update/host-result",
   "/published-apps",
   "/_next",
+  // API-ul „AI Provider" pentru AgenticWeb OS: mașină-la-mașină, cu propriul
+  // Bearer secret (lib/agenticweb/provider-auth.ts) — nu are cookie de profil.
+  "/api/provider",
 ]
 
 const PROFILE_EXEMPT_EXACT_PATHS = new Set([
@@ -63,6 +66,8 @@ export function proxy(request: NextRequest) {
 export function shouldGuardApiRequest(pathname: string, method = "GET"): boolean {
   if (!pathname.startsWith("/api/")) return false
   if (isPublicWebhookIngress(pathname, method)) return false
+  // AI Provider (AgenticWeb OS): auth propriu pe Bearer secret, fără cookie.
+  if (pathname === "/api/provider" || pathname.startsWith("/api/provider/")) return false
   return !API_GUARD_EXEMPT_PATHS.has(pathname)
 }
 
