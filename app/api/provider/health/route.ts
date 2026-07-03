@@ -2,6 +2,7 @@ import { hostname } from 'os'
 
 import { checkProviderAuth } from '@/lib/agenticweb/provider-auth'
 import { getAllCliStatuses } from '@/lib/cli/status'
+import { getEffectiveRegistry } from '@/lib/models/registry'
 import { workspacesBaseDir } from '@/lib/agenticweb/workspaces'
 
 /**
@@ -17,6 +18,7 @@ export async function GET(req: Request) {
     if (!auth.ok) return auth.response
 
     const statuses = await getAllCliStatuses({ staleWhileRevalidate: true })
+    const registry = getEffectiveRegistry()
     return Response.json({
         ok: true,
         host: hostname(),
@@ -28,6 +30,11 @@ export async function GET(req: Request) {
                 needsReconnect: s.needsReconnect ?? false,
                 version: s.version,
                 detail: s.detail,
+                // modelele active din registrul Orchestrator — sursa
+                // selectorului unic din Lab-ul AgenticWeb OS
+                models: Object.entries(registry[id]?.models ?? {})
+                    .filter(([, m]) => !m.archived && m.kinds.includes('text'))
+                    .map(([modelId, m]) => ({ id: modelId, name: m.name })),
             }]),
         ),
     })
