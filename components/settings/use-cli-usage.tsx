@@ -8,6 +8,16 @@ export interface CliQuotaWindow {
     windowSeconds?: number
 }
 
+export interface CliResetCredit {
+    expiresAt: number
+    title?: string
+}
+
+export interface CliResetCredits {
+    availableCount: number
+    credits: CliResetCredit[]
+}
+
 export interface CliQuotaSnapshot {
     cliId: "claude-code" | "codex"
     available: boolean
@@ -15,6 +25,7 @@ export interface CliQuotaSnapshot {
     fiveHour?: CliQuotaWindow
     weekly?: CliQuotaWindow
     weeklySonnet?: CliQuotaWindow
+    resetCredits?: CliResetCredits
     source: "app-server" | "api" | "host-bridge" | "log" | "tui" | "none"
     fetchedAt: number
     dataTimestamp?: number

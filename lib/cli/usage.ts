@@ -42,6 +42,20 @@ export interface CliQuotaWindow {
     windowSeconds?: number
 }
 
+export interface CliResetCredit {
+    /** Unix epoch seconds when this unused reset expires (0 when unknown). */
+    expiresAt: number
+    /** Backend label, e.g. "Full reset (Weekly + 5 hr)". */
+    title?: string
+}
+
+/** Codex "Resets" — earned rate-limit reset credits: count + per-credit expiry. */
+export interface CliResetCredits {
+    availableCount: number
+    /** Available (unredeemed, unexpired) credits, soonest expiry first. */
+    credits: CliResetCredit[]
+}
+
 export interface CliQuotaSnapshot {
     cliId: 'claude-code' | 'codex'
     /** True when we successfully read a fresh snapshot. */
@@ -54,6 +68,8 @@ export interface CliQuotaSnapshot {
     weekly?: CliQuotaWindow
     /** Sonnet-specific 7-day window — Claude Code only. */
     weeklySonnet?: CliQuotaWindow
+    /** Earned rate-limit reset credits — Codex only. */
+    resetCredits?: CliResetCredits
     /** Where this snapshot came from, surfaced for the UI's "source" line. */
     source: 'app-server' | 'api' | 'host-bridge' | 'log' | 'tui' | 'none'
     /** Unix ms when the snapshot was captured. */
@@ -778,6 +794,7 @@ function sleep(ms: number): Promise<void> {
 
 const USER_CODEX_AUTH_PATH = join(homedir(), '.codex', 'auth.json')
 const CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage'
+const CODEX_RESET_CREDITS_URL = 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits'
 const CODEX_APP_SERVER_TIMEOUT_MS = 10_000
 const CODEX_USAGE_TIMEOUT_MS = 8_000
 const CODEX_AUTH_REFRESH_TIMEOUT_MS = 15_000
@@ -1064,10 +1081,10 @@ async function refreshCodexAuth(): Promise<boolean> {
     })
 }
 
-async function fetchCodexUsage(auth: { token: string; accountId: string }): Promise<Response> {
+async function fetchCodexBackendApi(url: string, auth: { token: string; accountId: string }): Promise<Response> {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), CODEX_USAGE_TIMEOUT_MS)
-    return fetch(CODEX_USAGE_URL, {
+    return fetch(url, {
         method: 'GET',
         headers: {
             Authorization: `Bearer ${auth.token}`,
@@ -1099,13 +1116,13 @@ async function getCodexQuotaFromUsageEndpoint(): Promise<CliQuotaSnapshot> {
     }
 
     try {
-        let res = await fetchCodexUsage(auth)
+        let res = await fetchCodexBackendApi(CODEX_USAGE_URL, auth)
 
         if (res.status === 401 || res.status === 403) {
             const refreshed = await refreshCodexAuth()
             auth = refreshed ? readCodexAuth() : auth
             if (refreshed && auth) {
-                res = await fetchCodexUsage(auth)
+                res = await fetchCodexBackendApi(CODEX_USAGE_URL, auth)
             }
         }
 
@@ -1162,19 +1179,83 @@ async function getCodexQuotaFromUsageEndpoint(): Promise<CliQuotaSnapshot> {
     }
 }
 
-async function getCodexQuota(): Promise<CliQuotaSnapshot> {
-    const appServer = await getCodexQuotaFromAppServer()
-    if (appServer.available) return appServer
+interface CodexResetCreditEntry {
+    status?: string
+    expires_at?: string
+    title?: string
+}
 
-    const fallback = await getCodexQuotaFromUsageEndpoint()
-    if (fallback.available) return fallback
+interface CodexResetCreditsResponse {
+    credits?: CodexResetCreditEntry[]
+    available_count?: number
+}
 
-    const appServerError = appServer.error ? `Codex app-server: ${appServer.error}` : null
-    const fallbackError = fallback.error ? `Fallback usage endpoint: ${fallback.error}` : null
-    return {
-        ...fallback,
-        error: [appServerError, fallbackError].filter(Boolean).join(' '),
+/**
+ * Codex "Resets" — earned rate-limit reset credits. Only this wham endpoint
+ * lists them individually with expiry dates (the app-server account APIs
+ * expose just an available count), so it's read directly with the CLI's own
+ * auth. Best-effort: the quota windows stay useful without it.
+ */
+async function getCodexResetCredits(): Promise<CliResetCredits | null> {
+    let auth = readCodexAuth()
+    if (!auth) return null
+
+    try {
+        let res = await fetchCodexBackendApi(CODEX_RESET_CREDITS_URL, auth)
+        if (res.status === 401 || res.status === 403) {
+            const refreshed = await refreshCodexAuth()
+            auth = refreshed ? readCodexAuth() : null
+            if (!auth) return null
+            res = await fetchCodexBackendApi(CODEX_RESET_CREDITS_URL, auth)
+        }
+        if (!res.ok) return null
+
+        const json = (await res.json()) as CodexResetCreditsResponse
+        const credits = (Array.isArray(json.credits) ? json.credits : [])
+            .filter(c => c && (c.status ?? 'available') === 'available')
+            .map(c => {
+                const parsed = c.expires_at ? Date.parse(c.expires_at) : NaN
+                const credit: CliResetCredit = {
+                    expiresAt: Number.isFinite(parsed) ? Math.floor(parsed / 1000) : 0,
+                }
+                if (typeof c.title === 'string' && c.title.trim()) credit.title = c.title.trim()
+                return credit
+            })
+            .sort((a, b) => (a.expiresAt || Number.MAX_SAFE_INTEGER) - (b.expiresAt || Number.MAX_SAFE_INTEGER))
+        const availableCount = typeof json.available_count === 'number' && json.available_count >= 0
+            ? json.available_count
+            : credits.length
+        return { availableCount, credits }
+    } catch {
+        return null
     }
+}
+
+async function getCodexQuota(): Promise<CliQuotaSnapshot> {
+    // Independent of the window reads — fetch in parallel with the app-server
+    // spawn so the resets never add latency to the snapshot.
+    const resetCreditsPromise = getCodexResetCredits()
+
+    let snapshot: CliQuotaSnapshot
+    const appServer = await getCodexQuotaFromAppServer()
+    if (appServer.available) {
+        snapshot = appServer
+    } else {
+        const fallback = await getCodexQuotaFromUsageEndpoint()
+        if (fallback.available) {
+            snapshot = fallback
+        } else {
+            const appServerError = appServer.error ? `Codex app-server: ${appServer.error}` : null
+            const fallbackError = fallback.error ? `Fallback usage endpoint: ${fallback.error}` : null
+            snapshot = {
+                ...fallback,
+                error: [appServerError, fallbackError].filter(Boolean).join(' '),
+            }
+        }
+    }
+
+    const resetCredits = await resetCreditsPromise
+    return resetCredits ? { ...snapshot, resetCredits } : snapshot
 }
 
 // ---------------------------------------------------------------------------

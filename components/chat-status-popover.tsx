@@ -14,6 +14,7 @@ import { useIsMobile } from "@/hooks/use-mobile"
 import { cn } from "@/lib/utils"
 import {
     quotaPaceLabel,
+    formatCompactDuration,
     formatResetCountdown,
     FIVE_HOUR_SECONDS,
     WEEKLY_SECONDS,
@@ -57,6 +58,12 @@ interface CliQuotaWindow {
     windowSeconds?: number
 }
 
+interface CliResetCredits {
+    availableCount: number
+    /** Available credits, soonest expiry first; expiresAt in unix seconds (0 = unknown). */
+    credits: Array<{ expiresAt: number; title?: string }>
+}
+
 interface CliQuotaSnapshot {
     cliId: "claude-code" | "codex"
     available: boolean
@@ -64,6 +71,7 @@ interface CliQuotaSnapshot {
     fiveHour?: CliQuotaWindow
     weekly?: CliQuotaWindow
     weeklySonnet?: CliQuotaWindow
+    resetCredits?: CliResetCredits
     source: "app-server" | "api" | "host-bridge" | "log" | "tui" | "none"
     fetchedAt: number
     dataTimestamp?: number
@@ -305,10 +313,31 @@ function PlanUsageSection({
                             caption={<PaceCaption window={snapshot.weeklySonnet} fallbackWindowSeconds={WEEKLY_SECONDS} />}
                         />
                     )}
+                    {snapshot.resetCredits && <ResetCreditsRow resetCredits={snapshot.resetCredits} />}
                 </div>
             )}
         </section>
     )
+}
+
+/** Codex "Resets": available count + soonest expiry, one compact row. */
+function ResetCreditsRow({ resetCredits }: { resetCredits: CliResetCredits }) {
+    return (
+        <div className="flex items-center justify-between gap-3 text-[13px]">
+            <div className="min-w-0 truncate font-medium text-foreground/70">Resets</div>
+            <div className="shrink-0 tabular-nums text-foreground/55">{formatResetCreditsSummary(resetCredits)}</div>
+        </div>
+    )
+}
+
+/** Reads the clock internally so render paths stay pure (same pattern as quotaPaceLabel). */
+function formatResetCreditsSummary(
+    resetCredits: CliResetCredits,
+    nowSeconds: number = Math.floor(Date.now() / 1000)
+): string {
+    const soonest = resetCredits.credits.find(c => c.expiresAt > nowSeconds)
+    const expiry = soonest ? ` · first expires in ${formatCompactDuration(soonest.expiresAt - nowSeconds)}` : ""
+    return `${resetCredits.availableCount} available${expiry}`
 }
 
 function MetricRow({

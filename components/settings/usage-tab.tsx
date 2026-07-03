@@ -10,6 +10,7 @@ import {
     Loader2,
     RefreshCcw,
     Minus,
+    RotateCcw,
     Terminal as TerminalIcon,
 } from "lucide-react"
 import {
@@ -35,12 +36,13 @@ import type {
 } from "@/lib/observability/schema"
 import {
     quotaPaceLabel,
+    formatCompactDuration,
     formatResetCountdown,
     FIVE_HOUR_SECONDS,
     WEEKLY_SECONDS,
 } from "@/lib/cli/quota-pace"
 import { useUsage } from "./use-usage"
-import { useCliUsage, type CliQuotaSnapshot, type CliQuotaWindow } from "./use-cli-usage"
+import { useCliUsage, type CliQuotaSnapshot, type CliQuotaWindow, type CliResetCredits } from "./use-cli-usage"
 import { useSettings } from "./use-settings"
 
 const RANGE_OPTIONS: Array<{ value: UsageRange; label: string }> = [
@@ -206,10 +208,47 @@ function CliQuotaCard({ id, snapshot }: { id: string; snapshot: CliQuotaSnapshot
                     {snapshot.weeklySonnet && (
                         <QuotaBar label="7-day · Sonnet" window={snapshot.weeklySonnet} fallbackWindowSeconds={WEEKLY_SECONDS} muted />
                     )}
+                    {snapshot.resetCredits && <ResetCreditsBlock resetCredits={snapshot.resetCredits} />}
                 </div>
             )}
         </div>
     )
+}
+
+/**
+ * Codex "Resets" — earned rate-limit reset credits. Shows how many are
+ * available and, per credit, when it expires (soonest first).
+ */
+function ResetCreditsBlock({ resetCredits }: { resetCredits: CliResetCredits }) {
+    return (
+        <div className="flex flex-col gap-1.5 border-t border-border/50 pt-3">
+            <div className="flex items-baseline justify-between gap-2 text-[12.5px]">
+                <span className="font-medium text-foreground/80">Usage limit resets</span>
+                <span className="tabular-nums text-foreground/65">
+                    <span className="font-semibold">{resetCredits.availableCount}</span> available
+                </span>
+            </div>
+            {resetCredits.credits.map((credit, i) => (
+                <div key={i} className="flex items-center justify-between gap-2 text-[11px] tabular-nums text-foreground/50">
+                    <span className="flex min-w-0 items-center gap-1">
+                        <RotateCcw className="size-3 shrink-0" />
+                        <span className="truncate">{credit.title ?? "Reset"}</span>
+                    </span>
+                    <span className="shrink-0">{formatCreditExpiry(credit.expiresAt)}</span>
+                </div>
+            ))}
+        </div>
+    )
+}
+
+function formatCreditExpiry(
+    expiresAt: number,
+    nowSeconds: number = Math.floor(Date.now() / 1000)
+): string {
+    if (!expiresAt) return "no expiry date"
+    if (expiresAt <= nowSeconds) return "expired"
+    const date = new Date(expiresAt * 1000).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+    return `expires in ${formatCompactDuration(expiresAt - nowSeconds)} · ${date}`
 }
 
 function QuotaBar({ label, window: w, muted, fallbackWindowSeconds }: {
