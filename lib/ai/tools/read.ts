@@ -11,7 +11,7 @@ const MAX_PDF_PAGES = 50
 export const readTool: ToolDef = {
     id: 'Read',
     name: 'Read',
-    description: 'Reads a file inside the agent workspace. Text files support 1-based line offset and limit. PDF files support optional 1-based pages/ranges such as "1-3,5".',
+    description: 'Reads a file inside the agent workspace. Text files support 1-based line offset and limit. PDF files support optional 1-based pages/ranges such as "1-3,5" and a password for encrypted PDFs.',
     input_schema: {
         type: 'object',
         properties: {
@@ -34,6 +34,10 @@ export const readTool: ToolDef = {
             pages: {
                 type: 'string',
                 description: 'PDF page selection, e.g. "1", "1-3", or "1,3-5". Omit to read from the first pages up to the page cap.',
+            },
+            password: {
+                type: 'string',
+                description: 'Password for an encrypted PDF. If a PDF turns out to be password-protected, ask the user for the password instead of guessing, then retry with it.',
             },
         },
     },
@@ -58,7 +62,7 @@ export async function executeRead(args: Record<string, unknown>): Promise<ToolRe
         if (!stat.isFile()) return { success: false, error: `Not a file: ${displayPath(resolved)}` }
 
         if (isPdf(resolved)) {
-            return await readPdf(resolved, stringArg(args, ['pages']))
+            return await readPdf(resolved, stringArg(args, ['pages']), stringArg(args, ['password']))
         }
 
         const buffer = fs.readFileSync(resolved)
@@ -96,11 +100,27 @@ function isPdf(filePath: string): boolean {
     return path.extname(filePath).toLowerCase() === '.pdf'
 }
 
-async function readPdf(filePath: string, pagesArg: string): Promise<ToolResult> {
+async function readPdf(filePath: string, pagesArg: string, password: string): Promise<ToolResult> {
     const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
     const data = new Uint8Array(fs.readFileSync(filePath))
-    const loadingTask = pdfjs.getDocument({ data } as Parameters<typeof pdfjs.getDocument>[0])
-    const pdf = await loadingTask.promise
+    const loadingTask = pdfjs.getDocument({
+        data,
+        ...(password ? { password } : {}),
+    } as Parameters<typeof pdfjs.getDocument>[0])
+    let pdf: Awaited<typeof loadingTask.promise>
+    try {
+        pdf = await loadingTask.promise
+    } catch (err) {
+        if ((err as { name?: string } | null)?.name === 'PasswordException') {
+            return {
+                success: false,
+                error: password
+                    ? `Incorrect password for encrypted PDF: ${displayPath(filePath)}. Ask the user for the correct password; do not guess.`
+                    : `PDF is password-protected: ${displayPath(filePath)}. Ask the user for the password and retry Read with the password argument (do not guess). Alternatively, decrypt a workspace copy with \`qpdf --password=<pw> --decrypt in.pdf out.pdf\` in Bash.`,
+            }
+        }
+        throw err
+    }
     const pageNumbers = parsePages(pagesArg, pdf.numPages)
     const chunks: string[] = []
 

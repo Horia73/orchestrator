@@ -4,7 +4,7 @@ import * as React from "react"
 import {
     X, PanelLeftClose, PanelLeftOpen, ZoomIn, ZoomOut,
     Printer, Download, RotateCw, ChevronLeft, ChevronRight,
-    FileText, Loader2,
+    FileText, Loader2, Lock,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { usePreviewZoomGestures } from "@/hooks/use-preview-zoom-gestures"
@@ -53,10 +53,18 @@ export function PdfViewer({
     const [pageInput, setPageInput] = React.useState("1")
     const pageRefs = React.useRef<(HTMLDivElement | null)[]>([])
     const pdfBytesRef = React.useRef<ArrayBuffer | null>(null)
+    // Password-protected PDFs: pdfjs pauses the loading task and hands us a
+    // callback; the promise stays pending until the callback gets the password.
+    const [passwordPrompt, setPasswordPrompt] = React.useState<null | { incorrect: boolean }>(null)
+    const [passwordInput, setPasswordInput] = React.useState("")
+    const passwordCallbackRef = React.useRef<((password: string) => void) | null>(null)
 
     // Render pages
     React.useEffect(() => {
         let cancelled = false
+        setPasswordPrompt(null)
+        setPasswordInput("")
+        passwordCallbackRef.current = null
         async function render() {
             try {
                 const pdfjsLib = await import("pdfjs-dist")
@@ -65,8 +73,16 @@ export function PdfViewer({
                 const bytes = await response.arrayBuffer()
                 if (cancelled) return
                 pdfBytesRef.current = bytes.slice(0)
-                const pdf = await pdfjsLib.getDocument({ data: bytes }).promise
+                const loadingTask = pdfjsLib.getDocument({ data: bytes })
+                loadingTask.onPassword = (updatePassword: (password: string) => void, reason: number) => {
+                    if (cancelled) return
+                    passwordCallbackRef.current = updatePassword
+                    setPasswordInput("")
+                    setPasswordPrompt({ incorrect: reason === pdfjsLib.PasswordResponses.INCORRECT_PASSWORD })
+                }
+                const pdf = await loadingTask.promise
                 if (cancelled) return
+                setPasswordPrompt(null)
                 setTotalPages(pdf.numPages)
                 const rendered: PdfPage[] = []
                 for (let i = 1; i <= pdf.numPages; i++) {
@@ -213,6 +229,13 @@ export function PdfViewer({
         setActivePage(clamped)
         setPageInput(String(clamped + 1))
     }, [scrollToPage, totalPages])
+
+    const handlePasswordSubmit = (e: React.FormEvent) => {
+        e.preventDefault()
+        const submit = passwordCallbackRef.current
+        if (!submit || !passwordInput) return
+        submit(passwordInput)
+    }
 
     const handlePrint = () => {
         if (!pdfBytesRef.current) return
@@ -377,10 +400,40 @@ export function PdfViewer({
                     right side of a zoomed page becomes unreachable. */}
                 <div className="relative min-h-0 min-w-0 flex-1 bg-pdf-canvas">
                     <div ref={mainRef} className="h-full overflow-auto" style={{ overscrollBehavior: "contain" }}>
-                        {loading && pages.length === 0 && (
+                        {loading && pages.length === 0 && !passwordPrompt && (
                             <div className="flex h-full items-center justify-center text-sm text-pdf-text">
                                 <Loader2 className="mr-2 size-5 animate-spin" />
                                 Loading PDF...
+                            </div>
+                        )}
+                        {passwordPrompt && pages.length === 0 && (
+                            <div className="flex h-full items-center justify-center p-6">
+                                <form
+                                    onSubmit={handlePasswordSubmit}
+                                    className="flex w-full max-w-xs flex-col items-center gap-3 rounded-lg border border-pdf-border bg-pdf-toolbar p-6 text-center shadow-md"
+                                >
+                                    <Lock className="size-6 text-pdf-text-muted" />
+                                    <p className="text-sm text-pdf-text">This PDF is password-protected.</p>
+                                    {passwordPrompt.incorrect && (
+                                        <p className="text-xs text-red-400">Incorrect password. Try again.</p>
+                                    )}
+                                    <input
+                                        type="password"
+                                        autoFocus
+                                        value={passwordInput}
+                                        onChange={(e) => setPasswordInput(e.target.value)}
+                                        placeholder="Password"
+                                        aria-label="PDF password"
+                                        className="h-9 w-full rounded border border-pdf-divider bg-black/40 px-2 text-base text-pdf-text outline-none focus:ring-1 focus:ring-pdf-accent md:text-sm"
+                                    />
+                                    <button
+                                        type="submit"
+                                        disabled={!passwordInput}
+                                        className="h-9 w-full rounded bg-pdf-accent text-sm font-medium text-black/80 transition-opacity disabled:opacity-40"
+                                    >
+                                        Unlock
+                                    </button>
+                                </form>
                             </div>
                         )}
                         {pages.length > 0 && (

@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { Lock } from "lucide-react"
 import { appPath } from "@/lib/app-path"
 import { cn } from "@/lib/utils"
 
@@ -16,9 +17,11 @@ interface PdfThumbnailProps {
 export function PdfThumbnail({ file, url, onRendered }: PdfThumbnailProps) {
     const canvasRef = React.useRef<HTMLCanvasElement>(null)
     const [loaded, setLoaded] = React.useState(false)
+    const [locked, setLocked] = React.useState(false)
 
     React.useEffect(() => {
         let cancelled = false
+        setLocked(false)
 
         async function render() {
             try {
@@ -60,7 +63,10 @@ export function PdfThumbnail({ file, url, onRendered }: PdfThumbnailProps) {
                     setLoaded(true)
                     onRendered?.()
                 }
-            } catch {
+            } catch (err) {
+                if (!cancelled && (err as { name?: string } | null)?.name === "PasswordException") {
+                    setLocked(true)
+                }
                 onRendered?.()
             }
         }
@@ -68,6 +74,14 @@ export function PdfThumbnail({ file, url, onRendered }: PdfThumbnailProps) {
         render()
         return () => { cancelled = true }
     }, [file, url]) // eslint-disable-line react-hooks/exhaustive-deps
+
+    if (locked) {
+        return (
+            <div className="flex h-full w-full items-center justify-center">
+                <Lock className="size-5 text-muted-foreground" />
+            </div>
+        )
+    }
 
     return (
         <canvas
