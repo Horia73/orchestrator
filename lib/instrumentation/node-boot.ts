@@ -12,6 +12,18 @@ export async function registerRuntime(): Promise<void> {
     } catch (err) {
         console.error('[backup] pending restore check failed', err)
     }
+    // The voice gateway is a request-serving surface (WebSocket upgrade
+    // handler consumed by scripts/start.mjs via a globalThis hook), not
+    // background work — register it even when schedulers are disabled, but
+    // never in throwaway preview instances.
+    if (process.env.ORCHESTRATOR_PREVIEW !== '1') {
+        try {
+            const { registerVoiceGateway } = await import('@/lib/voice/gateway')
+            registerVoiceGateway()
+        } catch (err) {
+            console.error('[voice] failed to register voice gateway', err)
+        }
+    }
     if (backgroundWorkDisabled()) return
     const { startScheduler } = await import('@/lib/scheduling/scheduler')
     startScheduler()

@@ -44,6 +44,20 @@ const server = http.createServer((req, res) => {
 })
 
 server.on('upgrade', (req, socket, head) => {
+  // The voice gateway lives inside the Next bundle (lib/voice/gateway.ts)
+  // and registers its upgrade handler on globalThis at boot — same process,
+  // so the hook is directly callable from this plain-JS server.
+  const voiceUpgrade = globalThis.__orchestratorVoiceUpgrade
+  if (typeof voiceUpgrade === 'function') {
+    try {
+      if (voiceUpgrade(req, socket, head)) return
+    } catch (err) {
+      console.error('[start] voice upgrade failed', err)
+      socket.destroy()
+      return
+    }
+  }
+
   const handled = maybeProxyPreviewUpgrade(req, socket, head)
   if (handled) return
 

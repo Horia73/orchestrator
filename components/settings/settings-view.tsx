@@ -6,6 +6,7 @@ import { useTheme } from "next-themes"
 import {
   Cpu,
   Activity,
+  AudioLines,
   BarChart3,
   BellRing,
   FileText,
@@ -29,8 +30,9 @@ import { ModelsTab } from "@/components/settings/models-tab"
 import { ProfilesTab } from "@/components/settings/profiles-tab"
 import { NotificationsTab } from "@/components/settings/notifications-tab"
 import { RemoteAccessTab } from "@/components/settings/remote-access-tab"
+import { VoiceTab } from "@/components/settings/voice-tab"
 
-const TAB_IDS = ["models", "integrations", "files", "remote", "logs", "usage", "notifications", "profiles", "updates"] as const
+const TAB_IDS = ["models", "integrations", "voice", "files", "remote", "logs", "usage", "notifications", "profiles", "updates"] as const
 type TabId = (typeof TAB_IDS)[number]
 
 const TABS: Array<{
@@ -40,6 +42,7 @@ const TABS: Array<{
 }> = [
   { id: "models", label: "Models", icon: Cpu },
   { id: "integrations", label: "Integrations", icon: Network },
+  { id: "voice", label: "Voice", icon: AudioLines },
   { id: "files", label: "Files", icon: FileText },
   { id: "remote", label: "Remote Access", icon: Globe },
   { id: "logs", label: "Logs", icon: Activity },
@@ -271,6 +274,9 @@ function SettingsViewInner() {
               </TabsContent>}
               {allowedTabIds?.has("integrations") && <TabsContent value="integrations">
                 <IntegrationsTab />
+              </TabsContent>}
+              {allowedTabIds?.has("voice") && <TabsContent value="voice">
+                <VoiceTab />
               </TabsContent>}
               {allowedTabIds?.has("remote") && <TabsContent value="remote">
                 <RemoteAccessTab />

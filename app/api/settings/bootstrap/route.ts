@@ -60,7 +60,7 @@ export async function GET() {
             isAdmin: current.isAdmin,
             permissions: current.profile.permissions,
             allowedTabs: current.isAdmin
-                ? ["models", "integrations", "files", "remote", "logs", "usage", "notifications", "profiles", "updates"]
+                ? ["models", "integrations", "voice", "files", "remote", "logs", "usage", "notifications", "profiles", "updates"]
                 : [
                     ...(current.profile.permissions.tools.models ? ["models"] : []),
                     "integrations",

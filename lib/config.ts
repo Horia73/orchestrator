@@ -21,6 +21,7 @@ import {
 } from "@/lib/browser-agent-backend"
 import type { BrowserBackendPreference } from "@/lib/browser-agent-runtime/config"
 import { emitAppEvent } from "@/lib/events"
+import { normalizeVoiceSettings, type VoiceSettings } from "@/lib/voice/schema"
 import {
   getActiveProfileId,
   isAdminProfileId,
@@ -242,6 +243,8 @@ export interface AppConfig {
   memoryEmbedding?: MemoryEmbeddingSettings
   /** Optional location history intelligence. Absent by default; user opt-in only. */
   locationIntelligence?: LocationIntelligenceSettings
+  /** Live voice mode (Gemini Live gateway). Absent => defaults apply. */
+  voice?: VoiceSettings
   updatedAt: number
 }
 
@@ -517,6 +520,7 @@ function normalizeAppConfigForProfile(
     memoryEmbedding: normalizeMemoryEmbeddingSettings(
       (parsed as { memoryEmbedding?: unknown }).memoryEmbedding
     ),
+    voice: normalizeVoiceSettings((parsed as { voice?: unknown }).voice),
   }
 }
 

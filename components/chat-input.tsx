@@ -1,11 +1,12 @@
 "use client"
 
 import * as React from "react"
-import { ArrowUp, Mic, Plus, Square } from "lucide-react"
+import { ArrowUp, AudioLines, Mic, Plus, Square } from "lucide-react"
 import { useChatStore } from "@/hooks/use-chat-store"
 import type { SendMessageOptions } from "@/hooks/use-chat-store"
 import { FilePreviewModal } from "@/components/file-preview-modal"
 import { useVoiceRecording } from "@/components/voice-recording-overlay"
+import { VoiceOverlay } from "@/components/voice/voice-overlay"
 import { ChatStatusPopover } from "@/components/chat-status-popover"
 import { AttachmentPreview } from "@/components/attachment-preview"
 import {
@@ -89,6 +90,8 @@ export function ChatInput({
         handlePlusClick,
         handleFileChange,
     } = useFileAttachments(draft.setAttachments)
+
+    const [voiceModeOpen, setVoiceModeOpen] = React.useState(false)
 
     const voice = useVoiceRecording({
         isChat: variant === "chat",
@@ -403,6 +406,16 @@ export function ChatInput({
                                     contextUsage={activeConversation?.contextUsage}
                                     side={isChat ? "top" : "bottom"}
                                 />
+                                {!isStreamingActiveConversation && !hasContent && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setVoiceModeOpen(true)}
+                                        className="flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground pointer-coarse:size-10"
+                                        aria-label="Live voice chat"
+                                    >
+                                        <AudioLines className="size-5.5 stroke-[1.2]" />
+                                    </button>
+                                )}
                                 <div className="flex size-9 shrink-0 items-center justify-center pointer-coarse:size-10">
                                     {isStreamingActiveConversation ? (
                                         <button
@@ -454,6 +467,7 @@ export function ChatInput({
                 onSaveImage={previewDraftAttachmentId ? handlePreviewSaveImage : undefined}
                 onClose={closePreview}
             />
+            <VoiceOverlay open={voiceModeOpen} onClose={() => setVoiceModeOpen(false)} />
         </>
     )
 }

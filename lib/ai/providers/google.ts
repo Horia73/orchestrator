@@ -28,7 +28,7 @@ const FILES_API_POLL_INTERVAL_MS = 1000
 const FILES_API_TIMEOUT_MS = 120000
 const DEFAULT_TTS_VOICE = 'Kore'
 const DEFAULT_SECONDARY_TTS_VOICE = 'Puck'
-const TTS_VOICE_NAMES = [
+export const TTS_VOICE_NAMES = [
     'Zephyr',
     'Puck',
     'Charon',
