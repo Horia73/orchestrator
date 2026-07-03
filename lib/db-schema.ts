@@ -154,6 +154,32 @@ export function initializeDatabaseSchema(db: SqliteExecutor): void {
       );
       CREATE INDEX IF NOT EXISTS idx_agent_thread_messages_thread ON agent_thread_messages(threadId, timestamp ASC);
 
+      -- Tracked background jobs (Bash run_in_background / start_background_job).
+      -- Jobs are detached OS processes owned by the server, not by the agent
+      -- turn that started them; on exit the server posts a completion notice
+      -- into the owning conversation (steering queue if a turn is streaming,
+      -- headless wake turn otherwise). conversationId is a soft reference on
+      -- purpose: deleting a conversation must not orphan-kill the OS process
+      -- bookkeeping mid-run.
+      CREATE TABLE IF NOT EXISTS background_jobs (
+          id TEXT PRIMARY KEY,
+          conversationId TEXT,
+          command TEXT NOT NULL,
+          description TEXT,
+          cwd TEXT,
+          pid INTEGER,
+          logPath TEXT NOT NULL,
+          exitMarkerPath TEXT,
+          status TEXT NOT NULL DEFAULT 'running', -- running | exited | killed | lost
+          exitCode INTEGER,
+          wakeOnExit INTEGER NOT NULL DEFAULT 1,
+          startedAt INTEGER NOT NULL,
+          endedAt INTEGER,
+          notifiedAt INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_background_jobs_status ON background_jobs(status, startedAt DESC);
+      CREATE INDEX IF NOT EXISTS idx_background_jobs_conversation ON background_jobs(conversationId, startedAt DESC);
+
       CREATE TABLE IF NOT EXISTS artifacts (
           -- Compound PK: same identifier across a conversation = version chain.
           -- (conversationId, identifier, version) lets us look up "v3 of this

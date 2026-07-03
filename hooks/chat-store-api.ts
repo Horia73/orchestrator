@@ -29,6 +29,7 @@ function buildChatStreamRequestBody(input: {
   promptContext?: string
   promptContextSource?: string
   activateIntegrations?: string[]
+  followUpId?: string
 }) {
   const fullBody = JSON.stringify(input)
   if (requestBodySize(fullBody) <= CHAT_REQUEST_BODY_SOFT_LIMIT_BYTES) {
@@ -230,6 +231,7 @@ export function startChatStreamRequest({
   promptContext,
   promptContextSource,
   activateIntegrations,
+  followUpId,
   signal,
 }: {
   conversationId: string
@@ -238,6 +240,7 @@ export function startChatStreamRequest({
   promptContext?: string
   promptContextSource?: string
   activateIntegrations?: string[]
+  followUpId?: string
   signal: AbortSignal
 }) {
   return fetch("/api/chat", {
@@ -250,7 +253,37 @@ export function startChatStreamRequest({
       promptContext,
       promptContextSource,
       activateIntegrations,
+      followUpId,
     }),
     signal,
   })
+}
+
+/**
+ * Steering: send a follow-up user message while a turn is still streaming.
+ * The server persists + queues it and it runs as the next turn. Returns the
+ * queue outcome, or null on network failure (caller falls back to a normal
+ * send when the server reports no active stream).
+ */
+export async function steerChatMessage(
+  conversationId: string,
+  message: Message
+): Promise<{ queued: boolean; active: boolean; followUpId?: string } | null> {
+  try {
+    const res = await fetch("/api/chat/steer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ conversationId, message }),
+    })
+    if (!res.ok) return null
+    const data = await res.json().catch(() => null)
+    if (!data || typeof data.queued !== "boolean") return null
+    return {
+      queued: data.queued,
+      active: Boolean(data.active),
+      followUpId: typeof data.followUpId === "string" ? data.followUpId : undefined,
+    }
+  } catch {
+    return null
+  }
 }

@@ -1,11 +1,10 @@
-import fs from 'fs'
 import path from 'path'
-import { spawn as spawnProcess } from 'child_process'
 
 import type { ToolExecutionContext, ToolResult } from '@/lib/ai/agents/types'
 import { MAX_TOOL_DELTA_TEXT_CHARS } from '@/lib/ai/reasoning-limits'
 import { augmentedEnv } from '@/lib/cli/resolve-bin'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
+import { startTrackedBackgroundJob } from '@/lib/ai/background-jobs'
 import { displayPath } from './sandbox'
 import {
     collectEnvKeys,
@@ -38,7 +37,7 @@ export async function executeBash(args: Record<string, unknown>, ctx?: ToolExecu
         }
     }
 
-    if (runInBackground) return startBackgroundCommand(command, cwdResult.cwd, timeoutMs, envResolution.injection)
+    if (runInBackground) return startBackgroundCommand(command, cwdResult.cwd, timeoutMs, envResolution.injection, ctx)
     return runForegroundCommand(command, cwdResult.cwd, timeoutMs, envResolution.injection, ctx)
 }
 
@@ -60,68 +59,31 @@ function runtimeCommandEnv(): Record<string, string> {
     }
 }
 
-function startBackgroundCommand(command: string, cwd: string, timeoutMs: number, injection: EnvVarInjection): ToolResult {
-    const id = `bg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-    const logPath = `${activeRuntimePaths().workspaceDir}/.background-jobs/${id}.log`
-    ensureParentDir(logPath)
-    const logStream = fs.createWriteStream(/* turbopackIgnore: true */ logPath, { flags: 'a' })
-    const logRedactor = createSecretStreamRedactor(injection.redactions)
-    logStream.write(redactSecretText(`$ ${command}\n`, injection.redactions))
-    if (injection.keys.length > 0) {
-        logStream.write(`[orchestrator] injected env keys: ${injection.keys.join(', ')}\n`)
-    }
-    logStream.write('\n')
-
-    let proc: ReturnType<typeof spawnProcess>
-    try {
-        proc = spawnProcess(process.env.SHELL || '/bin/zsh', ['-lc', command], {
-            cwd,
-            env: augmentedEnv({ ...runtimeCommandEnv(), ...injection.env }),
-            stdio: ['ignore', 'pipe', 'pipe'],
-            detached: true,
-        })
-    } catch (err) {
-        logStream.end()
-        return {
-            success: false,
-            error: err instanceof Error ? err.message : `Could not start command in ${displayPath(cwd)}`,
-        }
-    }
-
-    const startedAt = Date.now()
-    const timer = setTimeout(() => {
-        logStream.write(`\n[orchestrator] Timeout after ${timeoutMs}ms; sending SIGTERM.\n`)
-        try { process.kill(-proc.pid!, 'SIGTERM') } catch { try { proc.kill('SIGTERM') } catch { /* already gone */ } }
-        setTimeout(() => {
-            try { process.kill(-proc.pid!, 'SIGKILL') } catch { try { proc.kill('SIGKILL') } catch { /* already gone */ } }
-        }, 1500)
-    }, timeoutMs)
-
-    const writeRedacted = (chunk: Buffer | string) => {
-        const text = typeof chunk === 'string' ? chunk : chunk.toString('utf-8')
-        const redacted = logRedactor.push(text)
-        if (redacted) logStream.write(redacted)
-    }
-
-    proc.stdout?.on('data', writeRedacted)
-    proc.stderr?.on('data', writeRedacted)
-    proc.on('exit', code => {
-        clearTimeout(timer)
-        const tail = logRedactor.flush()
-        if (tail) logStream.write(tail)
-        logStream.write(`\n[orchestrator] exited with code ${code ?? 'unknown'} after ${Date.now() - startedAt}ms\n`)
-        logStream.end()
+function startBackgroundCommand(command: string, cwd: string, timeoutMs: number, injection: EnvVarInjection, ctx?: ToolExecutionContext): ToolResult {
+    // Background commands run as TRACKED jobs: registered in background_jobs,
+    // detached from this turn, and the owning conversation gets a completion
+    // notice (steering follow-up or headless wake) when the process exits.
+    const result = startTrackedBackgroundJob({
+        command,
+        cwd,
+        timeoutMs,
+        injection,
+        conversationId: ctx?.conversationId ?? null,
+        wakeOnExit: Boolean(ctx?.conversationId),
     })
-    proc.unref()
-
+    if (!result.ok || !result.job) {
+        return { success: false, error: result.error ?? 'Could not start background job' }
+    }
     return {
         success: true,
         data: {
-            id,
-            pid: proc.pid,
+            id: result.job.id,
+            pid: result.job.pid,
             cwd: displayPath(cwd),
-            log_path: displayPath(logPath),
+            log_path: displayPath(result.job.logPath),
             started: true,
+            tracked: true,
+            note: 'The job keeps running after this turn ends; a completion notice will arrive in this conversation when it exits. Use manage_background_jobs to check status, read output, or kill it.',
             ...injectionSummary(injection),
         },
     }
@@ -325,7 +287,3 @@ function truncateText(text: string, maxChars: number): { text: string; truncated
     }
 }
 
-function ensureParentDir(filePath: string): void {
-    const dir = path.dirname(/* turbopackIgnore: true */ filePath)
-    fs.mkdirSync(/* turbopackIgnore: true */ dir, { recursive: true })
-}

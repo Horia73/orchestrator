@@ -29,6 +29,7 @@ import {
   fetchConversationSummaries,
   requestConversationTitle,
   startChatStreamRequest,
+  steerChatMessage,
   stopChatStream,
   updateConversationArchiveState,
   updateConversationReadState,
@@ -84,6 +85,10 @@ export interface SendMessageOptions {
   promptContextSource?: string
   activateIntegrations?: string[]
   activateConversation?: boolean
+  /** Internal: this send drains a queued steering follow-up. The user message
+   *  is already persisted (steer endpoint) and already in local state — the
+   *  turn reuses it verbatim and claims the queue entry server-side. */
+  internalFollowUp?: { followUpId: string; userMessage: Message }
 }
 
 // 12 × 200 ≈ 2400 messages of reach for a deep-link jump target — covers
@@ -232,6 +237,22 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     {}
   )
   const isStreamingStateRef = React.useRef(false)
+  const streamingConversationIdRef = React.useRef<string | null>(null)
+  // Steering follow-ups queued locally while a turn streams; drained one at a
+  // time when the in-flight turn settles. Server holds the durable copy — if
+  // this client dies mid-run, the server-side sweep runs them headlessly.
+  const followUpQueuesRef = React.useRef<
+    Map<string, Array<{ followUpId: string; userMessage: Message }>>
+  >(new Map())
+  const sendMessageToConversationRef = React.useRef<
+    ((
+      conversationId: string | null,
+      content: string,
+      files?: File[],
+      uploadedAttachments?: import("@/lib/types").Attachment[],
+      options?: SendMessageOptions
+    ) => Promise<string | null>) | null
+  >(null)
   const conversationLoadStateRef = React.useRef<
     Record<string, ConversationLoadState>
   >({})
@@ -322,6 +343,12 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     isStreamingStateRef.current = state.isStreaming
   }, [state.isStreaming])
+
+  React.useEffect(() => {
+    if (state.streamingConversationId) {
+      streamingConversationIdRef.current = state.streamingConversationId
+    }
+  }, [state.streamingConversationId])
 
   React.useEffect(() => {
     conversationLoadStateRef.current = state.conversationLoadState
@@ -611,6 +638,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       : undefined
     const messageId = clientStreamMessageIdRef.current ?? stream?.messageId
     clientStreamMessageIdRef.current = null
+    // Stop means stop: drop locally queued steering follow-ups too (the stop
+    // endpoint clears the server-side queue). Their user messages stay in the
+    // conversation and ride along as history on the next send.
+    if (conversationId) followUpQueuesRef.current.delete(conversationId)
     if (conversationId) {
       streamDoneRef.current = true
       dispatch({
@@ -1868,7 +1899,18 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       uploadedAttachments?: import("@/lib/types").Attachment[],
       options?: SendMessageOptions
     ): Promise<string | null> => {
-      if (streamingRef.current) return null
+      const followUpClaim = options?.internalFollowUp ?? null
+      // Steering: a send while this conversation's turn is still streaming is
+      // queued server-side and runs as the next turn — not blocked, and not
+      // interrupting the in-flight run.
+      const isSteering = streamingRef.current && !followUpClaim
+      if (
+        isSteering &&
+        (!targetConversationId ||
+          streamingConversationIdRef.current !== targetConversationId)
+      ) {
+        return null
+      }
 
       // Use pre-uploaded attachments or upload new files
       let attachments: import("@/lib/types").Attachment[] | undefined =
@@ -1884,16 +1926,63 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       const finalAttachments = attachments?.length ? attachments : undefined
       if (!content.trim() && !finalAttachments?.length) return null
 
-      const userMessage: Message = {
-        id: generateId(),
-        role: "user",
-        content,
-        attachments: finalAttachments,
-        timestamp: Date.now(),
-      }
+      const userMessage: Message = followUpClaim
+        ? followUpClaim.userMessage
+        : {
+            id: generateId(),
+            role: "user",
+            content,
+            attachments: finalAttachments,
+            timestamp: Date.now(),
+          }
 
       let conversationId = targetConversationId
       let allMessages: Message[]
+
+      if (isSteering && conversationId) {
+        dispatch({
+          type: "ADD_USER_MESSAGE",
+          conversationId,
+          message: userMessage,
+        })
+        markConversationRead(conversationId)
+        // Short retry loop — a flaky first POST must not drop the follow-up,
+        // but this can't fall back to a plain /api/chat send (that would
+        // abort the in-flight run).
+        let steer: Awaited<ReturnType<typeof steerChatMessage>> = null
+        for (let attempt = 0; attempt < 4 && !steer; attempt++) {
+          if (attempt > 0) {
+            await new Promise((resolve) =>
+              setTimeout(resolve, Math.min(4_000, 500 * 2 ** attempt))
+            )
+          }
+          steer = await steerChatMessage(conversationId, userMessage)
+        }
+        if (steer?.queued && steer.followUpId) {
+          const queue = followUpQueuesRef.current.get(conversationId) ?? []
+          queue.push({ followUpId: steer.followUpId, userMessage })
+          followUpQueuesRef.current.set(conversationId, queue)
+          if (options?.activateConversation !== false) {
+            publishLocalSubmitAnchor({
+              conversationId,
+              messageId: userMessage.id,
+              submittedAt: userMessage.timestamp,
+            })
+          }
+          return conversationId
+        }
+        if (!steer) {
+          // Steer never reached the server. Persist the message so it isn't
+          // lost (upsert by id — safe), but don't start a turn: a blind POST
+          // /api/chat would abort a still-running stream.
+          void postWithRetry(() =>
+            addConversationMessageRequest(conversationId!, userMessage)
+          ).catch(console.error)
+          return conversationId
+        }
+        // Server reports no active run (it finished while the user typed) —
+        // fall through to a normal send with this message.
+      }
 
       if (!conversationId) {
         conversationId = generateId()
@@ -1944,6 +2033,25 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           // endpoint reads it and applies its overwrite guard.
           void createPromise.then(() => autoNameConversation(nameSeed))
         }
+      } else if (followUpClaim) {
+        // Steering follow-up drain: the message was persisted by the steer
+        // endpoint and dispatched into local state when the user sent it.
+        // Re-stamp it to drain time and move it to the end — the previous
+        // turn's terminal persist stamped the assistant row with completion
+        // time, so without this the follow-up would sit ABOVE the answer it
+        // followed. The server does the same on claim (authoritative copy).
+        const restamped: Message = { ...userMessage, timestamp: Date.now() }
+        dispatch({
+          type: "ADD_USER_MESSAGE",
+          conversationId,
+          message: restamped,
+          moveToEnd: true,
+        })
+        const conv = state.conversations.find((c) => c.id === conversationId)
+        const base = (conv?.messages ?? []).filter(
+          (m) => m.id !== userMessage.id
+        )
+        allMessages = [...base, restamped]
       } else {
         // Fire-and-forget with retries: the turn itself rides in the /api/chat
         // body, but this row is what a refresh loads — losing it to one failed
@@ -1960,21 +2068,27 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           }
         })
 
-        dispatch({
-          type: "ADD_USER_MESSAGE",
-          conversationId,
-          message: userMessage,
-        })
+        if (!isSteering) {
+          // (The steering fall-through already dispatched this message.)
+          dispatch({
+            type: "ADD_USER_MESSAGE",
+            conversationId,
+            message: userMessage,
+          })
+        }
         markConversationRead(conversationId)
 
         // Build messages array from current state + new user message.
         // startChatStreamRequest keeps this full payload unless it nears the
         // platform request-size limit, where it strips only UI-only metadata.
         const conv = state.conversations.find((c) => c.id === conversationId)
-        allMessages = [...(conv?.messages ?? []), userMessage]
+        const base = conv?.messages ?? []
+        allMessages = base.some((m) => m.id === userMessage.id)
+          ? [...base]
+          : [...base, userMessage]
       }
 
-      if (options?.activateConversation !== false) {
+      if (options?.activateConversation !== false && !followUpClaim) {
         publishLocalSubmitAnchor({
           conversationId,
           messageId: userMessage.id,
@@ -2053,6 +2167,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           promptContext: options?.promptContext,
           promptContextSource: options?.promptContextSource,
           activateIntegrations: options?.activateIntegrations,
+          followUpId: followUpClaim?.followUpId,
           signal: attemptController.signal,
         })
         .then(async (response) => {
@@ -2061,6 +2176,22 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             const err = await response
               .json()
               .catch(() => ({ error: "Unknown error" }))
+            if (
+              response.status === 409 &&
+              err?.code === "followup_already_claimed"
+            ) {
+              // The server-side sweep beat us to this follow-up — its wake
+              // turn is (or will be) streaming. Quietly stand down; sync
+              // events surface that run.
+              streamDoneRef.current = true
+              dispatch({ type: "SET_STREAMING", isStreaming: false })
+              dispatch({
+                type: "CHAT_STREAM_ENDED",
+                conversationId: finalConvId,
+                messageId: assistantMsgId,
+              })
+              return
+            }
             throw new ChatFetchError(
               err.error || `HTTP ${response.status}`,
               typeof err.chatMessage === "string" ? err.chatMessage : undefined
@@ -2950,6 +3081,23 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             })
           }
         }
+        // Steering drain: the turn settled — run the next queued follow-up.
+        // Stop clears the queue first, so a user Stop never chains. Each
+        // drained turn re-enters this finally, draining one entry at a time.
+        const queue = followUpQueuesRef.current.get(finalConvId)
+        if (queue && queue.length > 0 && !streamingRef.current) {
+          const next = queue.shift()!
+          if (queue.length === 0) followUpQueuesRef.current.delete(finalConvId)
+          window.setTimeout(() => {
+            void sendMessageToConversationRef.current?.(
+              finalConvId,
+              next.userMessage.content,
+              undefined,
+              next.userMessage.attachments,
+              { internalFollowUp: next, activateConversation: false }
+            )
+          }, 0)
+        }
       })
       return finalConvId
     },
@@ -2962,6 +3110,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       state.conversations,
     ]
   )
+
+  React.useEffect(() => {
+    sendMessageToConversationRef.current = sendMessageToConversation
+  }, [sendMessageToConversation])
 
   const sendMessage = React.useCallback(
     (

@@ -5,6 +5,11 @@ export const WORKSPACE_TOOL_IDS: string[] = [
     'Write',
     'Edit',
     'Bash',
+    // Tracked background jobs: survive the end of the turn and wake the
+    // conversation on completion. Critical for CLI-backed runtimes whose
+    // native Bash background tasks die when the headless turn ends.
+    'start_background_job',
+    'manage_background_jobs',
     'Glob',
     'Grep',
     'WebFetch',

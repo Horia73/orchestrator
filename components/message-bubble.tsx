@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Brain, Check, ChevronDown, Copy, CheckCircle2, CircleAlert, CircleStop, Clock, Download, ExternalLink, FileText, Loader2, RefreshCw } from "lucide-react"
+import { Brain, Check, ChevronDown, Copy, CheckCircle2, CircleAlert, CircleStop, Clock, Download, ExternalLink, FileText, Loader2, RefreshCw, Terminal } from "lucide-react"
 import type { AgentCallReasoningEntry, Attachment, ContentSegment, ContextCompactionReasoningEntry, MemoryRecallReasoningEntry, Message, ReasoningEntry, ToolCallReasoningEntry } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { copyTextToClipboard } from "@/lib/clipboard"
@@ -35,6 +35,27 @@ function formatMessageTimestamp(timestamp: number) {
 
 function formatMessageTimestampFull(timestamp: number) {
     return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(timestamp)
+}
+
+// Server-authored background-job completion notices arrive as user-role
+// messages wrapped in this tag (lib/ai/background-jobs.ts). Chat renders them
+// as a muted system card. The trailing "This is an automated…" instruction
+// paragraph is for the model, not the reader — it is dropped from display.
+const BACKGROUND_JOB_NOTICE_RE = /^<background-job-notice>\n?([\s\S]*?)\n?<\/background-job-notice>\s*$/
+
+function parseBackgroundJobNotice(content: string): { headline: string; body: string } | null {
+    const match = BACKGROUND_JOB_NOTICE_RE.exec(content.trim())
+    if (!match) return null
+    const lines = match[1].split("\n")
+    const headlineIndex = lines.findIndex((line) => line.trim().length > 0)
+    if (headlineIndex < 0) return null
+    const headline = lines[headlineIndex].trim()
+    const rest = lines
+        .slice(headlineIndex + 1)
+        .join("\n")
+        .replace(/\n*This is an automated completion notice[\s\S]*$/, "")
+        .trim()
+    return { headline, body: rest }
 }
 
 // ---------------------------------------------------------------------------
@@ -1685,6 +1706,31 @@ function MessageBubbleComponent({
     )
 
     if (message.role === "user") {
+        // Background-job completion notices are server-authored user-role
+        // messages (the wake prompt); render them as a muted system card,
+        // not as something the user typed.
+        const jobNotice = parseBackgroundJobNotice(message.content)
+        if (jobNotice) {
+            return (
+                <div
+                    className="flex flex-col items-stretch gap-2 select-text"
+                    onMouseEnter={() => setHovered(true)}
+                    onMouseLeave={() => setHovered(false)}
+                >
+                    <div className="rounded-xl border border-border/60 bg-muted/40 px-4 py-3">
+                        <div className="flex items-center gap-2 text-[13px] font-medium text-foreground/80">
+                            <Terminal className="size-4 shrink-0 text-muted-foreground" />
+                            {jobNotice.headline}
+                        </div>
+                        {jobNotice.body && (
+                            <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-muted-foreground">
+                                {jobNotice.body}
+                            </pre>
+                        )}
+                    </div>
+                </div>
+            )
+        }
         return (
             <div
                 className="flex flex-col items-end gap-2 select-text"

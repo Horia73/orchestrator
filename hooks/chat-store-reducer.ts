@@ -96,7 +96,14 @@ export type ChatAction =
   | { type: "NEW_CHAT" }
   | { type: "SELECT_CONVERSATION"; id: string }
   | { type: "DELETE_CONVERSATION"; id: string }
-  | { type: "ADD_USER_MESSAGE"; conversationId: string; message: Message }
+  | {
+      type: "ADD_USER_MESSAGE"
+      conversationId: string
+      message: Message
+      /** Steering drain: re-position an already-rendered queued follow-up at
+       *  the end of the list (mirrors the server-side claim re-stamp). */
+      moveToEnd?: boolean
+    }
   | {
       type: "CREATE_CONVERSATION"
       conversation: Conversation
@@ -694,9 +701,16 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
                   messages: conv.messages.some(
                     (m) => m.id === action.message.id
                   )
-                    ? conv.messages.map((m) =>
-                        m.id === action.message.id ? action.message : m
-                      )
+                    ? action.moveToEnd
+                      ? [
+                          ...conv.messages.filter(
+                            (m) => m.id !== action.message.id
+                          ),
+                          action.message,
+                        ]
+                      : conv.messages.map((m) =>
+                          m.id === action.message.id ? action.message : m
+                        )
                     : [...conv.messages, action.message],
                 }
               : conv

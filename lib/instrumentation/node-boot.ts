@@ -27,6 +27,23 @@ export async function registerRuntime(): Promise<void> {
     if (backgroundWorkDisabled()) return
     const { startScheduler } = await import('@/lib/scheduling/scheduler')
     startScheduler()
+    // Steering resilience: if a queued follow-up isn't drained by the client
+    // that sent it (phone locked mid-run), run it headlessly via a wake turn.
+    try {
+        const { startFollowUpSweep } = await import('@/lib/chat-wake')
+        startFollowUpSweep()
+    } catch (err) {
+        console.error('[chat-wake] failed to arm follow-up sweep', err)
+    }
+    // Tracked background jobs: reconcile rows that were 'running' before a
+    // restart (their child processes are no longer ours) and arm the liveness
+    // poll that fires completion wakes.
+    try {
+        const { startBackgroundJobWatcher } = await import('@/lib/ai/background-jobs')
+        startBackgroundJobWatcher()
+    } catch (err) {
+        console.error('[background-jobs] failed to arm watcher', err)
+    }
     // Memory observability + OOM watchdog: periodically logs process memory
     // (rss/heapUsed/external/arrayBuffers) and restarts the process in a
     // controlled way if RSS climbs toward a host OOM. Motivated by the

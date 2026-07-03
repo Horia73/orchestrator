@@ -14,6 +14,9 @@ export type ChatRequestBody = {
   promptContext?: unknown
   promptContextSource?: unknown
   activateIntegrations?: unknown
+  /** Set when this turn drains a queued steering follow-up: the server claims
+   *  the queue entry so the same follow-up can never run twice. */
+  followUpId?: unknown
 }
 
 function isRequestMessage(value: unknown): value is Message {

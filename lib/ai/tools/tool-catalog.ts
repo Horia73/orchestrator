@@ -6,6 +6,10 @@ import { readTool } from "./read"
 import { writeTool } from "./write"
 import { editTool } from "./edit"
 import { bashTool } from "./bash-def"
+import {
+  manageBackgroundJobsTool,
+  startBackgroundJobTool,
+} from "./background-jobs-tools"
 import { globTool } from "./glob"
 import { grepTool } from "./grep"
 import { webFetchTool } from "./web"
@@ -86,6 +90,8 @@ export const ALL_TOOL_DEFS: ToolDef[] = [
   writeTool,
   editTool,
   bashTool,
+  startBackgroundJobTool,
+  manageBackgroundJobsTool,
   globTool,
   grepTool,
   webFetchTool,

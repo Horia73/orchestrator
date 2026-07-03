@@ -1,4 +1,5 @@
 import { stopChatStream } from '@/lib/chat-streams'
+import { clearFollowUps } from '@/lib/chat-followups'
 import { runWithRequestProfile } from "@/lib/profiles/server"
 
 export async function POST(request: Request) {
@@ -25,6 +26,10 @@ export async function POST(request: Request) {
             ? body.messageId.trim()
             : undefined
         const stopped = stopChatStream(conversationId, messageId)
+        // Stop means stop: queued steering follow-ups are dropped too. Their
+        // user messages stay in the conversation and ride along as history on
+        // the next manual send.
+        clearFollowUps(conversationId)
 
         return new Response(JSON.stringify({ stopped }), {
             headers: {

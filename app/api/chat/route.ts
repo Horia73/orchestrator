@@ -38,6 +38,7 @@ import {
 } from "@/lib/ai/tools/registry"
 import { extractUploadAttachmentsFromContent } from "@/lib/ai/media-assets"
 import { clearChatStream, registerChatStream } from "@/lib/chat-streams"
+import { claimFollowUp } from "@/lib/chat-followups"
 import {
   getCachedPendingUpdate,
   isUpdateMaintenanceActive,
@@ -215,6 +216,24 @@ export async function POST(request: Request) {
         )
       }
 
+      // Steering drain: this turn runs a queued follow-up. Claim it up front —
+      // whoever loses the claim race (client drain vs server sweep) backs off
+      // so the follow-up never runs twice.
+      let claimedFollowUpMessageId: string | null = null
+      if (typeof body.followUpId === "string" && body.followUpId) {
+        const claimed = claimFollowUp(conversationId, body.followUpId)
+        if (!claimed) {
+          return new Response(
+            JSON.stringify({
+              error: "Follow-up already claimed",
+              code: "followup_already_claimed",
+            }),
+            { status: 409, headers: { "Content-Type": "application/json" } }
+          )
+        }
+        claimedFollowUpMessageId = claimed.userMessageId
+      }
+
       // Ensure conversation exists (race condition: frontend fires POST /api/conversations
       // in parallel, but /api/chat may arrive first). Do this before runtime
       // validation so setup failures still persist as normal assistant messages.
@@ -222,10 +241,31 @@ export async function POST(request: Request) {
       // Merge browser-supplied history with persisted history. The client normally
       // sends the full local conversation; near request-size limits it may strip
       // UI-only metadata while preserving all role/content/attachments context.
-      const messagesForProvider = mergeMessagesForProvider(
+      let messagesForProvider = mergeMessagesForProvider(
         existingConversation?.messages ?? [],
         requestMessages
       )
+      if (claimedFollowUpMessageId) {
+        // The follow-up was typed while the PREVIOUS turn streamed, but that
+        // turn's terminal persist stamps the assistant row with its completion
+        // time — later than the follow-up's send time. Re-stamp the follow-up
+        // to claim time so the timestamp order matches what the user saw:
+        // question → answer → follow-up → its answer.
+        const restampedAt = Date.now()
+        let restamped: Message | null = null
+        messagesForProvider = messagesForProvider.map((message) => {
+          if (message.id !== claimedFollowUpMessageId) return message
+          restamped = { ...message, timestamp: restampedAt }
+          return restamped
+        })
+        if (restamped) {
+          addMessage(conversationId, restamped)
+          messagesForProvider.sort((a, b) => {
+            const timeDelta = a.timestamp - b.timestamp
+            return timeDelta !== 0 ? timeDelta : a.id.localeCompare(b.id)
+          })
+        }
+      }
       const promptContext = sanitizePromptContext(body.promptContext)
       const promptContextSource = sanitizePromptContextSource(
         body.promptContextSource

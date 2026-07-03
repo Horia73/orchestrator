@@ -29,6 +29,16 @@ const executeBashLazy: ToolExecutor = async (args, ctx) => {
   return executeBash(args, ctx)
 }
 
+const executeStartBackgroundJobLazy: ToolExecutor = async (args, ctx) => {
+  const { executeStartBackgroundJob } = await import("../background-jobs-tools")
+  return executeStartBackgroundJob(args, ctx)
+}
+
+const executeManageBackgroundJobsLazy: ToolExecutor = async (args, ctx) => {
+  const { executeManageBackgroundJobs } = await import("../background-jobs-tools")
+  return executeManageBackgroundJobs(args, ctx)
+}
+
 export const coreToolExecutors: Record<string, ToolExecutor> = {
   list_dir: executeListDir,
   read_file: executeReadFile,
@@ -43,6 +53,8 @@ export const coreToolExecutors: Record<string, ToolExecutor> = {
   Write: executeWrite,
   Edit: executeEdit,
   Bash: executeBashLazy,
+  start_background_job: executeStartBackgroundJobLazy,
+  manage_background_jobs: executeManageBackgroundJobsLazy,
   Glob: executeGlob,
   Grep: executeGrep,
   WebFetch: executeWebFetch,
