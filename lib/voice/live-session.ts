@@ -21,7 +21,15 @@ import {
 } from "@google/genai"
 
 import { getApiKey, getConfig } from "@/lib/config"
-import { addMessage, createConversation } from "@/lib/db"
+import {
+  addMessage,
+  createConversation,
+  updateConversationContextUsage,
+} from "@/lib/db"
+import {
+  logRequestComplete,
+  logRequestStart,
+} from "@/lib/observability/store"
 import { runWithProfileContext } from "@/lib/profiles/context"
 import type { ProfileRole } from "@/lib/profiles/types"
 import { resolveVoiceLiveModel } from "@/lib/voice/model"
@@ -56,7 +64,23 @@ export class VoiceLiveSession {
   private reconnectAttempts = 0
   private userTranscript = ""
   private assistantTranscript = ""
-  private usageTotals = { input: 0, output: 0 }
+  private readonly requestId = `voice_${randomUUID()}`
+  private readonly startedAt = Date.now()
+  private requestLogged = false
+  private turnCount = 0
+  private searchedThisTurn = false
+  // Accumulated across turns in the Gemini snake_case shape the observability
+  // usage-mapper already understands for provider "google" — voice sessions
+  // then show up in Logs and the Usage report like any other request.
+  private usage = {
+    total_input_tokens: 0,
+    total_output_tokens: 0,
+    total_thought_tokens: 0,
+    total_cached_tokens: 0,
+    total_tokens: 0,
+    input_tokens_by_modality: {} as Record<string, number>,
+    output_tokens_by_modality: {} as Record<string, number>,
+  }
 
   constructor(opts: VoiceLiveSessionOptions) {
     this.opts = opts
@@ -75,6 +99,20 @@ export class VoiceLiveSession {
       return
     }
     this.model = await this.inCtxAsync(() => resolveVoiceLiveModel())
+    this.inCtx(() => {
+      logRequestStart({
+        requestId: this.requestId,
+        conversationId: this.conversationId,
+        agentId: "voice",
+        provider: "google",
+        model: this.model,
+        thinkingLevel: "none",
+        statefulMode: true,
+        startedAt: this.startedAt,
+        inputText: "[live voice session]",
+      })
+      this.requestLogged = true
+    })
     await this.connect(apiKey)
   }
 
@@ -159,10 +197,25 @@ export class VoiceLiveSession {
     if (this.closed) return
     this.closed = true
     this.persistPendingTurn()
-    if (this.usageTotals.input || this.usageTotals.output) {
+    if (this.usage.total_input_tokens || this.usage.total_output_tokens) {
       console.log(
-        `[voice] session ended (${reason}) model=${this.model} tokens in=${this.usageTotals.input} out=${this.usageTotals.output}`
+        `[voice] session ended (${reason}) model=${this.model} tokens in=${this.usage.total_input_tokens} out=${this.usage.total_output_tokens}`
       )
+    }
+    if (this.requestLogged) {
+      try {
+        this.inCtx(() =>
+          logRequestComplete({
+            requestId: this.requestId,
+            endedAt: Date.now(),
+            provider: "google",
+            usage: this.usage,
+            outputText: `[voice session] ${this.turnCount} turn(s), ended: ${reason}`,
+          })
+        )
+      } catch (err) {
+        console.error("[voice] failed to log session usage", err)
+      }
     }
     try {
       this.session?.close()
@@ -210,6 +263,12 @@ export class VoiceLiveSession {
     if (content.interrupted) {
       this.opts.send({ type: "interrupted" })
     }
+    if (content.groundingMetadata && !this.searchedThisTurn) {
+      // Native google_search runs inside the model; grounding metadata is the
+      // only signal it happened. Surface it so the UI can show/announce it.
+      this.searchedThisTurn = true
+      this.opts.send({ type: "tool", name: "google_search", status: "done" })
+    }
     if (content.inputTranscription?.text) {
       this.userTranscript += content.inputTranscription.text
       this.opts.send({
@@ -233,7 +292,10 @@ export class VoiceLiveSession {
       if (data) this.opts.sendAudio(Buffer.from(data, "base64"))
     }
     if (content.turnComplete) {
+      this.turnCount += 1
+      this.searchedThisTurn = false
       this.persistPendingTurn()
+      this.updateConversationUsage()
       this.opts.send({ type: "turn_complete" })
       if (this.endRequested) {
         this.opts.send({ type: "closed", reason: "assistant-ended" })
@@ -369,8 +431,45 @@ export class VoiceLiveSession {
   }
 
   private accumulateUsage(usage: UsageMetadata): void {
-    this.usageTotals.input += usage.promptTokenCount ?? 0
-    this.usageTotals.output += usage.responseTokenCount ?? 0
+    this.usage.total_input_tokens += usage.promptTokenCount ?? 0
+    this.usage.total_output_tokens += usage.responseTokenCount ?? 0
+    this.usage.total_thought_tokens += usage.thoughtsTokenCount ?? 0
+    this.usage.total_cached_tokens += usage.cachedContentTokenCount ?? 0
+    this.usage.total_tokens += usage.totalTokenCount ?? 0
+    for (const detail of usage.promptTokensDetails ?? []) {
+      if (!detail.modality) continue
+      this.usage.input_tokens_by_modality[detail.modality] =
+        (this.usage.input_tokens_by_modality[detail.modality] ?? 0) +
+        (detail.tokenCount ?? 0)
+    }
+    for (const detail of usage.responseTokensDetails ?? []) {
+      if (!detail.modality) continue
+      this.usage.output_tokens_by_modality[detail.modality] =
+        (this.usage.output_tokens_by_modality[detail.modality] ?? 0) +
+        (detail.tokenCount ?? 0)
+    }
+  }
+
+  private updateConversationUsage(): void {
+    if (!this.conversationCreated) return
+    try {
+      this.inCtx(() =>
+        updateConversationContextUsage(this.conversationId, {
+          provider: "google",
+          model: this.model,
+          source: "provider-final",
+          accuracy: "actual",
+          updatedAt: Date.now(),
+          inputTokens: this.usage.total_input_tokens,
+          outputTokens: this.usage.total_output_tokens,
+          thinkingTokens: this.usage.total_thought_tokens || null,
+          cachedTokens: this.usage.total_cached_tokens || null,
+          totalTokens: this.usage.total_tokens,
+        })
+      )
+    } catch (err) {
+      console.error("[voice] failed to update conversation usage", err)
+    }
   }
 
   private inCtx<T>(fn: () => T): T {
@@ -402,7 +501,7 @@ function buildSystemInstruction(): string {
     "Style: answer briefly and conversationally — one to three short sentences, no markdown, no lists, no URLs read aloud. Match the user's language (they may speak Romanian or English).",
     "",
     "Capabilities:",
-    "- Control the smart home through the home_assistant_* tools. If you are not sure of an entity id, call home_assistant_find_entities first; never invent ids. Security devices (locks, alarms) are off-limits from voice.",
+    "- You DO have live smart-home access through the home_assistant_* tools — never claim you cannot reach or control the home without actually calling them first. If you are not sure of an entity id, call home_assistant_find_entities first; never invent ids. If a tool call fails, say what failed specifically instead of a generic disclaimer. Security devices (locks, alarms) are the only off-limits domain from voice.",
     "- Use Google Search for anything fresh: weather, sports, news, opening hours.",
     "- For complex or slow work (research, multi-step tasks, writing), call delegate_to_orchestrator and tell the user you will get back to them — the result is announced automatically when ready.",
     "- When a [system notice] message arrives, relay it naturally to the user.",

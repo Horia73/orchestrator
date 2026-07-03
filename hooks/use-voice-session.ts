@@ -104,8 +104,52 @@ export function useVoiceSession(): VoiceSessionHandle {
   const speakingCheckRef = React.useRef<number | null>(null)
   const wakeLockRef = React.useRef<{ release: () => Promise<void> } | null>(null)
   const stoppedRef = React.useRef(false)
+  const workingLoopRef = React.useRef<number | null>(null)
+
+  // One soft, low blip — the "I'm working on it" cue looped while a tool runs.
+  const playCueNote = React.useCallback(
+    (frequency: number, at = 0, duration = 0.14, peak = 0.045) => {
+      const ctx = audioContextRef.current
+      if (!ctx) return
+      const start = ctx.currentTime + at
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = "sine"
+      osc.frequency.value = frequency
+      gain.gain.setValueAtTime(0, start)
+      gain.gain.linearRampToValueAtTime(peak, start + 0.03)
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + duration)
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.start(start)
+      osc.stop(start + duration + 0.05)
+    },
+    []
+  )
+
+  const startWorkingLoop = React.useCallback(() => {
+    if (workingLoopRef.current !== null) return
+    playCueNote(523.25)
+    workingLoopRef.current = window.setInterval(() => {
+      playCueNote(523.25)
+      playCueNote(659.25, 0.16)
+    }, 1_400)
+  }, [playCueNote])
+
+  const stopWorkingLoop = React.useCallback(() => {
+    if (workingLoopRef.current === null) return
+    window.clearInterval(workingLoopRef.current)
+    workingLoopRef.current = null
+  }, [])
+
+  // A short ascending chime — played when the model consulted Google Search.
+  const playSearchChime = React.useCallback(() => {
+    playCueNote(659.25, 0, 0.12)
+    playCueNote(987.77, 0.11, 0.16)
+  }, [playCueNote])
 
   const cleanup = React.useCallback(() => {
+    stopWorkingLoop()
     if (speakingCheckRef.current !== null) {
       window.clearInterval(speakingCheckRef.current)
       speakingCheckRef.current = null
@@ -308,11 +352,29 @@ export function useVoiceSession(): VoiceSessionHandle {
           }
           break
         }
-        case "tool":
-          setActiveTool(message.status === "running" ? String(message.name ?? "") : null)
+        case "tool": {
+          const name = String(message.name ?? "")
+          if (message.status === "running") {
+            setActiveTool(name)
+            startWorkingLoop()
+          } else {
+            setActiveTool(null)
+            stopWorkingLoop()
+          }
+          if (name === "google_search" && message.status === "done") {
+            // Native search has no "running" phase we can observe — announce
+            // it after the fact with a soft chime and a brief chip.
+            playSearchChime()
+            setActiveTool("google_search")
+            window.setTimeout(() => {
+              setActiveTool((current) => (current === "google_search" ? null : current))
+            }, 2_500)
+          }
           break
+        }
         case "turn_complete":
           setActiveTool(null)
+          stopWorkingLoop()
           break
         case "error": {
           const text =
@@ -336,7 +398,14 @@ export function useVoiceSession(): VoiceSessionHandle {
           break
       }
     }
-  }, [cleanup, enqueuePlayback, flushPlayback])
+  }, [
+    cleanup,
+    enqueuePlayback,
+    flushPlayback,
+    playSearchChime,
+    startWorkingLoop,
+    stopWorkingLoop,
+  ])
 
   const toggleMute = React.useCallback(() => {
     const stream = mediaStreamRef.current
