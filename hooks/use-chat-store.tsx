@@ -209,6 +209,11 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   // and hand the turn to recoverInterruptedStream.
   const streamLastActivityRef = React.useRef(0)
   const streamReaderActiveRef = React.useRef(false)
+  // True from the start POST until response headers arrive. A dead radio can
+  // hang the fetch in this window too (no reader yet, so reader liveness alone
+  // would never flag it) — the watchdog treats a long-silent in-flight POST
+  // as the same stall.
+  const streamPostInFlightRef = React.useRef(false)
   const streamStallRequestedRef = React.useRef(false)
   // Single-flight per conversation: focus/online/poll triggers can all ask
   // for recovery at once; they join the in-flight run instead of stacking
@@ -1206,10 +1211,15 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         // If nothing has arrived for longer than the keepalive cadence
         // tolerates, abort the fetch; the send path's catch sees the stall
         // flag and runs stream recovery instead of surfacing "stopped".
-        if (
-          streamReaderActiveRef.current &&
-          Date.now() - streamLastActivityRef.current > STREAM_RESUME_STALL_MS
-        ) {
+        // Reader attached: keepalives mean any silence past the short resume
+        // window is a dead connection. POST still awaiting headers: no
+        // keepalive exists yet, so give it the full stall timeout before
+        // cutting it loose (re-sending is idempotent — stable message ids).
+        const quietForMs = Date.now() - streamLastActivityRef.current
+        const stalled = streamReaderActiveRef.current
+          ? quietForMs > STREAM_RESUME_STALL_MS
+          : streamPostInFlightRef.current && quietForMs > STREAM_STALL_TIMEOUT_MS
+        if (stalled) {
           streamStallRequestedRef.current = true
           abortControllerRef.current?.abort()
         }
@@ -1980,6 +1990,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       streamPageWasHiddenRef.current = document.visibilityState !== "visible"
       streamStallRequestedRef.current = false
       streamReaderActiveRef.current = false
+      streamPostInFlightRef.current = false
       streamLastActivityRef.current = Date.now()
 
       dispatch({
@@ -2009,7 +2020,12 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       // visible stream that has been byte-silent past the stall timeout is
       // dead — abort it and let the catch below run recovery/resend.
       const stallWatchdog = window.setInterval(() => {
-        if (!streamReaderActiveRef.current) return
+        // Two stallable phases: reader attached (keepalives make silence a
+        // dead connection) and POST still awaiting headers (a silently dropped
+        // radio hangs the fetch with no reader to observe). Between attempts
+        // (recovery running inside the catch) both flags are down — no-op.
+        if (!streamReaderActiveRef.current && !streamPostInFlightRef.current)
+          return
         if (document.visibilityState === "hidden") return
         if (
           Date.now() - streamLastActivityRef.current <=
@@ -2029,6 +2045,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       const runStreamTurn = (): Promise<void> => {
         const attemptController = new AbortController()
         abortControllerRef.current = attemptController
+        streamPostInFlightRef.current = true
         return startChatStreamRequest({
           conversationId: finalConvId,
           messageId: assistantMsgId,
@@ -2039,6 +2056,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           signal: attemptController.signal,
         })
         .then(async (response) => {
+          streamPostInFlightRef.current = false
           if (!response.ok) {
             const err = await response
               .json()
@@ -2825,6 +2843,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           streamReaderActiveRef.current = false
         })
         .catch(async (err) => {
+          streamPostInFlightRef.current = false
           streamReaderActiveRef.current = false
           const stallAborted = streamStallRequestedRef.current
           streamStallRequestedRef.current = false
@@ -2911,6 +2930,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
       void runStreamTurn().finally(() => {
         window.clearInterval(stallWatchdog)
+        streamPostInFlightRef.current = false
         streamReaderActiveRef.current = false
         if (clientStreamMessageIdRef.current === assistantMsgId) {
           streamingRef.current = false

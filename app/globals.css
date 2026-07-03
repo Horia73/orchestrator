@@ -596,6 +596,10 @@ button:not(:disabled),
           linear-gradient(to left, var(--background), rgb(from var(--background) r g b / 0) 16px) right / 22px 100% local,
           linear-gradient(to right, color-mix(in oklch, var(--foreground) 14%, transparent), rgb(from var(--foreground) r g b / 0) 18px) left / 28px 100% scroll,
           linear-gradient(to left, color-mix(in oklch, var(--foreground) 14%, transparent), rgb(from var(--foreground) r g b / 0) 18px) right / 28px 100% scroll;
+        /* The shorthand above resets background-repeat to `repeat`, and this
+           later rule outranks the base rule's `no-repeat` — restate it or the
+           16-22px fades tile across the whole scroller. */
+        background-repeat: no-repeat;
       }
     }
   }

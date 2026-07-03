@@ -431,11 +431,10 @@ export function resolveIntegrationConnectionForProfile(
     : null
   if (preferred) return preferred
 
-  return (
-    accessible.find((item) => item.source === "owned") ??
-    accessible[0] ??
-    null
-  )
+  // A grant means "available to select", not "use this other profile's
+  // account by default". Default runtime resolution stays on the profile's own
+  // connection unless the user explicitly picked a shared connection.
+  return accessible.find((item) => item.source === "owned") ?? null
 }
 
 export function grantIntegrationConnection(input: {

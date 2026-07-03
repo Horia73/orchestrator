@@ -46,6 +46,7 @@ import type {
 const QR_TTL_MS = 60_000
 const READY_WAIT_TIMEOUT_MS = 120_000
 const DEFAULT_OPERATION_TIMEOUT_MS = 30_000
+const GROUP_METADATA_TIMEOUT_MS = 5_000
 const MEDIA_DOWNLOAD_TIMEOUT_MS = 60_000
 const WA_WEB_VERSION_TIMEOUT_MS = 5_000
 const FIND_MESSAGES_DEFAULT_MAX_RESULTS = 20
@@ -220,10 +221,10 @@ export class BaileysWhatsAppManager {
     async listChats(maxResults: number): Promise<{ chats: WhatsAppChatSummary[] }> {
         await this.requireReadySocket()
         const limit = clamp(Math.floor(maxResults), 1, 50)
+        const chats = this.sortedChats().slice(0, limit)
+        await this.hydrateGroupNames(chats)
         return {
-            chats: this.sortedChats()
-                .slice(0, limit)
-                .map(chat => this.chatSummary(chat)),
+            chats: chats.map(chat => this.chatSummary(chat)),
         }
     }
 
@@ -232,19 +233,21 @@ export class BaileysWhatsAppManager {
         const limit = clamp(Math.floor(maxResults), 1, 50)
         const unreadChats = this.sortedChats()
             .filter(chat => chat.unreadCount > 0)
-            .map(chat => this.unreadChatSummary(chat))
+        await this.hydrateGroupNames(unreadChats.slice(0, limit))
+        const unreadSummaries = unreadChats.map(chat => this.unreadChatSummary(chat))
         return {
-            totalUnread: unreadChats.reduce((sum, chat) => sum + chat.unreadCount, 0),
-            unreadChatCount: unreadChats.length,
+            totalUnread: unreadSummaries.reduce((sum, chat) => sum + chat.unreadCount, 0),
+            unreadChatCount: unreadSummaries.length,
             scannedChats: this.chats.size,
-            unreadChats: unreadChats.slice(0, limit),
-            truncated: unreadChats.length > limit,
+            unreadChats: unreadSummaries.slice(0, limit),
+            truncated: unreadSummaries.length > limit,
         }
     }
 
     async readChat(chatId: string, maxMessages: number, maxChars: number): Promise<WhatsAppReadChatResult> {
         await this.requireReadySocket()
         const chat = this.requireChat(chatId)
+        await this.hydrateGroupNames([chat])
         const newestFirst = this.messagesForChat(chat.id)
             .slice()
             .sort((a, b) => timestampOfMessage(b) - timestampOfMessage(a))
@@ -274,6 +277,7 @@ export class BaileysWhatsAppManager {
         const candidateChats = args.chatId
             ? [this.requireChat(args.chatId)]
             : this.sortedChats().slice(0, clamp(Math.floor(args.maxChats), 1, 50))
+        await this.hydrateGroupNames(candidateChats)
         const maxResults = clamp(Math.floor(args.maxResults), 1, 50)
         const perChatLimit = clamp(Math.floor(args.perChatLimit), 1, 150)
         const results: WhatsAppMessageSummary[] = []
@@ -327,6 +331,7 @@ export class BaileysWhatsAppManager {
         const maxResults = clamp(Math.floor(args.maxResults ?? FIND_MESSAGES_DEFAULT_MAX_RESULTS), 1, FIND_MESSAGES_MAX_RESULTS)
         const maxMessages = clamp(Math.floor(args.maxMessages ?? FIND_MESSAGES_DEFAULT_MAX_MESSAGES), 50, FIND_MESSAGES_MAX_MESSAGES)
         const timeZone = normalizeTimezone(args.timeZone, 'UTC')
+        await this.hydrateGroupNames([chat])
         const messages = this.messagesForChat(chat.id)
             .slice()
             .sort((a, b) => timestampOfMessage(b) - timestampOfMessage(a))
@@ -388,6 +393,7 @@ export class BaileysWhatsAppManager {
         if (!message) throw new Error('WhatsApp did not return a sent message.')
         this.upsertMessage(message)
         const chat = this.ensureChatForJid(jid, message)
+        await this.hydrateGroupNames([chat])
         return {
             status: 'sent',
             chat: this.chatSummary(chat),
@@ -417,12 +423,16 @@ export class BaileysWhatsAppManager {
             )
             if (!message) throw new Error(`WhatsApp did not return a sent message for ${attachment.filename}.`)
             this.upsertMessage(message)
-            messages.push(this.messageSummary(message, this.ensureChatForJid(jid, message)))
+            const chat = this.ensureChatForJid(jid, message)
+            await this.hydrateGroupNames([chat])
+            messages.push(this.messageSummary(message, chat))
         }
 
+        const chat = this.ensureChatForJid(jid)
+        await this.hydrateGroupNames([chat])
         return {
             status: 'sent',
-            chat: this.chatSummary(this.ensureChatForJid(jid)),
+            chat: this.chatSummary(chat),
             messages,
             attachments: attachments.map(attachmentSummary),
             caption: cleanCaption || null,
@@ -445,6 +455,7 @@ export class BaileysWhatsAppManager {
             )
         }
         chat.unreadCount = 0
+        await this.hydrateGroupNames([chat])
         return {
             status: 'marked_read',
             chatId: chat.id,
@@ -468,6 +479,7 @@ export class BaileysWhatsAppManager {
             `WhatsApp mark chat unread timed out for ${chat.id}.`
         )
         chat.unreadCount = Math.max(chat.unreadCount, 1)
+        await this.hydrateGroupNames([chat])
         return {
             status: 'marked_unread',
             chatId: chat.id,
@@ -906,6 +918,27 @@ export class BaileysWhatsAppManager {
         this.chats.set(normalized, chat)
         this.trimChats()
         return chat
+    }
+
+    private async hydrateGroupNames(chats: StoredChat[]): Promise<void> {
+        const socket = this.socket
+        if (!socket) return
+        const missing = chats.filter(chat => chat.isGroup && !chat.name)
+        if (missing.length === 0) return
+
+        await Promise.allSettled(missing.map(async chat => {
+            try {
+                const metadata = await withTimeout(
+                    socket.groupMetadata(chat.id),
+                    GROUP_METADATA_TIMEOUT_MS,
+                    `WhatsApp group metadata lookup timed out for ${chat.id}.`
+                )
+                const name = stringField(metadata, ['subject', 'name'])
+                if (name) chat.name = name
+            } catch {
+                // Best-effort: fall back to the group JID when metadata is unavailable.
+            }
+        }))
     }
 
     private chatSummary(chat: StoredChat): WhatsAppChatSummary {

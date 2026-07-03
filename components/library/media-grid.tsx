@@ -137,10 +137,11 @@ export function MediaGrid({
     }
   }, [])
 
-  // Measured aspect ratios live in a ref and are flushed once per frame, so a
-  // burst of image `onLoad` events triggers a single re-layout, not one each.
+  // Measured aspect ratios accumulate in a ref and are flushed once per frame
+  // as an immutable snapshot, so a burst of image `onLoad` events triggers a
+  // single re-layout, not one each.
   const ratiosRef = React.useRef<Map<string, number>>(new Map())
-  const [ratioVersion, setRatioVersion] = React.useState(0)
+  const [ratios, setRatios] = React.useState<ReadonlyMap<string, number>>(() => new Map())
   const rafRef = React.useRef<number | null>(null)
 
   const reportRatio = React.useCallback((id: string, ratio: number) => {
@@ -151,7 +152,7 @@ export function MediaGrid({
     if (rafRef.current == null) {
       rafRef.current = requestAnimationFrame(() => {
         rafRef.current = null
-        setRatioVersion((v) => v + 1)
+        setRatios(new Map(ratiosRef.current))
       })
     }
   }, [])
@@ -168,13 +169,11 @@ export function MediaGrid({
     () =>
       computeRows(
         attachments,
-        (item) => ratiosRef.current.get(item.id) ?? DEFAULT_RATIO,
+        (item) => ratios.get(item.id) ?? DEFAULT_RATIO,
         width,
         target,
       ),
-    // ratioVersion stands in for the mutable ratiosRef read inside computeRows.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [attachments, width, target, ratioVersion],
+    [attachments, width, target, ratios],
   )
 
   // --- Lightbox navigation ----------------------------------------------------

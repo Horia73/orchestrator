@@ -947,13 +947,6 @@ export async function POST(request: Request) {
               /* controller closed */
             }
           }
-          const keepalive = setInterval(() => {
-            try {
-              controller.enqueue(enc.encode(`: ping\n\n`))
-            } catch {
-              /* controller closed — run may outlive the client; cleared below */
-            }
-          }, STREAM_KEEPALIVE_INTERVAL_MS)
           const artifactStream = createArtifactStreamBridge({
             conversationId,
             messageId,
@@ -1043,6 +1036,16 @@ export async function POST(request: Request) {
             }
           }
 
+          // Created immediately before the try so the finally's clearInterval
+          // is unskippable — an interval orphaned by a throw in earlier setup
+          // would ping a dead controller forever.
+          const keepalive = setInterval(() => {
+            try {
+              controller.enqueue(enc.encode(`: ping\n\n`))
+            } catch {
+              /* controller closed — run may outlive the client; cleared below */
+            }
+          }, STREAM_KEEPALIVE_INTERVAL_MS)
           try {
             let lastModelAttemptError: string | null = null
             for (

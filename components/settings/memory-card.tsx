@@ -256,6 +256,7 @@ export function MemoryCard() {
     }
   }, [load])
 
+  const fallbackThreshold = form?.threshold ?? 0
   const runSearch = React.useCallback(async () => {
     const q = query.trim()
     if (!q) return
@@ -273,7 +274,7 @@ export function MemoryCard() {
       setSearchResult({
         rawHits,
         automaticHits: ((j.automaticHits ?? []) as SearchHit[]),
-        threshold: typeof j.threshold === "number" ? j.threshold : form?.threshold ?? 0,
+        threshold: typeof j.threshold === "number" ? j.threshold : fallbackThreshold,
         topK: typeof j.topK === "number" ? j.topK : 4,
       })
     } catch (e) {
@@ -281,7 +282,7 @@ export function MemoryCard() {
     } finally {
       setSearching(false)
     }
-  }, [form?.threshold, query])
+  }, [fallbackThreshold, query])
 
   const status = data?.status
   const cachedGenerations = (status?.generations ?? []).filter(

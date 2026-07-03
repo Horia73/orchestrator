@@ -23,6 +23,7 @@ try {
     getPreferredIntegrationConnectionId,
     listIntegrationConnections,
     listAccessibleIntegrationConnections,
+    resolveIntegrationConnectionForProfile,
     setPreferredIntegrationConnection,
   } = await import("@/lib/integrations/connection-store")
   const { createProfile } = await import("@/lib/profiles/store")
@@ -99,6 +100,10 @@ try {
         accessible[0]?.access === "read",
       accessible
     )
+    check(
+      "shared Gmail grant is not selected by default",
+      resolveIntegrationConnectionForProfile(member.id, "gmail") === null
+    )
     setPreferredIntegrationConnection({
       profileId: member.id,
       provider: "gmail",
@@ -143,6 +148,10 @@ try {
         whatsAppGrant,
         accessible: listAccessibleIntegrationConnections(member.id, "whatsapp"),
       }
+    )
+    check(
+      "shared WhatsApp grant is not selected by default",
+      resolveIntegrationConnectionForProfile(member.id, "whatsapp") === null
     )
   })
 } finally {

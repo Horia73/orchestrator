@@ -227,7 +227,7 @@ function csvToModel(rows: string[][], name: string): SheetModel {
 
 // --- component -------------------------------------------------------------
 type Source =
-    | { kind: "xlsx"; wb: Workbook }
+    | { kind: "xlsx"; wb: Workbook; numfmt: NumFmt }
     | { kind: "csv"; rows: string[][] }
 
 export function SpreadsheetViewer({
@@ -246,7 +246,6 @@ export function SpreadsheetViewer({
     const [source, setSource] = React.useState<Source | null>(null)
     const [sheetNames, setSheetNames] = React.useState<string[]>([])
     const [active, setActive] = React.useState(0)
-    const numfmtRef = React.useRef<NumFmt | null>(null)
 
     const ext = filename.toLowerCase().split(".").pop() ?? ""
     const isCsv = ext === "csv" || ext === "tsv" || mimeType === "text/csv"
@@ -278,7 +277,7 @@ export function SpreadsheetViewer({
                 if (cancelled) return
                 const exceljsMod = (await import("exceljs")) as unknown as { default?: { Workbook: new () => Workbook }; Workbook?: new () => Workbook }
                 const numfmtMod = (await import("numfmt")) as unknown as { format?: NumFmt["format"]; default?: NumFmt }
-                numfmtRef.current = (numfmtMod.format ? (numfmtMod as unknown as NumFmt) : numfmtMod.default!) as NumFmt
+                const numfmt = (numfmtMod.format ? (numfmtMod as unknown as NumFmt) : numfmtMod.default!) as NumFmt
                 const ExcelJS = exceljsMod.default ?? exceljsMod
                 const WorkbookCtor = ExcelJS.Workbook!
                 const wb = new WorkbookCtor()
@@ -286,7 +285,7 @@ export function SpreadsheetViewer({
                 if (cancelled) return
                 const names = wb.worksheets.map((w) => w.name)
                 if (names.length === 0) throw new Error("no sheets")
-                setSource({ kind: "xlsx", wb })
+                setSource({ kind: "xlsx", wb, numfmt })
                 setSheetNames(names)
                 setStatus("ready")
             } catch (err) {
@@ -309,7 +308,7 @@ export function SpreadsheetViewer({
             if (source.kind === "csv") return csvToModel(source.rows, filename)
             const ws = source.wb.worksheets[active]
             if (!ws) return null
-            return buildSheetModel(ws, numfmtRef.current!)
+            return buildSheetModel(ws, source.numfmt)
         } catch (err) {
             console.error("Sheet model build failed:", err)
             return null
