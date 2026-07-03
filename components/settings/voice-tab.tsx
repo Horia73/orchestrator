@@ -4,6 +4,7 @@ import * as React from "react"
 import { AudioLines, Loader2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { Select } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 
 interface VoiceConfigResponse {
@@ -118,18 +119,16 @@ export function VoiceTab() {
         <p className="text-[13px] text-muted-foreground">
           The prebuilt voice used for spoken replies.
         </p>
-        <select
+        <Select
           value={config.voiceName}
           disabled={saving}
-          onChange={(event) => save({ voiceName: event.target.value })}
-          className="h-9 w-56 rounded-md border border-border bg-background px-2 text-[14px]"
-        >
-          {config.voiceOptions.map((voice) => (
-            <option key={voice} value={voice}>
-              {voice}
-            </option>
-          ))}
-        </select>
+          onValueChange={(voiceName) => save({ voiceName })}
+          options={config.voiceOptions.map((voice) => ({
+            value: voice,
+            label: voice,
+          }))}
+          className="w-56"
+        />
       </section>
 
       <section className="flex flex-col gap-2">
@@ -138,19 +137,19 @@ export function VoiceTab() {
           “Automatic” always picks the newest live-capable Flash model from
           Google&apos;s catalog.
         </p>
-        <select
+        <Select
           value={config.model}
           disabled={saving}
-          onChange={(event) => save({ model: event.target.value })}
-          className="h-9 w-full max-w-md rounded-md border border-border bg-background px-2 text-[14px]"
-        >
-          <option value="auto">Automatic (recommended)</option>
-          {config.liveModels.map((model) => (
-            <option key={model} value={model}>
-              {model}
-            </option>
-          ))}
-        </select>
+          onValueChange={(model) => save({ model })}
+          options={[
+            { value: "auto", label: "Automatic (recommended)" },
+            ...config.liveModels.map((model) => ({
+              value: model,
+              label: model,
+            })),
+          ]}
+          className="w-full max-w-md"
+        />
       </section>
 
       <section className="flex flex-col gap-2">

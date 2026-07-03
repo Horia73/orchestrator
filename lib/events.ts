@@ -2,24 +2,24 @@ import { EventEmitter } from 'events';
 import type { ContextUsageSnapshot, Message } from '@/lib/types';
 import { getActiveProfileId } from '@/lib/profiles/context';
 
-// In Next.js development, the global object gets recreated on fast refresh,
-// so we need a persistent way to maintain the EventEmitter across reloads.
+// The emitters must be process-wide singletons registered on globalThis, in
+// production too — not only across dev fast-refresh. Next compiles the
+// instrumentation graph (voice gateway, scheduler boot wiring) separately
+// from the route-handler graph, so module-level instances can exist twice in
+// the same process; an event emitted by the voice gateway's copy would never
+// reach /api/sync listeners created by the routes' copy (conversations then
+// appear only after a refresh).
 const globalForEvents = globalThis as unknown as {
     chatEventEmitter?: EventEmitter;
     appEventEmitter?: EventEmitter;
 };
 
-export const chatEventEmitter = globalForEvents.chatEventEmitter || new EventEmitter();
-export const appEventEmitter = globalForEvents.appEventEmitter || new EventEmitter();
+export const chatEventEmitter = (globalForEvents.chatEventEmitter ??= new EventEmitter());
+export const appEventEmitter = (globalForEvents.appEventEmitter ??= new EventEmitter());
 
 // Increase max listeners if you expect many simultaneous connections
 chatEventEmitter.setMaxListeners(100);
 appEventEmitter.setMaxListeners(100);
-
-if (process.env.NODE_ENV !== 'production') {
-    globalForEvents.chatEventEmitter = chatEventEmitter;
-    globalForEvents.appEventEmitter = appEventEmitter;
-}
 
 // Event Types
 type ChatEventBase =

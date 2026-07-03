@@ -59,6 +59,12 @@ console.log('voice settings normalization:')
             custom.homeAssistant.blockedDomains.includes('alarm_control_panel')
     )
     check('valid room kept, broken room dropped', custom.rooms.length === 1 && custom.rooms[0].output === 'sonos-audioclip')
+
+    // The PATCH route computes normalize({...current, ...body}) - switching
+    // back to "auto" after an explicit model must stick.
+    const explicit = normalizeVoiceSettings({ model: 'gemini-3.1-flash-live-preview' })
+    const backToAuto = normalizeVoiceSettings({ ...explicit, model: 'auto' })
+    check('auto model selection persists over an explicit model', backToAuto.model === 'auto')
 }
 
 console.log('home assistant voice guard:')
