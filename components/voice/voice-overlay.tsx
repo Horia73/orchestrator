@@ -1,10 +1,69 @@
 "use client"
 
 import * as React from "react"
-import { Mic, MicOff, PhoneOff, Wrench } from "lucide-react"
+import {
+  Bot,
+  Check,
+  Globe,
+  House,
+  Mic,
+  MicOff,
+  PhoneOff,
+  Power,
+  Wrench,
+  X,
+} from "lucide-react"
 
-import { useVoiceSession } from "@/hooks/use-voice-session"
+import { useVoiceSession, type VoiceActivityEntry } from "@/hooks/use-voice-session"
 import { cn } from "@/lib/utils"
+
+function activityIcon(name: string) {
+  if (name.startsWith("home_assistant")) return House
+  if (name === "google_search") return Globe
+  if (name === "delegate_to_orchestrator") return Bot
+  if (name === "end_conversation") return Power
+  return Wrench
+}
+
+const ACTIVITY_LABELS: Record<string, string> = {
+  home_assistant_find_entities: "Finding devices",
+  home_assistant_get_state: "Reading device state",
+  home_assistant_control: "Controlling the home",
+  google_search: "Searched the web",
+  delegate_to_orchestrator: "Delegating a background task",
+  end_conversation: "Wrapping up",
+}
+
+function activityLabel(name: string): string {
+  return ACTIVITY_LABELS[name] ?? name.replaceAll("_", " ")
+}
+
+function ActivityFeed({ entries }: { entries: VoiceActivityEntry[] }) {
+  if (!entries.length) return null
+  return (
+    <div className="flex w-full max-w-sm flex-col gap-1">
+      {entries.slice(-4).map((entry) => {
+        const Icon = activityIcon(entry.name)
+        return (
+          <div
+            key={entry.id}
+            className="flex items-center gap-2 rounded-lg bg-muted/50 px-3 py-1.5 text-[12.5px] text-muted-foreground animate-in fade-in slide-in-from-bottom-1 duration-200"
+          >
+            <Icon className="size-3.5 shrink-0" strokeWidth={1.5} />
+            <span className="min-w-0 flex-1 truncate">{activityLabel(entry.name)}</span>
+            {entry.status === "running" ? (
+              <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-[#b76440]" />
+            ) : entry.status === "done" ? (
+              <Check className="size-3.5 shrink-0 text-emerald-600" strokeWidth={2} />
+            ) : (
+              <X className="size-3.5 shrink-0 text-red-500" strokeWidth={2} />
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 
 interface VoiceOverlayProps {
   open: boolean
@@ -85,16 +144,11 @@ export function VoiceOverlay({ open, onClose }: VoiceOverlayProps) {
           </div>
         </div>
 
-        <div className="flex flex-col items-center gap-1.5 text-center">
+        <div className="flex flex-col items-center gap-2 text-center">
           <span className="text-[15px] font-medium text-foreground">
             {statusLabel}
           </span>
-          {session.activeTool && (
-            <span className="flex items-center gap-1.5 rounded-full bg-muted px-3 py-1 text-[12px] text-muted-foreground">
-              <Wrench className="size-3.5" strokeWidth={1.5} />
-              {session.activeTool.replaceAll("_", " ")}
-            </span>
-          )}
+          <ActivityFeed entries={session.activity} />
           {session.error && (
             <span className="max-w-sm text-[13px] text-red-500">{session.error}</span>
           )}
