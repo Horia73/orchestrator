@@ -406,10 +406,10 @@ function Sidebar({
           // `fixed inset-y-0` (from the sheet variant) pins the bottom to the
           // layout viewport, which on iOS Safari sits *behind* the bottom
           // toolbar — hiding the profile/sign-out footer. Anchor to the top and
-          // size via --orch-sheet-viewport-height (globals.css): 100svh in
-          // browser tabs so the footer clears the toolbar, 100lvh in installed
-          // display modes where iOS 26 underreports svh/dvh and a plain svh
-          // sheet would stop above the real bottom edge.
+          // size via --orch-sheet-viewport-height (globals.css, 100svh) so the
+          // footer clears the toolbar. Note: iOS 26 standalone underreports
+          // svh, so the sheet can stop above the real bottom there — do not
+          // "fix" it with lvh (burned, see globals.css).
           className="w-(--sidebar-width) !bottom-auto !h-(--orch-sheet-viewport-height) bg-sidebar p-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-sidebar-foreground outline-none [&>button]:hidden"
           style={
             {

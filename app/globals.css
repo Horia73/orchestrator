@@ -765,47 +765,15 @@ html[data-orch-home-page="true"] body {
   }
 }
 
-/* iOS 26 standalone (installed webapp) sizes the layout viewport as if
-   Safari's collapsible chrome existed, so 100dvh/100svh land roughly an
-   address bar short of the screen: the chat input floats above the bottom
-   edge and the mobile sidebar sheet stops early, exposing an off-color strip.
-   An installed app can never show that chrome, so the large viewport (lvh) is
-   its true height — and on engines that report standalone correctly
-   (iOS 27+) lvh === dvh === svh there, making every rule below a strict
-   no-op. Browser tabs keep their dvh/svh semantics via the display-mode gate.
-   Keep this CSS-only: the JS screen-height patch was reverted (ea92fd90)
-   after breaking layouts on both healthy and buggy devices. */
+/* iOS standalone viewport sizing: do NOT "correct" dvh/svh with other units
+   or JS. Two attempts are burned — a JS screen-height patch (ea92fd90) and a
+   CSS 100lvh override gated on display-mode (30b71832): lvh exceeds the real
+   visible viewport on BOTH iOS 26 and iOS 27 standalone (differently), so
+   both truncated the bottom UI. The floating-input bug on iOS 26 must be
+   diagnosed from on-device numbers (ViewportProbeReporter telemetry) before
+   the next fix attempt. */
 :root {
   --orch-sheet-viewport-height: 100svh;
-}
-
-@media (display-mode: standalone), (display-mode: fullscreen) {
-  :root {
-    --orch-sheet-viewport-height: 100lvh;
-  }
-
-  .h-dvh,
-  .h-svh {
-    height: 100lvh;
-  }
-
-  .min-h-dvh,
-  .min-h-svh {
-    min-height: 100lvh;
-  }
-
-  /* The sheet overlay is `fixed inset-0`, i.e. anchored to the lying layout
-     viewport — stretch it so the dim layer reaches the real bottom edge. */
-  [data-slot="sheet-overlay"] {
-    min-height: 100lvh;
-  }
-
-  @media (max-width: 767px) {
-    html[data-orch-viewport-lock="true"] body,
-    html[data-orch-viewport-lock="true"] [data-slot="sidebar-wrapper"] {
-      height: 100lvh;
-    }
-  }
 }
 
 /* Map chrome on touch devices: the map (especially photorealistic 3D)
