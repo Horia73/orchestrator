@@ -20,6 +20,7 @@ import type {
   Conversation,
   MemoryRecallReasoningEntry,
   Message,
+  SteeredMessageReasoningEntry,
   ToolCallReasoningEntry,
 } from "@/lib/types"
 import type {
@@ -39,6 +40,8 @@ import {
 import { extractUploadAttachmentsFromContent } from "@/lib/ai/media-assets"
 import { clearChatStream, registerChatStream } from "@/lib/chat-streams"
 import { claimFollowUp } from "@/lib/chat-followups"
+import { clearTurnSteering, registerTurnSteering } from "@/lib/chat-steering"
+import { wrapSteeredMessage } from "@/lib/steered-message"
 import {
   getCachedPendingUpdate,
   isUpdateMaintenanceActive,
@@ -546,6 +549,13 @@ export async function POST(request: Request) {
       const serverAbortController = new AbortController()
       registerChatStream(conversationId, messageId, serverAbortController)
 
+      // Live steer function for the CURRENT provider attempt — set through
+      // StreamCallbacks.onSteeringAvailable while the provider's turn accepts
+      // mid-turn input (codex `turn/steer`), null otherwise. The registry
+      // handle (registered inside the stream below, where `send` exists)
+      // reads it at delivery time, so attempt retries/fallbacks are safe.
+      let providerSteer: ((text: string) => Promise<boolean>) | null = null
+
       // Automatic semantic memory recall for this user turn. Computed once (a turn
       // may build resolved messages more than once across attempts), fail-open: an
       // empty string when disabled, no key, timeout, or no match — i.e. the turn
@@ -997,6 +1007,59 @@ export async function POST(request: Request) {
           })
           let activeAttempt = preparedInitial
 
+          // Live steering: POST /api/chat/steer calls this while the turn
+          // streams. On provider-confirmed injection the message becomes part
+          // of THIS turn: a steered_message reasoning entry marks the exact
+          // injection point (always opening a fresh phase, so the transcript
+          // splits into before/after), the user row persists wrapped in
+          // <steered-message> (its standalone bubble is hidden — it renders
+          // inline at the marker), and the live client learns about it via
+          // the steered_message SSE event. Returning false sends the caller
+          // down the follow-up-queue path instead.
+          registerTurnSteering(conversationId, {
+            messageId,
+            deliver: async (message: Message): Promise<boolean> => {
+              const steer = providerSteer
+              if (!steer) return false
+              if (terminalMessageStatus || serverAbortController.signal.aborted)
+                return false
+              const text =
+                typeof message.content === "string" ? message.content.trim() : ""
+              if (!text) return false
+              if (Array.isArray(message.attachments) && message.attachments.length > 0)
+                return false
+              const accepted = await steer(text).catch(() => false)
+              if (!accepted) return false
+
+              reasoningPhase += 1
+              streamMode = "reasoning"
+              const at = Date.now()
+              const entry: SteeredMessageReasoningEntry = {
+                type: "steered_message",
+                id: `steered_${message.id}`,
+                phase: reasoningPhase,
+                userMessageId: message.id,
+                content: text,
+                at,
+                elapsedMs: elapsedMs(),
+              }
+              accReasoning.push(entry)
+              const persistedUser: Message = {
+                id: message.id,
+                role: "user",
+                content: wrapSteeredMessage(text),
+                timestamp: at,
+              }
+              addMessage(conversationId, persistedUser)
+              // A same-turn retry/fallback replays messagesForProvider —
+              // include the injected turn so it survives an attempt death.
+              messagesForProvider.push(persistedUser)
+              send({ type: "steered_message", entry, userMessageId: message.id })
+              persistAssistantProgress({ force: true })
+              return true
+            },
+          })
+
           const publishContextUsage = (
             snapshot: ContextUsageSnapshot,
             opts?: { force?: boolean }
@@ -1395,6 +1458,9 @@ export async function POST(request: Request) {
                     },
                     onThinkingDone(seconds) {
                       send({ type: "thinking_done", seconds })
+                    },
+                    onSteeringAvailable(steer) {
+                      providerSteer = steer
                     },
                     onContent(text) {
                       processContentChunk(text, /* synthetic= */ false)
@@ -1884,6 +1950,11 @@ export async function POST(request: Request) {
                     })
                   }
                 }
+              } finally {
+                // The attempt's turn is over (done, error, or abort) — a
+                // provider that died without retracting must not leave a
+                // stale steer function pointing at a dead process.
+                providerSteer = null
               }
               if (
                 terminalMessageStatus === "ok" ||
@@ -2027,6 +2098,7 @@ export async function POST(request: Request) {
             )
           } finally {
             clearInterval(keepalive)
+            clearTurnSteering(conversationId, messageId)
             clearChatStream(conversationId, messageId)
           }
 

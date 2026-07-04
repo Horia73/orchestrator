@@ -10,8 +10,10 @@ import type {
   Conversation,
   MemoryRecallReasoningEntry,
   Message,
+  SteeredMessageReasoningEntry,
   ToolStreamDelta,
 } from "@/lib/types"
+import { wrapSteeredMessage } from "@/lib/steered-message"
 import {
   appendBoundedToolDelta,
   sanitizeReasoningForPersistence,
@@ -644,6 +646,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     if (conversationId) followUpQueuesRef.current.delete(conversationId)
     if (conversationId) {
       streamDoneRef.current = true
+      // Their pending-steering look clears too — they are plain history now.
+      dispatch({ type: "CLEAR_STEER_PENDING", conversationId })
       dispatch({
         type: "STOP_STREAMING_WITH_PARTIAL",
         conversationId,
@@ -1926,13 +1930,17 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       const finalAttachments = attachments?.length ? attachments : undefined
       if (!content.trim() && !finalAttachments?.length) return null
 
-      const userMessage: Message = followUpClaim
-        ? followUpClaim.userMessage
+      let userMessage: Message = followUpClaim
+        ? { ...followUpClaim.userMessage, steerPending: undefined }
         : {
             id: generateId(),
             role: "user",
             content,
             attachments: finalAttachments,
+            // Pending-steering look (muted italic bubble) until delivery
+            // settles: live injection, queued-run drain, or normal-send
+            // fallback all clear it.
+            ...(isSteering ? { steerPending: true } : {}),
             timestamp: Date.now(),
           }
 
@@ -1958,6 +1966,23 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           }
           steer = await steerChatMessage(conversationId, userMessage)
         }
+        if (steer?.steered) {
+          // Delivered INTO the running turn (provider steering). Swap the
+          // optimistic row for the tagged server copy — the tag hides the
+          // standalone bubble; the message renders inline at its injection
+          // point via the steered_message entry on the streaming turn (SSE).
+          dispatch({
+            type: "ADD_USER_MESSAGE",
+            conversationId,
+            message: {
+              ...userMessage,
+              content: wrapSteeredMessage(content),
+              steerPending: undefined,
+              timestamp: Date.now(),
+            },
+          })
+          return conversationId
+        }
         if (steer?.queued && steer.followUpId) {
           const queue = followUpQueuesRef.current.get(conversationId) ?? []
           queue.push({ followUpId: steer.followUpId, userMessage })
@@ -1975,13 +2000,25 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           // Steer never reached the server. Persist the message so it isn't
           // lost (upsert by id — safe), but don't start a turn: a blind POST
           // /api/chat would abort a still-running stream.
+          const orphan: Message = { ...userMessage, steerPending: undefined }
+          dispatch({
+            type: "ADD_USER_MESSAGE",
+            conversationId,
+            message: orphan,
+          })
           void postWithRetry(() =>
-            addConversationMessageRequest(conversationId!, userMessage)
+            addConversationMessageRequest(conversationId!, orphan)
           ).catch(console.error)
           return conversationId
         }
         // Server reports no active run (it finished while the user typed) —
         // fall through to a normal send with this message.
+        userMessage = { ...userMessage, steerPending: undefined }
+        dispatch({
+          type: "ADD_USER_MESSAGE",
+          conversationId,
+          message: userMessage,
+        })
       }
 
       if (!conversationId) {
@@ -2776,6 +2813,47 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                     dispatch({
                       type: "ADD_STREAMING_MEMORY_RECALL",
                       entry: { ...entry, phase: reasoningPhase },
+                    })
+                  }
+                } else if (data.type === "steered_message") {
+                  const entry =
+                    data.entry && typeof data.entry === "object"
+                      ? (data.entry as SteeredMessageReasoningEntry)
+                      : null
+                  if (
+                    entry?.type === "steered_message" &&
+                    typeof entry.id === "string" &&
+                    typeof entry.content === "string"
+                  ) {
+                    // A steered injection ALWAYS opens a fresh phase (the
+                    // server did the same) so the transcript splits exactly
+                    // at the injection point.
+                    reasoningPhase += 1
+                    streamMode = "reasoning"
+                    if (
+                      !accReasoning.some(
+                        (item) =>
+                          item.type === "steered_message" && item.id === entry.id
+                      )
+                    ) {
+                      accReasoning.push({ ...entry, phase: reasoningPhase })
+                    }
+                    dispatch({
+                      type: "ADD_STREAMING_STEERED_MESSAGE",
+                      entry: { ...entry, phase: reasoningPhase },
+                    })
+                    // Hide the standalone bubble: swap the optimistic row for
+                    // the tagged copy (idempotent with the steer POST path;
+                    // also covers steers sent from another device).
+                    dispatch({
+                      type: "ADD_USER_MESSAGE",
+                      conversationId: finalConvId,
+                      message: {
+                        id: entry.userMessageId,
+                        role: "user",
+                        content: wrapSteeredMessage(entry.content),
+                        timestamp: entry.at ?? Date.now(),
+                      },
                     })
                   }
                 } else if (data.type === "context_usage") {

@@ -205,6 +205,37 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
             if (diagnostics.length > 20) diagnostics.shift()
         }
 
+        // Mid-turn steering: once the turn is live, expose a delivery function
+        // that appends user input to the in-flight turn via `turn/steer`
+        // (codex >= 0.98; on older CLIs the request errors and the caller
+        // falls back to the follow-up queue — no version probing needed).
+        let steeringAnnounced = false
+        const announceSteering = () => {
+            if (steeringAnnounced || !callbacks.onSteeringAvailable) return
+            if (!activeThreadId || !activeTurnId) return
+            steeringAnnounced = true
+            callbacks.onSteeringAvailable(async (text: string) => {
+                const trimmed = text.trim()
+                if (!trimmed || finished || aborted || !activeThreadId || !activeTurnId) return false
+                try {
+                    await request('turn/steer', {
+                        threadId: activeThreadId,
+                        input: [{ type: 'text', text: trimmed, text_elements: [] }],
+                        expectedTurnId: activeTurnId,
+                    })
+                    return true
+                } catch (err) {
+                    rememberDiagnostic(`turn/steer failed: ${err instanceof Error ? err.message : String(err)}`)
+                    return false
+                }
+            })
+        }
+        const retractSteering = () => {
+            if (!steeringAnnounced) return
+            steeringAnnounced = false
+            callbacks.onSteeringAvailable?.(null)
+        }
+
         const send = (msg: Record<string, unknown>) => {
             if (!proc.stdin || proc.stdin.destroyed) return
             proc.stdin.write(`${JSON.stringify(msg)}\n`)
@@ -313,6 +344,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
         const finish = () => {
             if (finished) return
             finished = true
+            retractSteering()
             signal?.removeEventListener('abort', onAbort)
             for (const entry of pending.values()) clearTimeout(entry.timer)
             pending.clear()
@@ -582,6 +614,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                     return
                 }
                 case 'turn/completed': {
+                    retractSteering()
                     const turn = params?.turn as AnyObj | undefined
                     if (typeof turn?.durationMs === 'number') finalDurationMs = turn.durationMs
                     if (turn?.status === 'failed') {
@@ -596,6 +629,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                 case 'turn/started': {
                     const turn = params?.turn as AnyObj | undefined
                     if (typeof turn?.id === 'string') activeTurnId = turn.id
+                    announceSteering()
                     return
                 }
                 default:
@@ -777,6 +811,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                 const turnResult = await request('turn/start', turnParams) as AnyObj
                 const turn = turnResult.turn as AnyObj | undefined
                 if (typeof turn?.id === 'string') activeTurnId = turn.id
+                announceSteering()
             } catch (err) {
                 fail(err instanceof Error ? err.message : 'codex app-server failed')
                 shutdown('SIGTERM')

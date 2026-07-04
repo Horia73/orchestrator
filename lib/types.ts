@@ -218,12 +218,29 @@ export interface AgentCallReasoningEntry {
   thinkingDuration?: number
 }
 
+export interface SteeredMessageReasoningEntry {
+  type: "steered_message"
+  /** Stable item id (used as React key and persistence merge key). */
+  id: string
+  /** Reasoning phase index; a steered message always opens a fresh phase. */
+  phase: number
+  /** Persisted user message row this entry mirrors (its standalone bubble is hidden). */
+  userMessageId: string
+  /** The user text injected into the running turn. */
+  content: string
+  /** Wall-clock injection time. */
+  at: number
+  /** Elapsed ms since turn start at injection — drives per-section "Worked for" durations. */
+  elapsedMs?: number
+}
+
 export type ReasoningEntry =
   | ThoughtReasoningEntry
   | ToolCallReasoningEntry
   | AgentCallReasoningEntry
   | ContextCompactionReasoningEntry
   | MemoryRecallReasoningEntry
+  | SteeredMessageReasoningEntry
 
 export interface Message {
   id: string
@@ -256,6 +273,12 @@ export interface Message {
     contentSegments?: boolean
     toolCalls?: boolean
   }
+  /**
+   * Client-only: a steering send whose delivery (live injection or queued
+   * follow-up run) hasn't settled yet — rendered as a muted italic bubble.
+   * Stripped before any persistence; never stored.
+   */
+  steerPending?: boolean
   timestamp: number
 }
 
