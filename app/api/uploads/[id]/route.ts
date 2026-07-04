@@ -38,14 +38,41 @@ async function serveUpload(
             return new Response('Not found', { status: 404 })
         }
 
-        const headers = {
+        // Upload ids are content-addressed-ish (UUID, written once), so
+        // size+mtime is a stable validator. The ETag lets clients revalidate
+        // with a cheap 304 once max-age lapses instead of refetching bytes.
+        const etag = `"${stat.size}-${Math.floor(stat.mtimeMs)}"`
+
+        const headers: Record<string, string> = {
             'Content-Type': uploadContentType(id),
             'Content-Length': String(stat.size),
             'Cache-Control': 'private, max-age=86400',
+            'ETag': etag,
             // Uploads can now be any file type, so never let the browser sniff a
             // served file into a more dangerous type than we declared (e.g.
             // treating uploaded markup as executable HTML).
             'X-Content-Type-Options': 'nosniff',
+        }
+
+        // Stored filenames are opaque UUIDs; callers that know the human name
+        // (chat file links) pass it along so plain navigations and "Save as"
+        // don't produce UUID-named downloads.
+        const requestedName = new URL(request.url).searchParams.get('filename')?.trim()
+        if (requestedName) {
+            const safeName = requestedName.replace(/[\r\n"\\]/g, '_').slice(0, 200)
+            const asciiName = safeName.replace(/[^\x20-\x7E]/g, '_')
+            headers['Content-Disposition'] =
+                `inline; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`
+        }
+
+        if (request.headers.get('if-none-match') === etag) {
+            return new Response(null, {
+                status: 304,
+                headers: {
+                    'Cache-Control': headers['Cache-Control']!,
+                    'ETag': etag,
+                },
+            })
         }
 
         if (!includeBody) {

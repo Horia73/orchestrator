@@ -93,6 +93,7 @@ import {
   mergeContextUsage,
   mergeMessagesForProvider,
   sanitizeCapabilityActivations,
+  sanitizePreferredFallbackIndex,
   sanitizePromptContextSource,
   sanitizePromptContext,
 } from "./route-support"
@@ -236,6 +237,9 @@ export async function POST(request: Request) {
       const requestedActivations = sanitizeCapabilityActivations(
         body.activateIntegrations
       )
+      const preferredFallbackIndex = sanitizePreferredFallbackIndex(
+        body.preferredFallbackIndex
+      )
       if (requestedActivations.length > 0) {
         activateIntegrations(conversationId, requestedActivations)
       }
@@ -318,7 +322,8 @@ export async function POST(request: Request) {
       }
 
       const buildModelAttempts = (
-        primary: typeof primaryAgentSettings
+        primary: typeof primaryAgentSettings,
+        preferredFallback: number | null
       ): ChatModelAttempt[] => {
         const attempts: ChatModelAttempt[] = [
           {
@@ -336,6 +341,16 @@ export async function POST(request: Request) {
             modelOptions: {},
             fallbackIndex: index + 1,
           })
+        }
+
+        if (preferredFallback !== null) {
+          const preferredIndex = attempts.findIndex(
+            (attempt) => attempt.fallbackIndex === preferredFallback
+          )
+          if (preferredIndex > 0) {
+            const [preferred] = attempts.splice(preferredIndex, 1)
+            attempts.unshift(preferred)
+          }
         }
 
         const seen = new Set<string>()
@@ -481,7 +496,10 @@ export async function POST(request: Request) {
         )
       }
 
-      const modelAttempts = buildModelAttempts(primaryAgentSettings)
+      const modelAttempts = buildModelAttempts(
+        primaryAgentSettings,
+        preferredFallbackIndex
+      )
       const preparedInitial = await prepareFirstAvailableAttempt(modelAttempts)
       if (!preparedInitial.ok) {
         return setupErrorResponse(preparedInitial.payload, preparedInitial.status)

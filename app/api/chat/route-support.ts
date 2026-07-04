@@ -216,6 +216,11 @@ export function sanitizeCapabilityActivations(value: unknown): string[] {
   )
 }
 
+export function sanitizePreferredFallbackIndex(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isInteger(value)) return null
+  return value >= 1 && value <= 2 ? value : null
+}
+
 export function mergeMessagesForProvider(
   dbMessages: Message[],
   requestMessages: Message[]

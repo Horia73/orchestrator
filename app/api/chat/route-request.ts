@@ -14,6 +14,7 @@ export type ChatRequestBody = {
   promptContext?: unknown
   promptContextSource?: unknown
   activateIntegrations?: unknown
+  preferredFallbackIndex?: unknown
 }
 
 function isRequestMessage(value: unknown): value is Message {

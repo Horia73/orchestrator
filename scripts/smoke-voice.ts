@@ -13,6 +13,7 @@
 import {
     defaultVoiceSettings,
     evaluateVoiceHaCall,
+    formatVoiceConversationFallbackTitle,
     normalizeVoiceSettings,
     parseVoiceClientMessage,
     pickBestLiveModel,
@@ -134,6 +135,19 @@ console.log('wire protocol parsing:')
     check('end parses', parseVoiceClientMessage('{"type":"end"}')?.type === 'end')
     check('junk rejected quietly', parseVoiceClientMessage('not json') === null)
     check('unknown type rejected', parseVoiceClientMessage('{"type":"nope"}') === null)
+}
+
+console.log('conversation fallback title:')
+{
+    const timestamp = Date.UTC(2026, 0, 1, 22, 5)
+    check(
+        'voice fallback title uses configured timezone',
+        formatVoiceConversationFallbackTitle(timestamp, 'Europe/Bucharest') === 'Voice chat 00:05'
+    )
+    check(
+        'voice fallback title normalizes known timezone aliases',
+        formatVoiceConversationFallbackTitle(timestamp, 'Europe/Buchrest') === 'Voice chat 00:05'
+    )
 }
 
 if (failures > 0) {

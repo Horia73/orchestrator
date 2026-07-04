@@ -11,7 +11,7 @@ import { AttachmentCard } from "@/components/attachment-card"
 import { RenderMessageContent } from "@/components/artifacts/render-message-content"
 import { useConversationArtifacts } from "@/components/artifacts/use-conversation-artifacts"
 import { downloadArtifact } from "@/components/artifacts/artifact-inline"
-import { InlineToolCallView, InlineWebSearchGroup, getToolCallDisplayTitle, isWebSearchToolCall, shouldExpandToolCallByDefault } from "@/components/tool-call-view"
+import { InlineToolCallView, InlineWebSearchGroup, TOOL_CALL_CARD_HEIGHT, getToolCallDisplayTitle, isWebSearchToolCall, shouldExpandToolCallByDefault } from "@/components/tool-call-view"
 import { BrowserAgentLiveView } from "@/components/browser-agent-live-view"
 import { AUDIO_CONTEXT_AGENT_ID, AUDIO_TRANSCRIPT_AGENT_ID, AudioContextAgentCard } from "@/components/chat/audio-context-agent-card"
 import { useMessageSelectionGutter } from "@/components/message-bubble/use-message-selection-gutter"
@@ -41,28 +41,26 @@ function formatMessageTimestampFull(timestamp: number) {
 // ThoughtBlock helpers
 // ---------------------------------------------------------------------------
 
-const COLLAPSED_HEIGHT = 460
-const COLLAPSED_HEIGHT_FLOOR = 180
-const COLLAPSED_BOTTOM_GAP = 52 // gap from bottom of block to input container
+// Collapsed thought windows are sized in whole tool cards. Every boxed
+// tool-call panel renders at the same fixed height (TOOL_CALL_CARD_HEIGHT,
+// shared with tool-call-view), so the clipped preview always ends on a card
+// boundary and "Show more" only appears after 2 complete cards — the same on
+// desktop and mobile; there is no step-down to 1 card or per-device floor.
+const CARD_UNIT = TOOL_CALL_CARD_HEIGHT
+const CARD_GAP = 8 // the entry list's gap-2
+const WINDOW_CARDS = 2
 
-// Live-streaming window: instead of filling all available space (which leaves a
-// half-cut "semi" card on mobile and an unbounded stack on desktop), regulate it
-// to a whole number of tool cards. A tool-call panel is ~230px tall (see
-// TOOL_CALL_PANEL_HEIGHT in tool-call-view). Desktop and mobile both target 2
-// full cards; when the viewport can't fit 2 the window steps down to 1 whole
-// card rather than clipping the second. The window never grows past the
-// viewport and never shrinks below the per-device floor.
-const LIVE_CARD_UNIT = 230
-const LIVE_CARD_GAP = 8
-// Non-card chrome inside the clipped window: the list's pt-1 (4) + mb-2 (8),
-// the h-10 live bottom-fade spacer (40), and headroom so the h-6 top gradient
-// fades the previous entry instead of shaving the first visible card (24).
+// Live-streaming window (pinned to the bottom of the content). Non-card
+// chrome inside it: the list's pt-1 (4) + mb-2 (8), the h-10 live bottom-fade
+// spacer (40), and headroom so the h-6 top gradient fades the previous entry
+// instead of shaving the first visible card (24).
 const LIVE_WINDOW_CHROME = 76
-const LIVE_WINDOW_MAX_CARDS = 2
+const LIVE_COLLAPSED_HEIGHT = WINDOW_CARDS * CARD_UNIT + (WINDOW_CARDS - 1) * CARD_GAP + LIVE_WINDOW_CHROME
 
-function liveWindowHeight(cards: number): number {
-    return cards * LIVE_CARD_UNIT + (cards - 1) * LIVE_CARD_GAP + LIVE_WINDOW_CHROME
-}
+// Finalized collapsed preview (reads from the top): the list's pt-1 (4) plus
+// the bottom overlay hosting "Show more" (h-16 fade + h-8 solid = 96), so the
+// second card clears the fade entirely.
+const COLLAPSED_HEIGHT = WINDOW_CARDS * CARD_UNIT + (WINDOW_CARDS - 1) * CARD_GAP + 4 + 96
 const WORKED_DETAILS_INITIAL_BUDGET = 10
 const WORKED_DETAILS_RENDER_CHUNK = 18
 const WORKED_DETAILS_CHUNK_DELAY_MS = 24
@@ -230,79 +228,6 @@ function browserSessionIdFromContent(content: string): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Shared hook: computes available collapsed height dynamically
-// ---------------------------------------------------------------------------
-
-function useAvailableHeight(
-    blockRef: React.RefObject<HTMLDivElement | null>,
-    isActive: boolean,
-): number {
-    const [height, setHeight] = React.useState(COLLAPSED_HEIGHT)
-
-    React.useEffect(() => {
-        if (!isActive) return
-        let frame: number | null = null
-
-        const compute = () => {
-            if (frame !== null) window.cancelAnimationFrame(frame)
-            frame = window.requestAnimationFrame(() => {
-                frame = null
-                const block = blockRef.current
-                if (!block) return
-                const input = document.querySelector<HTMLElement>('[data-chat-input-container="true"]')
-
-                const blockRect = block.getBoundingClientRect()
-                const inputRect = input?.getBoundingClientRect()
-                const viewportHeight = window.visualViewport?.height ?? window.innerHeight
-                const viewportBottom = window.visualViewport
-                    ? window.visualViewport.offsetTop + viewportHeight
-                    : viewportHeight
-                const bottom = inputRect?.top ?? viewportBottom
-                const available = Math.floor(bottom - blockRect.top - COLLAPSED_BOTTOM_GAP)
-                const compactViewport = window.matchMedia("(max-width: 767px), (pointer: coarse)").matches
-                // Floor at one whole card on desktop (not COLLAPSED_HEIGHT, which
-                // sits between the 1- and 2-card windows and would re-clip a card).
-                const minimumHeight = compactViewport
-                    ? COLLAPSED_HEIGHT_FLOOR
-                    : Math.min(COLLAPSED_HEIGHT, liveWindowHeight(1))
-                // Cap to a whole number of cards so the window never shows a half
-                // card: fit as many full cards as the viewport allows, up to 2.
-                const fittingCards = Math.floor(
-                    (available - LIVE_WINDOW_CHROME + LIVE_CARD_GAP) / (LIVE_CARD_UNIT + LIVE_CARD_GAP)
-                )
-                const cards = Math.max(1, Math.min(LIVE_WINDOW_MAX_CARDS, fittingCards))
-                const targetHeight = liveWindowHeight(cards)
-                const nextHeight = Math.max(minimumHeight, Math.min(available, targetHeight))
-                setHeight((current) => current === nextHeight ? current : nextHeight)
-            })
-        }
-
-        compute()
-
-        const block = blockRef.current
-        const input = document.querySelector<HTMLElement>('[data-chat-input-container="true"]')
-        const observer = new ResizeObserver(compute)
-        if (block) observer.observe(block)
-        if (input) observer.observe(input)
-        window.visualViewport?.addEventListener("resize", compute)
-        window.visualViewport?.addEventListener("scroll", compute)
-        window.addEventListener("resize", compute)
-        window.addEventListener("orientationchange", compute)
-
-        return () => {
-            if (frame !== null) window.cancelAnimationFrame(frame)
-            observer.disconnect()
-            window.visualViewport?.removeEventListener("resize", compute)
-            window.visualViewport?.removeEventListener("scroll", compute)
-            window.removeEventListener("resize", compute)
-            window.removeEventListener("orientationchange", compute)
-        }
-    }, [blockRef, isActive])
-
-    return height
-}
-
-// ---------------------------------------------------------------------------
 // ThoughtBlock
 // ---------------------------------------------------------------------------
 
@@ -442,14 +367,13 @@ function ThoughtBlock({
 
     // Content measurement
     const headerRef = React.useRef<HTMLButtonElement>(null)
-    const blockRef = React.useRef<HTMLDivElement>(null)
     const contentRef = React.useRef<HTMLDivElement>(null)
     const scrollRef = React.useRef<HTMLDivElement>(null)
     const [contentHeight, setContentHeight] = React.useState(0)
 
-    // Dynamic collapsed height — adapts to available viewport space
-    const dynamicHeight = useAvailableHeight(blockRef, isOpen && isLiveTurn && !isExpanded)
-    const collapsedHeight = isLiveTurn ? dynamicHeight : COLLAPSED_HEIGHT
+    // Fixed collapsed height — always exactly 2 whole tool cards, so the
+    // preview never cuts a card in half before "Show more".
+    const collapsedHeight = isLiveTurn ? LIVE_COLLAPSED_HEIGHT : COLLAPSED_HEIGHT
     const isCollapsible = contentHeight > collapsedHeight + 40
     const visibleContentHeight = isExpanded || !isCollapsible
         ? (contentHeight > 0 ? `${contentHeight}px` : "none")
@@ -608,7 +532,7 @@ function ThoughtBlock({
                         isShowingContent ? "translate-y-0 opacity-100" : "-translate-y-1 opacity-0"
                     )}
                 >
-                    <div ref={blockRef} className="mt-2 flex flex-col relative pb-2">
+                    <div className="mt-2 flex flex-col relative pb-2">
                         <div className="relative flex flex-col">
                             <div className="absolute left-[7.5px] top-[11px] bottom-[13px] w-[1.5px] bg-border/60" />
                             <div className="relative pb-[10px]">

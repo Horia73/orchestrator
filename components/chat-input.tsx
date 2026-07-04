@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { ArrowUp, AudioLines, Mic, Plus, Square } from "lucide-react"
+import { ArrowUp, AudioLines, Mic, Plus, Sparkles, Square } from "lucide-react"
 import { useChatStore } from "@/hooks/use-chat-store"
 import type { SendMessageOptions } from "@/hooks/use-chat-store"
 import { FilePreviewModal } from "@/components/file-preview-modal"
@@ -28,6 +28,26 @@ import { cn } from "@/lib/utils"
 import type { Attachment } from "@/lib/types"
 
 const CHAT_INPUT_FOCUS_EVENT = "chat-input-focus"
+const CREATIVE_MODE_STORAGE_KEY = "chat:creative-mode"
+
+type ChatFallbackStatus = {
+    index: number
+    provider: {
+        id: string
+        name: string
+    }
+    model: {
+        id: string
+        name: string
+    }
+    available: boolean
+}
+
+type ChatStatusResponse = {
+    chat?: {
+        fallbacks?: ChatFallbackStatus[]
+    }
+}
 
 function voiceRecordingExtension(mimeType: string): string {
     const baseMime = mimeType.split(";")[0].trim().toLowerCase()
@@ -75,6 +95,8 @@ export function ChatInput({
     const [previewAttachment, setPreviewAttachment] = React.useState<Attachment | null>(null)
     const [previewDraftAttachmentId, setPreviewDraftAttachmentId] = React.useState<string | null>(null)
     const [isRecording, setIsRecording] = React.useState(false)
+    const [creativeMode, setCreativeMode] = React.useState(false)
+    const [fallbackOne, setFallbackOne] = React.useState<ChatFallbackStatus | null>(null)
 
     const draft = useMessageDraft({ namespace: draftNamespace, threadId: activeConversationId })
     const {
@@ -92,6 +114,15 @@ export function ChatInput({
     } = useFileAttachments(draft.setAttachments)
 
     const [voiceModeOpen, setVoiceModeOpen] = React.useState(false)
+    const canUseCreative = Boolean(fallbackOne?.available)
+    const buildResolvedSendOptions = React.useCallback((content: string): SendMessageOptions | undefined => {
+        const base = buildSendOptions?.(content)
+        if (!creativeMode || !canUseCreative) return base
+        return {
+            ...(base ?? {}),
+            preferredFallbackIndex: 1,
+        }
+    }, [buildSendOptions, canUseCreative, creativeMode])
 
     const voice = useVoiceRecording({
         isChat: variant === "chat",
@@ -108,13 +139,13 @@ export function ChatInput({
                 const uploaded = uploadedAttachmentFromResponse(data)
                 if (uploaded) {
                     const text = draft.value.trim()
-                    const options = buildSendOptions?.(text)
+                    const options = buildResolvedSendOptions(text)
                     if (onSend) onSend(text, undefined, [uploaded], options)
                     else sendMessage(text, undefined, [uploaded], options)
                     if (text) draft.setValue("")
                 }
             } catch { /* upload failed silently */ }
-        }, [buildSendOptions, draft, onSend, sendMessage]),
+        }, [buildResolvedSendOptions, draft, onSend, sendMessage]),
         onDismiss: React.useCallback(() => {
             setIsRecording(false)
             textareaRef.current?.focus()
@@ -135,6 +166,49 @@ export function ChatInput({
     const canSend = hasContent && !hasPendingAttachments && !hasFailedAttachments && !isStreamingActiveConversation
     const isCompact = isChat && density === "compact"
     const maxHeight = isCompact ? 92 : isChat ? 160 : 200
+
+    React.useEffect(() => {
+        if (typeof window === "undefined") return
+        setCreativeMode(window.localStorage.getItem(CREATIVE_MODE_STORAGE_KEY) === "true")
+    }, [])
+
+    React.useEffect(() => {
+        if (typeof window === "undefined") return
+        window.localStorage.setItem(CREATIVE_MODE_STORAGE_KEY, creativeMode ? "true" : "false")
+    }, [creativeMode])
+
+    React.useEffect(() => {
+        if (!canUseCreative && creativeMode) setCreativeMode(false)
+    }, [canUseCreative, creativeMode])
+
+    React.useEffect(() => {
+        let cancelled = false
+        const loadFallback = async () => {
+            try {
+                const res = await fetch("/api/chat/status", { cache: "no-store" })
+                if (!res.ok) throw new Error(`status ${res.status}`)
+                const data = (await res.json()) as ChatStatusResponse
+                if (cancelled) return
+                setFallbackOne(data.chat?.fallbacks?.find((fallback) => fallback.index === 1) ?? null)
+            } catch {
+                if (!cancelled) setFallbackOne(null)
+            }
+        }
+        void loadFallback()
+        const handleRefresh = () => void loadFallback()
+        const handleVisibility = () => {
+            if (document.visibilityState === "visible") void loadFallback()
+        }
+        window.addEventListener("focus", handleRefresh)
+        window.addEventListener("orchestrator:config-updated", handleRefresh)
+        document.addEventListener("visibilitychange", handleVisibility)
+        return () => {
+            cancelled = true
+            window.removeEventListener("focus", handleRefresh)
+            window.removeEventListener("orchestrator:config-updated", handleRefresh)
+            document.removeEventListener("visibilitychange", handleVisibility)
+        }
+    }, [])
 
     React.useEffect(() => {
         return draft.restore(textareaRef)
@@ -205,7 +279,7 @@ export function ChatInput({
         const trimmed = draft.value.trim()
         if ((!trimmed && draft.attachments.length === 0) || hasPendingAttachments || hasFailedAttachments || isStreamingActiveConversation) return
         const uploadedAttachments = draft.attachments.filter(a => a.uploaded).map(a => a.uploaded!)
-        const options = buildSendOptions?.(trimmed)
+        const options = buildResolvedSendOptions(trimmed)
         if (onSend) {
             onSend(
                 trimmed,
@@ -227,7 +301,7 @@ export function ChatInput({
         } else {
             focusWithoutViewportScroll(textareaRef.current)
         }
-    }, [buildSendOptions, draft, hasFailedAttachments, hasPendingAttachments, isStreamingActiveConversation, onSend, sendMessage])
+    }, [buildResolvedSendOptions, draft, hasFailedAttachments, hasPendingAttachments, isStreamingActiveConversation, onSend, sendMessage])
 
     const handleTextChange = React.useCallback(
         (event: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -406,6 +480,30 @@ export function ChatInput({
                                     contextUsage={activeConversation?.contextUsage}
                                     side={isChat ? "top" : "bottom"}
                                 />
+                                {fallbackOne && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setCreativeMode((value) => !value)}
+                                        disabled={!canUseCreative || isStreamingActiveConversation}
+                                        title={
+                                            canUseCreative
+                                                ? `Use fallback 1: ${fallbackOne.provider.name} ${fallbackOne.model.name}`
+                                                : "Fallback 1 is not available"
+                                        }
+                                        className={cn(
+                                            "flex h-9 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors pointer-coarse:h-10",
+                                            creativeMode && canUseCreative
+                                                ? "bg-[#b76440] text-white hover:bg-[#a55837]"
+                                                : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+                                            (!canUseCreative || isStreamingActiveConversation) && "cursor-not-allowed opacity-50"
+                                        )}
+                                        aria-pressed={creativeMode && canUseCreative}
+                                        aria-label="Creative"
+                                    >
+                                        <Sparkles className="size-4 stroke-[1.6]" />
+                                        <span>Creative</span>
+                                    </button>
+                                )}
                                 {!isStreamingActiveConversation && !hasContent && (
                                     <button
                                         type="button"

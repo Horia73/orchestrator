@@ -84,6 +84,7 @@ export interface SendMessageOptions {
   promptContextSource?: string
   activateIntegrations?: string[]
   activateConversation?: boolean
+  preferredFallbackIndex?: number
 }
 
 // 12 × 200 ≈ 2400 messages of reach for a deep-link jump target — covers
@@ -2053,6 +2054,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           promptContext: options?.promptContext,
           promptContextSource: options?.promptContextSource,
           activateIntegrations: options?.activateIntegrations,
+          preferredFallbackIndex: options?.preferredFallbackIndex,
           signal: attemptController.signal,
         })
         .then(async (response) => {

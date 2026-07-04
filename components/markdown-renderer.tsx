@@ -442,9 +442,12 @@ function workspaceCandidatePath(href: string | undefined): string | null {
 }
 
 interface WorkspaceFileRef {
-  /** Raw workspace path to feed as the `?path=` query param. */
+  /** Where the file lives: the agent workspace (/api/workspace/files) or the
+   *  uploads store (/api/uploads). Decides how the preview modal opens it. */
+  origin: "workspace" | "upload"
+  /** Raw workspace path (workspace) or upload id (upload). */
   filePath: string
-  /** Resolved one-click download URL (/api/workspace/files?path=…). */
+  /** Resolved one-click download URL. */
   downloadHref: string
   /** Basename for display. */
   filename: string
@@ -460,11 +463,86 @@ function workspaceFileRef(href: string | undefined): WorkspaceFileRef | null {
   const dot = filename.lastIndexOf(".")
   const ext = dot >= 0 ? filename.slice(dot).toLowerCase() : ""
   return {
+    origin: "workspace",
     filePath: candidate,
     downloadHref: appApiPath("/api/workspace/files", { path: candidate }),
     filename,
     mimeType: UPLOAD_MIME_MAP[ext] ?? "",
   }
+}
+
+// Matches an uploads-route path and captures the stored id. Applied to a URL
+// pathname, so a preview basePath prefix is tolerated; nested subroutes
+// (e.g. /preview-pdf) intentionally don't match.
+const UPLOAD_LINK_PATH_RE = /\/api\/uploads\/([^/?#]+)\/?$/
+
+// A `/api/uploads/<id>` link the agent wrote inline (how it references files it
+// downloaded or produced for the user, e.g. Gmail/WhatsApp attachments). These
+// used to fall through to the plain `target="_blank"` link path, which opened a
+// leftover blank window whose navigation immediately became a download named
+// after the UUID. Treating them as file refs routes them into the same inline
+// card + FilePreviewModal flow as workspace files. The display filename prefers
+// the link text when it carries the stored id's extension (agents link uploads
+// as `[Real name.xlsx](/api/uploads/<uuid>.xlsx)`), so the modal and downloads
+// show the human name instead of the UUID.
+function uploadFileRef(
+  href: string | undefined,
+  linkText: string
+): WorkspaceFileRef | null {
+  const raw = href?.trim()
+  if (!raw || raw.startsWith("#") || raw.startsWith("?")) return null
+
+  let pathname: string
+  try {
+    const url = new URL(raw)
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null
+    if (typeof window !== "undefined" && url.origin !== window.location.origin) {
+      return null
+    }
+    pathname = url.pathname
+  } catch {
+    if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return null
+    const pathOnly = raw.split(/[?#]/, 1)[0] ?? ""
+    if (!pathOnly.startsWith("/api/uploads/")) return null
+    pathname = pathOnly
+  }
+
+  const match = UPLOAD_LINK_PATH_RE.exec(pathname)
+  if (!match?.[1]) return null
+  let id: string
+  try {
+    id = decodeURIComponent(match[1])
+  } catch {
+    return null
+  }
+
+  const dot = id.lastIndexOf(".")
+  const ext = dot >= 0 ? id.slice(dot).toLowerCase() : ""
+  if (!ext) return null
+
+  const text = linkText.trim()
+  const filename =
+    text.toLowerCase().endsWith(ext) && !/[\\/]/.test(text) ? text : id
+  return {
+    origin: "upload",
+    filePath: id,
+    downloadHref: appApiPath(
+      `/api/uploads/${encodeURIComponent(id)}`,
+      filename !== id ? { filename } : undefined
+    ),
+    filename,
+    mimeType: UPLOAD_MIME_MAP[ext] ?? "",
+  }
+}
+
+// Plain text of a markdown link's children (the human-readable label).
+function nodeText(node: React.ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") return String(node)
+  if (Array.isArray(node)) return node.map(nodeText).join("")
+  if (React.isValidElement(node)) {
+    return nodeText((node.props as { children?: React.ReactNode }).children)
+  }
+  return ""
 }
 
 // Which in-app viewer category a workspace file opens in the FilePreviewModal,
@@ -500,7 +578,7 @@ const WORKSPACE_FILE_ICON: Record<Attachment["type"], React.ComponentType<{ clas
   other: FileText,
 }
 
-// A compact, inline-flex card for a workspace file the assistant links inline.
+// A compact, inline-flex card for a workspace file or upload the assistant links inline.
 // Clicking opens the in-app FilePreviewModal (PDF/Office/code/3D/image) instead
 // of a bare download. Rendered as a <button> (phrasing content) so it is valid
 // inside the surrounding <p>. Only shown when a preview handler is in context;
@@ -518,6 +596,19 @@ function WorkspaceFileCard({
   const dot = fileRef.filename.lastIndexOf(".")
   const ext = dot >= 0 ? fileRef.filename.slice(dot + 1).toUpperCase() : kind.toUpperCase()
   const open = () => {
+    if (fileRef.origin === "upload") {
+      // The FilePreviewModal's url/preview fallbacks are already upload-shaped
+      // (/api/uploads/<id> and /api/uploads/<id>/preview-pdf), so a bare
+      // attachment id is enough here.
+      onPreview({
+        id: fileRef.filePath,
+        filename: fileRef.filename,
+        mimeType: fileRef.mimeType || "application/octet-stream",
+        size: 0,
+        type: kind,
+      })
+      return
+    }
     const htmlPreviewUrl = workspaceHtmlPreviewHref({
       filename: fileRef.filename,
       mimeType: fileRef.mimeType || "application/octet-stream",
@@ -554,13 +645,14 @@ function WorkspaceFileCard({
   )
 }
 
-// Link renderer: a workspace document opens the in-app preview card when a
-// preview handler is available; everything else stays a normal link. HTML
+// Link renderer: a workspace document or an uploads-store file opens the
+// in-app preview card when a preview handler is available; everything else
+// stays a normal link. HTML
 // files render through a static sandboxed preview; interactive apps should be
 // published under /published-apps/<slug>/ instead.
 function MarkdownLink({ href, children }: { href?: string; children?: React.ReactNode }) {
   const onPreview = React.useContext(MarkdownImageClickContext)
-  const fileRef = workspaceFileRef(href)
+  const fileRef = workspaceFileRef(href) ?? uploadFileRef(href, nodeText(children))
   if (fileRef && onPreview) {
     const kind = workspacePreviewKind(fileRef.filename, fileRef.mimeType)
     if (kind) {
@@ -572,6 +664,7 @@ function MarkdownLink({ href, children }: { href?: string; children?: React.Reac
   return (
     <a
       href={resolvedHref}
+      download={fileRef ? fileRef.filename : undefined}
       target={downloadHref ? undefined : "_blank"}
       rel={downloadHref ? undefined : "noopener noreferrer"}
       onClick={

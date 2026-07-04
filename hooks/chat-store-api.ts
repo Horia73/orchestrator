@@ -29,6 +29,7 @@ function buildChatStreamRequestBody(input: {
   promptContext?: string
   promptContextSource?: string
   activateIntegrations?: string[]
+  preferredFallbackIndex?: number
 }) {
   const fullBody = JSON.stringify(input)
   if (requestBodySize(fullBody) <= CHAT_REQUEST_BODY_SOFT_LIMIT_BYTES) {
@@ -230,6 +231,7 @@ export function startChatStreamRequest({
   promptContext,
   promptContextSource,
   activateIntegrations,
+  preferredFallbackIndex,
   signal,
 }: {
   conversationId: string
@@ -238,6 +240,7 @@ export function startChatStreamRequest({
   promptContext?: string
   promptContextSource?: string
   activateIntegrations?: string[]
+  preferredFallbackIndex?: number
   signal: AbortSignal
 }) {
   return fetch("/api/chat", {
@@ -250,6 +253,7 @@ export function startChatStreamRequest({
       promptContext,
       promptContextSource,
       activateIntegrations,
+      preferredFallbackIndex,
     }),
     signal,
   })

@@ -21,9 +21,11 @@ import {
 } from "@google/genai"
 
 import { getApiKey, getConfig } from "@/lib/config"
+import { generateConversationTitleFromSeed } from "@/lib/ai/conversation-auto-title"
 import {
   addMessage,
   createConversation,
+  setConversationTitle,
   updateConversationContextUsage,
 } from "@/lib/db"
 import {
@@ -38,7 +40,11 @@ import {
   executeVoiceTool,
   voiceSettingsFromConfig,
 } from "@/lib/voice/tools"
-import type { VoiceServerMessage, VoiceSettings } from "@/lib/voice/schema"
+import {
+  formatVoiceConversationFallbackTitle,
+  type VoiceServerMessage,
+  type VoiceSettings,
+} from "@/lib/voice/schema"
 
 const INPUT_AUDIO_MIME = "audio/pcm;rate=16000"
 const MAX_RECONNECT_ATTEMPTS = 3
@@ -64,6 +70,8 @@ export class VoiceLiveSession {
   private reconnectAttempts = 0
   private userTranscript = ""
   private assistantTranscript = ""
+  private conversationSeedTitle = ""
+  private autoNameRequested = false
   private readonly requestId = `voice_${randomUUID()}`
   private readonly startedAt = Date.now()
   private requestLogged = false
@@ -375,6 +383,7 @@ export class VoiceLiveSession {
             timestamp: now + 1,
           })
         }
+        this.maybeAutoNameConversation({ userText, assistantText })
       })
     } catch (err) {
       console.error("[voice] failed to persist transcript turn", err)
@@ -384,17 +393,42 @@ export class VoiceLiveSession {
   private ensureConversation(): void {
     if (this.conversationCreated) return
     const startedAt = new Date()
-    const timeLabel = startedAt.toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-    })
+    const config = getConfig()
+    const title = formatVoiceConversationFallbackTitle(
+      startedAt,
+      config.timezone
+    )
     createConversation({
       id: this.conversationId,
-      title: `Voice chat ${timeLabel}`,
+      title,
       messages: [],
       createdAt: startedAt.getTime(),
     })
+    this.conversationSeedTitle = title
     this.conversationCreated = true
+  }
+
+  private maybeAutoNameConversation(seed: {
+    userText: string
+    assistantText: string
+  }): void {
+    if (this.autoNameRequested || !this.conversationSeedTitle) return
+    if (!seed.userText.trim() && !seed.assistantText.trim()) return
+
+    const currentTitle = this.conversationSeedTitle
+    this.autoNameRequested = true
+    void this.inCtxAsync(async () => {
+      try {
+        const title = await generateConversationTitleFromSeed({
+          conversationId: this.conversationId,
+          seed,
+        })
+        if (!title || title === currentTitle) return
+        setConversationTitle(this.conversationId, title, currentTitle)
+      } catch (err) {
+        console.error("[voice] auto-name failed", err)
+      }
+    })
   }
 
   private scheduleReconnect(reason: string): void {

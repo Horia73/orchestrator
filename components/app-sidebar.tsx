@@ -140,7 +140,8 @@ function getConversationLastMessageAt(
 
 function formatConversationActivityAge(
   timestamp: number | null,
-  currentTime: number | null
+  currentTime: number | null,
+  timezone: string
 ): string {
   if (!timestamp || !currentTime) return ""
 
@@ -154,21 +155,40 @@ function formatConversationActivityAge(
   if (diff < day) return `${Math.floor(diff / hour)}h`
   if (diff < 7 * day) return `${Math.floor(diff / day)}d`
 
-  return new Date(timestamp).toLocaleDateString([], {
+  return formatConversationActivityDate(timestamp, timezone, {
     month: "short",
     day: "numeric",
   })
 }
 
-function formatConversationActivityTitle(timestamp: number | null): string {
+function formatConversationActivityTitle(
+  timestamp: number | null,
+  timezone: string
+): string {
   if (!timestamp) return ""
-  return `Last message ${new Date(timestamp).toLocaleString([], {
+  return `Last message ${formatConversationActivityDate(timestamp, timezone, {
     month: "short",
     day: "numeric",
     year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
   })}`
+}
+
+function formatConversationActivityDate(
+  timestamp: number,
+  timezone: string,
+  options: Intl.DateTimeFormatOptions
+): string {
+  const date = new Date(timestamp)
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      ...options,
+      timeZone: timezone || undefined,
+    }).format(date)
+  } catch {
+    return new Intl.DateTimeFormat(undefined, options).format(date)
+  }
 }
 
 function getSearchPreview(
@@ -369,7 +389,7 @@ export function AppSidebar() {
     null
   )
   const mobileNavClickSuppressUntilRef = React.useRef(0)
-  const { assistantName } = useRuntimeConfig()
+  const { assistantName, timezone } = useRuntimeConfig()
   const normalizedSearchQuery = normalizeSearchText(deferredSearchQuery.trim())
   const isFiltering = normalizedSearchQuery.length > 0
   const showArchiveView = archiveViewActive && !isFiltering
@@ -1241,7 +1261,8 @@ export function AppSidebar() {
                       const activityAt = getConversationLastMessageAt(conv)
                       const activityLabel = formatConversationActivityAge(
                         activityAt,
-                        currentTime
+                        currentTime,
+                        timezone
                       )
                       return (
                         <SidebarMenuItem key={conv.id}>
@@ -1349,7 +1370,8 @@ export function AppSidebar() {
                                     <span
                                       className={`w-full truncate text-center text-[12px] tabular-nums ${unread ? "font-semibold text-[#b76440]" : "font-normal text-foreground/45"}`}
                                       title={formatConversationActivityTitle(
-                                        activityAt
+                                        activityAt,
+                                        timezone
                                       )}
                                     >
                                       {activityLabel}
@@ -1374,7 +1396,8 @@ export function AppSidebar() {
                                     <span
                                       className={`w-full truncate text-center text-[12px] tabular-nums group-focus-within/menu-item:hidden group-hover/menu-item:hidden ${unread ? "font-semibold text-[#b76440]" : "font-normal text-foreground/45"}`}
                                       title={formatConversationActivityTitle(
-                                        activityAt
+                                        activityAt,
+                                        timezone
                                       )}
                                     >
                                       {activityLabel}

@@ -550,12 +550,6 @@ function ExpandedDetail({ requestId, row, onMeasure }: {
         <div ref={rootRef} className="border-t border-border/50">
             <div className="max-h-[55vh] overflow-y-auto overscroll-contain animate-in fade-in-0 duration-200">
             <div className="flex flex-col gap-4 px-3 py-3 md:px-4 md:py-4">
-            {waitingForFirstDetail && (
-                <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-background/60 px-3 py-2 text-[12.5px] text-foreground/55">
-                    <Loader2 className="size-3.5 animate-spin" />
-                    Loading request details…
-                </div>
-            )}
             <LogChatTranscript
                 row={row}
                 transcript={data?.transcript ?? null}

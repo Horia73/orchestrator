@@ -27,7 +27,12 @@ interface InlineToolCallViewProps {
 
 type ParsedData = Record<string, unknown> | null
 
-const TOOL_CALL_PANEL_HEIGHT = "min(230px, calc(100vh - 360px))"
+// Every boxed tool-call panel (terminal, generic frame, web activity) renders
+// at this exact height so the collapsed thought preview can be sized in whole
+// cards — message-bubble imports it to fit exactly 2 full cards before the
+// "Show more" affordance.
+export const TOOL_CALL_CARD_HEIGHT = 230
+const TOOL_CALL_PANEL_HEIGHT = `min(${TOOL_CALL_CARD_HEIGHT}px, calc(100vh - 360px))`
 const TOOL_CALL_PANEL_MIN_HEIGHT = "160px"
 const TOOL_CALL_PANEL_STYLE: React.CSSProperties = {
     height: TOOL_CALL_PANEL_HEIGHT,
@@ -122,7 +127,7 @@ export function InlineWebSearchGroup({ entries }: { entries: ToolCallReasoningEn
     if (!requests.length && !websites.length) return null
 
     return (
-        <div className={cn("relative z-10 py-1 text-left", TOOL_CALL_INSET_CLASS)}>
+        <div className={cn("relative z-10 text-left", TOOL_CALL_INSET_CLASS)}>
             <WebActivityCard
                 requests={dedupeWebRequests(requests)}
                 websites={dedupeWebsites(websites, requests)}
@@ -697,10 +702,14 @@ function WebActivityCard({
         actionCount ? `${actionCount} action${actionCount === 1 ? "" : "s"}` : "",
         websites.length ? `${websites.length} source${websites.length === 1 ? "" : "s"}` : "",
     ].filter(Boolean).join(" · ")
+    const listRef = useTrapWheel<HTMLDivElement>()
 
     return (
-        <div className="overflow-hidden rounded-md border border-border/70 bg-background shadow-sm">
-            <div className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-2">
+        <div
+            className="flex flex-col overflow-hidden rounded-md border border-border/70 bg-background shadow-sm"
+            style={TOOL_CALL_PANEL_STYLE}
+        >
+            <div className="flex min-w-0 shrink-0 items-center gap-2 border-b border-border/60 px-3 py-2">
                 <span className="grid size-7 shrink-0 place-items-center rounded-md border border-blue-500/20 bg-blue-500/10 text-blue-600 dark:text-blue-300">
                     <Search className={cn("size-3.5", status === "running" && "animate-pulse")} />
                 </span>
@@ -710,7 +719,7 @@ function WebActivityCard({
                 </span>
                 <StatusPill status={status} />
             </div>
-            <div className="divide-y divide-border/45">
+            <div ref={listRef} className="tool-call-scroll min-h-0 flex-1 divide-y divide-border/45 overflow-y-auto overscroll-contain [touch-action:pan-y]">
                 {requests.map((request, index) => (
                     <WebRequestRow key={`${request.kind}-${request.label}-${index}`} request={request} />
                 ))}

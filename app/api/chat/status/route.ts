@@ -83,6 +83,28 @@ export async function GET(request: Request) {
         const providerCaps = getProviderCapabilities(settings.provider)
         const readiness = await getProviderReadiness(settings.provider, providerDef)
         const availableModel = readiness.available ? modelDef : null
+        const fallbacks = await Promise.all(settings.fallbacks.map(async (fallback, index) => {
+            const fallbackProvider = registry[fallback.provider]
+            const fallbackModel = fallbackProvider?.models[fallback.model] ?? null
+            const fallbackReadiness = fallbackProvider
+                ? await getProviderReadiness(fallback.provider, fallbackProvider)
+                : null
+            return {
+                index: index + 1,
+                provider: {
+                    id: fallback.provider,
+                    name: fallbackProvider?.name ?? fallback.provider,
+                },
+                model: fallbackModel ? {
+                    id: fallback.model,
+                    name: fallbackModel.name,
+                } : {
+                    id: fallback.model,
+                    name: fallback.model,
+                },
+                available: Boolean(fallbackProvider && fallbackModel && fallbackReadiness?.available),
+            }
+        }))
 
         const systemPromptTokens = providerCaps && availableModel
             ? estimateSystemPromptTokens(origin, providerCaps)
@@ -108,6 +130,7 @@ export async function GET(request: Request) {
                     dataCompleteness: availableModel.dataCompleteness,
                 } : null,
                 thinkingLevel: settings.thinkingLevel,
+                fallbacks,
                 source: settings.source,
                 available: Boolean(availableModel),
                 unavailableReason: !modelDef

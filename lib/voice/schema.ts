@@ -1,3 +1,5 @@
+import { normalizeTimezone } from "@/lib/timezone"
+
 // Voice mode domain schema: settings stored in config.json under `voice`,
 // the client<->gateway wire protocol, and the pure policy helpers (Home
 // Assistant guardrails, live-model ranking). Everything here must stay free
@@ -69,6 +71,20 @@ export function defaultVoiceSettings(): VoiceSettings {
     },
     rooms: [],
   }
+}
+
+export function formatVoiceConversationFallbackTitle(
+  date: Date | number = new Date(),
+  timezone = "UTC"
+): string {
+  const d = typeof date === "number" ? new Date(date) : date
+  const timeLabel = new Intl.DateTimeFormat("en-GB", {
+    timeZone: normalizeTimezone(timezone),
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(d)
+  return `Voice chat ${timeLabel}`
 }
 
 export function normalizeVoiceSettings(value: unknown): VoiceSettings {
