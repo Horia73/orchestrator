@@ -4,6 +4,7 @@ import path from 'path'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { normalizeTimezone } from '@/lib/timezone'
 
+import { BaileysStore, type StoredChat, type StoredContact } from './whatsapp-baileys-store'
 import {
     attachmentSummary,
     limitMessagesByChars,
@@ -53,11 +54,13 @@ const FIND_MESSAGES_DEFAULT_MAX_RESULTS = 20
 const FIND_MESSAGES_MAX_RESULTS = 75
 const FIND_MESSAGES_DEFAULT_MAX_MESSAGES = 500
 const FIND_MESSAGES_MAX_MESSAGES = 2_000
-const STORE_MESSAGES_PER_CHAT = 500
-const STORE_MAX_CHATS = 250
 const BAILEYS_RESTART_REQUIRED = 515
 const BAILEYS_MAX_RESTARTS = 2
 const BAILEYS_UNAUTHORIZED = new Set([401, 403, 419])
+const BAILEYS_CONNECTION_REPLACED = 440
+const RECONNECT_BASE_DELAY_MS = 2_000
+const RECONNECT_MAX_DELAY_MS = 300_000
+const EMPTY_STORE_NOTE = 'The WhatsApp session is connected, but the local store has no chats yet. WhatsApp only delivers chat history when a QR pairing happens; from now on the store fills as messages arrive and survives app restarts. If older history is needed, disconnect and re-pair WhatsApp to trigger a fresh history sync.'
 
 type BaileysModule = typeof import('baileys')
 
@@ -72,21 +75,6 @@ interface MutableBaileysState {
     lastReadyAt: number | null
     lastSyncAt: number | null
     lastError: string | null
-}
-
-interface StoredChat {
-    id: string
-    name: string | null
-    isGroup: boolean
-    isReadOnly: boolean
-    unreadCount: number
-    timestamp: number | null
-    lastMessageId: string | null
-}
-
-interface StoredContact {
-    id: string
-    name: string | null
 }
 
 interface ParsedMessageId {
@@ -119,12 +107,17 @@ export class BaileysWhatsAppManager {
     private connectPromise: Promise<void> | null = null
     private restartPromise: Promise<void> | null = null
     private restartAttempts = 0
+    private reconnectTimer: NodeJS.Timeout | null = null
+    private reconnectAttempts = 0
     private saveCreds: (() => Promise<void>) | null = null
     private baileys: BaileysModule | null = null
+    // Captured at construction (inside the owning profile's context): Baileys
+    // event handlers and reconnect timers run outside any request context,
+    // where activeRuntimePaths() would silently fall back to the admin profile.
+    private readonly authDir = authBaseDir()
+    private storeDb: BaileysStore | null = null
     private readonly chats = new Map<string, StoredChat>()
     private readonly contacts = new Map<string, StoredContact>()
-    private readonly messagesByChat = new Map<string, WAMessage[]>()
-    private readonly messagesById = new Map<string, WAMessage>()
     private state: MutableBaileysState = {
         phase: 'idle',
         qrText: null,
@@ -139,7 +132,27 @@ export class BaileysWhatsAppManager {
     }
 
     async getStatus(origin?: string): Promise<WhatsAppIntegrationStatus> {
+        this.resumeStoredSessionInBackground()
         return this.status(origin)
+    }
+
+    // A stored, resumable session should come back on its own after an app
+    // restart: any status check (Settings, Smart Monitor's cheap pass, boot
+    // wiring) kicks the connection in the background instead of leaving the
+    // session down until the first agent tool call.
+    private resumeStoredSessionInBackground(): void {
+        if (this.socket || this.connectPromise || this.restartPromise || this.reconnectTimer) return
+        if (this.state.phase !== 'idle' && this.state.phase !== 'disconnected') return
+        if (!hasResumableStoredSession(this.authDir)) return
+        void this.ensureStarted().catch(err => this.noteFailedConnectAttempt(err))
+    }
+
+    private noteFailedConnectAttempt(err: unknown): void {
+        if (this.socket) return
+        this.state.phase = 'disconnected'
+        this.state.lastError = err instanceof Error ? err.message : String(err)
+        this.state.lastSyncAt = Date.now()
+        this.scheduleReconnect()
     }
 
     async start(origin?: string): Promise<WhatsAppStartResult> {
@@ -162,10 +175,11 @@ export class BaileysWhatsAppManager {
         this.connectPromise = null
         this.restartPromise = null
         this.restartAttempts = 0
+        this.cancelScheduledReconnect()
         this.saveCreds = null
         this.state.phase = 'disconnected'
         this.clearQr()
-        this.clearStore()
+        this.closeStore()
 
         if (socket) {
             try {
@@ -179,7 +193,7 @@ export class BaileysWhatsAppManager {
             }
         }
 
-        fs.rmSync(/* turbopackIgnore: true */ authBaseDir(), { recursive: true, force: true })
+        fs.rmSync(/* turbopackIgnore: true */ this.authDir, { recursive: true, force: true })
         this.state.accountName = null
         this.state.phoneNumber = null
         this.state.lastSyncAt = Date.now()
@@ -191,10 +205,11 @@ export class BaileysWhatsAppManager {
         this.connectPromise = null
         this.restartPromise = null
         this.restartAttempts = 0
+        this.cancelScheduledReconnect()
         this.saveCreds = null
         this.state.phase = 'disconnected'
         this.clearQr()
-        this.clearStore()
+        this.closeStore()
 
         if (socket) {
             try {
@@ -218,13 +233,14 @@ export class BaileysWhatsAppManager {
         })
     }
 
-    async listChats(maxResults: number): Promise<{ chats: WhatsAppChatSummary[] }> {
+    async listChats(maxResults: number): Promise<{ chats: WhatsAppChatSummary[]; note?: string }> {
         await this.requireReadySocket()
         const limit = clamp(Math.floor(maxResults), 1, 50)
         const chats = this.sortedChats().slice(0, limit)
         await this.hydrateGroupNames(chats)
         return {
             chats: chats.map(chat => this.chatSummary(chat)),
+            ...(this.chats.size === 0 ? { note: EMPTY_STORE_NOTE } : {}),
         }
     }
 
@@ -241,6 +257,7 @@ export class BaileysWhatsAppManager {
             scannedChats: this.chats.size,
             unreadChats: unreadSummaries.slice(0, limit),
             truncated: unreadSummaries.length > limit,
+            ...(this.chats.size === 0 ? { note: EMPTY_STORE_NOTE } : {}),
         }
     }
 
@@ -248,10 +265,7 @@ export class BaileysWhatsAppManager {
         await this.requireReadySocket()
         const chat = this.requireChat(chatId)
         await this.hydrateGroupNames([chat])
-        const newestFirst = this.messagesForChat(chat.id)
-            .slice()
-            .sort((a, b) => timestampOfMessage(b) - timestampOfMessage(a))
-            .slice(0, clamp(Math.floor(maxMessages), 1, 100))
+        const newestFirst = this.messagesForChat(chat.id, clamp(Math.floor(maxMessages), 1, 100))
         const limited = limitMessagesByChars(
             newestFirst.map(message => this.messageSummary(message, chat)),
             clamp(Math.floor(maxChars), 2_000, 80_000)
@@ -289,10 +303,7 @@ export class BaileysWhatsAppManager {
                 truncated = true
                 break
             }
-            const messages = this.messagesForChat(chat.id)
-                .slice()
-                .sort((a, b) => timestampOfMessage(b) - timestampOfMessage(a))
-                .slice(0, perChatLimit)
+            const messages = this.messagesForChat(chat.id, perChatLimit)
             scannedMessages += messages.length
             for (const message of messages) {
                 const summary = this.messageSummary(message, chat)
@@ -332,10 +343,7 @@ export class BaileysWhatsAppManager {
         const maxMessages = clamp(Math.floor(args.maxMessages ?? FIND_MESSAGES_DEFAULT_MAX_MESSAGES), 50, FIND_MESSAGES_MAX_MESSAGES)
         const timeZone = normalizeTimezone(args.timeZone, 'UTC')
         await this.hydrateGroupNames([chat])
-        const messages = this.messagesForChat(chat.id)
-            .slice()
-            .sort((a, b) => timestampOfMessage(b) - timestampOfMessage(a))
-            .slice(0, maxMessages)
+        const messages = this.messagesForChat(chat.id, maxMessages)
         const summaries = messages.map(message => this.messageSummary(message, chat))
         const matches: WhatsAppMessageSummary[] = []
 
@@ -352,7 +360,7 @@ export class BaileysWhatsAppManager {
         const oldest = timestamps.length ? Math.min(...timestamps) : 0
         const newest = timestamps.length ? Math.max(...timestamps) : 0
         const returned = matches.slice(0, maxResults)
-        const scannedAllStored = messages.length < maxMessages && messages.length < STORE_MESSAGES_PER_CHAT
+        const scannedAllStored = messages.length < maxMessages
         const scanLimitHit = !scannedAllStored && matches.length <= returned.length
 
         return {
@@ -381,7 +389,7 @@ export class BaileysWhatsAppManager {
         if (!body.trim()) throw new Error('WhatsApp message body is required.')
         const socket = await this.requireReadySocket()
         const jid = normalizeBaileysChatId(chatId)
-        const quoted = options.quotedMessageId ? this.messagesById.get(options.quotedMessageId.trim()) : undefined
+        const quoted = options.quotedMessageId ? this.getStoredMessage(options.quotedMessageId.trim()) : undefined
         const message = await withTimeout(
             socket.sendMessage(jid, {
                 text: body,
@@ -410,7 +418,7 @@ export class BaileysWhatsAppManager {
         if (attachments.length === 0) throw new Error('At least one WhatsApp attachment is required.')
         const socket = await this.requireReadySocket()
         const jid = normalizeBaileysChatId(chatId)
-        const quoted = options.quotedMessageId ? this.messagesById.get(options.quotedMessageId.trim()) : undefined
+        const quoted = options.quotedMessageId ? this.getStoredMessage(options.quotedMessageId.trim()) : undefined
         const cleanCaption = caption && caption.trim() ? caption.trim() : ''
         const messages: WhatsAppMessageSummary[] = []
 
@@ -443,9 +451,8 @@ export class BaileysWhatsAppManager {
         const socket = await this.requireReadySocket()
         const chat = this.requireChat(chatId)
         const previousUnreadCount = chat.unreadCount
-        const unreadKeys = this.messagesForChat(chat.id)
-            .filter(message => !Boolean(message.key.fromMe))
-            .slice(0, Math.max(previousUnreadCount, 1))
+        const unreadKeys = this.store()
+            .messagesForChat(chat.id, Math.max(previousUnreadCount, 1), { fromMe: false })
             .map(message => message.key)
         if (unreadKeys.length > 0) {
             await withTimeout(
@@ -455,6 +462,7 @@ export class BaileysWhatsAppManager {
             )
         }
         chat.unreadCount = 0
+        this.persistChat(chat)
         await this.hydrateGroupNames([chat])
         return {
             status: 'marked_read',
@@ -471,7 +479,7 @@ export class BaileysWhatsAppManager {
         const previousUnreadCount = chat.unreadCount
         const last = this.lastMessageForChat(chat.id)
         if (!last) {
-            throw new Error(`Could not mark WhatsApp chat ${chat.id} unread: no recent message is available in the bounded Baileys store.`)
+            throw new Error(`Could not mark WhatsApp chat ${chat.id} unread: no recent message is available in the local Baileys store.`)
         }
         await withTimeout(
             socket.chatModify({ markRead: false, lastMessages: [minimalMessage(last)] }, chat.id),
@@ -479,6 +487,7 @@ export class BaileysWhatsAppManager {
             `WhatsApp mark chat unread timed out for ${chat.id}.`
         )
         chat.unreadCount = Math.max(chat.unreadCount, 1)
+        this.persistChat(chat)
         await this.hydrateGroupNames([chat])
         return {
             status: 'marked_unread',
@@ -493,7 +502,7 @@ export class BaileysWhatsAppManager {
         const socket = await this.requireReadySocket()
         const normalized = messageId.trim()
         if (!normalized) throw new Error('WhatsApp message_id is required.')
-        const stored = this.messagesById.get(normalized)
+        const stored = this.getStoredMessage(normalized)
         const key = stored?.key ?? parseMessageId(normalized)
         if (!key?.remoteJid || !key.id) throw new Error(`Could not parse WhatsApp message ${normalized}.`)
         await withTimeout(
@@ -514,9 +523,9 @@ export class BaileysWhatsAppManager {
         const socket = await this.requireReadySocket()
         const normalized = messageId.trim()
         if (!normalized) throw new Error('WhatsApp message_id is required.')
-        const message = this.messagesById.get(normalized)
+        const message = this.getStoredMessage(normalized)
         if (!message) {
-            throw new Error(`Could not find WhatsApp message ${normalized}. Baileys can download media only for messages held in the bounded local store; read the chat or wait for recent sync, then retry.`)
+            throw new Error(`Could not find WhatsApp message ${normalized}. Baileys can download media only for messages held in the local store; read the chat or wait for recent sync, then retry.`)
         }
         const baileys = await this.loadBaileys()
         const content = unwrapMessageContent(message.message)
@@ -556,12 +565,14 @@ export class BaileysWhatsAppManager {
 
     private prepareInteractiveAuthStart(): void {
         if (this.socket || this.connectPromise || this.restartPromise) return
-        const stored = hasStoredSession()
-        const resumable = stored && hasResumableStoredSession()
+        this.cancelScheduledReconnect()
+        const stored = hasStoredSession(this.authDir)
+        const resumable = stored && hasResumableStoredSession(this.authDir)
         if (!stored && this.state.phase !== 'auth_failure') return
         if (resumable && this.state.phase !== 'auth_failure') return
 
-        fs.rmSync(/* turbopackIgnore: true */ authBaseDir(), { recursive: true, force: true })
+        this.closeStore()
+        fs.rmSync(/* turbopackIgnore: true */ this.authDir, { recursive: true, force: true })
         this.saveCreds = null
         this.restartAttempts = 0
         this.state.phase = 'idle'
@@ -572,13 +583,13 @@ export class BaileysWhatsAppManager {
         this.state.lastError = null
         this.state.lastSyncAt = Date.now()
         this.clearQr()
-        this.clearStore()
     }
 
     private async connect(): Promise<void> {
-        ensurePrivateDir(authBaseDir())
+        ensurePrivateDir(this.authDir)
+        this.store()
         const baileys = await this.loadBaileys()
-        const auth = await baileys.useMultiFileAuthState(authBaseDir())
+        const auth = await baileys.useMultiFileAuthState(this.authDir)
         this.saveCreds = auth.saveCreds
         this.state.phase = 'starting'
         this.state.lastError = null
@@ -591,13 +602,13 @@ export class BaileysWhatsAppManager {
             logger: nullLogger,
             printQRInTerminal: false,
             markOnlineOnConnect: false,
-            syncFullHistory: false,
+            // Ask the phone for its full on-device history at pairing time.
+            // The phone still decides how much it actually uploads, but this
+            // matches what WhatsApp Desktop requests instead of recent-only.
+            syncFullHistory: true,
             fireInitQueries: true,
             defaultQueryTimeoutMs: 45_000,
-            shouldSyncHistoryMessage: ({ syncType }) => {
-                const history = baileys.proto.HistorySync.HistorySyncType
-                return syncType === history.RECENT || syncType === history.PUSH_NAME
-            },
+            shouldSyncHistoryMessage: () => true,
             getMessage: async key => this.findMessageByKey(key)?.message ?? undefined,
             cachedGroupMetadata: async () => undefined,
         })
@@ -656,6 +667,8 @@ export class BaileysWhatsAppManager {
             this.state.lastReadyAt = Date.now()
             this.state.lastSyncAt = Date.now()
             this.restartAttempts = 0
+            this.reconnectAttempts = 0
+            this.cancelScheduledReconnect()
             this.clearQr()
             this.captureAccountInfo()
             try {
@@ -680,12 +693,52 @@ export class BaileysWhatsAppManager {
             if (statusCode && BAILEYS_UNAUTHORIZED.has(statusCode)) {
                 this.state.phase = 'auth_failure'
                 this.state.lastError = 'WhatsApp authentication was rejected. Disconnect and scan a new QR code.'
+                this.cancelScheduledReconnect()
                 return
             }
 
             this.state.phase = 'disconnected'
             this.state.lastError = disconnectReason(update.lastDisconnect?.error)
+
+            if (statusCode === BAILEYS_CONNECTION_REPLACED) {
+                // Another client took over this session (e.g. WhatsApp Web
+                // opened elsewhere); auto-reconnecting would just fight it.
+                this.state.lastError = 'Another WhatsApp Web session took over this connection. Reconnect from Settings when ready.'
+                return
+            }
+
+            this.scheduleReconnect()
         }
+    }
+
+    // Transient drops (network loss, server kicks, stream errors) used to park
+    // the session in 'disconnected' until the next agent tool call, which left
+    // the companion blind for hours. Retry with capped exponential backoff for
+    // as long as a resumable session exists on disk.
+    private scheduleReconnect() {
+        if (this.reconnectTimer || this.connectPromise || this.restartPromise || this.socket) return
+        if (!hasResumableStoredSession(this.authDir)) return
+
+        this.reconnectAttempts += 1
+        const attempt = this.reconnectAttempts
+        const base = Math.min(RECONNECT_MAX_DELAY_MS, RECONNECT_BASE_DELAY_MS * 2 ** Math.min(attempt - 1, 8))
+        const delay = Math.round(base * (0.85 + Math.random() * 0.3))
+        this.state.lastError = `${this.state.lastError ?? 'WhatsApp connection closed.'} Reconnecting automatically (attempt ${attempt}).`
+
+        const timer = setTimeout(() => {
+            this.reconnectTimer = null
+            if (this.state.phase !== 'disconnected') return
+            if (!hasResumableStoredSession(this.authDir)) return
+            void this.ensureStarted().catch(err => this.noteFailedConnectAttempt(err))
+        }, delay)
+        timer.unref?.()
+        this.reconnectTimer = timer
+    }
+
+    private cancelScheduledReconnect() {
+        if (!this.reconnectTimer) return
+        clearTimeout(this.reconnectTimer)
+        this.reconnectTimer = null
     }
 
     private scheduleRestartAfterPairing() {
@@ -713,9 +766,13 @@ export class BaileysWhatsAppManager {
     }
 
     private applyHistory(event: BaileysEventMap['messaging-history.set']) {
-        this.applyContacts(event.contacts)
-        this.applyChats(event.chats)
-        for (const message of event.messages) this.upsertMessage(message, { countUnread: false })
+        // History sync arrives in large chunks; batching the writes into one
+        // SQLite transaction keeps the flood off the event loop.
+        this.store().transaction(() => {
+            this.applyContacts(event.contacts)
+            this.applyChats(event.chats)
+            for (const message of event.messages) this.upsertMessage(message, { countUnread: false })
+        })
         this.state.lastSyncAt = Date.now()
     }
 
@@ -724,7 +781,7 @@ export class BaileysWhatsAppManager {
             const id = chatIdFromRecord(chat)
             if (!id || isIgnoredJid(id)) continue
             const prev = this.chats.get(id)
-            this.chats.set(id, {
+            const next: StoredChat = {
                 id,
                 name: stringField(chat, ['name', 'subject']) ?? prev?.name ?? this.contactName(id),
                 isGroup: id.endsWith('@g.us'),
@@ -734,9 +791,10 @@ export class BaileysWhatsAppManager {
                     valueField(chat, ['conversationTimestamp', 'lastMessageRecvTimestamp', 'timestamp'])
                 ) ?? prev?.timestamp ?? null,
                 lastMessageId: prev?.lastMessageId ?? null,
-            })
+            }
+            this.chats.set(id, next)
+            this.store().upsertChat(next)
         }
-        this.trimChats()
     }
 
     private applyChatUpdates(updates: Array<Partial<Chat>>) {
@@ -749,9 +807,14 @@ export class BaileysWhatsAppManager {
             if (!id || isIgnoredJid(id)) continue
             const name = preferredBaileysName(contact)
             const prev = this.contacts.get(id)
-            this.contacts.set(id, { id, name: name ?? prev?.name ?? null })
+            const next: StoredContact = { id, name: name ?? prev?.name ?? null }
+            this.contacts.set(id, next)
+            this.store().upsertContact(next)
             const chat = this.chats.get(id)
-            if (chat && !chat.name && name) chat.name = name
+            if (chat && !chat.name && name) {
+                chat.name = name
+                this.persistChat(chat)
+            }
         }
     }
 
@@ -759,33 +822,53 @@ export class BaileysWhatsAppManager {
         const jid = message.key.remoteJid
         if (!jid || isIgnoredJid(jid) || !message.key.id) return
         const id = serializeMessageId(message.key)
-        const wasStored = this.messagesById.has(id)
-        this.messagesById.set(id, message)
-
-        const existing = this.messagesByChat.get(jid) ?? []
-        const deduped = [message, ...existing.filter(item => serializeMessageId(item.key) !== id)]
-            .sort((a, b) => timestampOfMessage(b) - timestampOfMessage(a))
-        const next = deduped.slice(0, STORE_MESSAGES_PER_CHAT)
-        for (const removed of deduped.slice(STORE_MESSAGES_PER_CHAT)) {
-            this.messagesById.delete(serializeMessageId(removed.key))
-        }
-        this.messagesByChat.set(jid, next)
+        const store = this.store()
+        const wasStored = store.hasMessage(id)
+        const messageTimestamp = timestampOfMessage(message) || 0
+        store.upsertMessage({
+            id,
+            chatId: jid,
+            timestamp: messageTimestamp,
+            fromMe: Boolean(message.key.fromMe),
+            message,
+        })
 
         const chat = this.ensureChatForJid(jid, message)
-        const messageTimestamp = timestampOfMessage(message) || 0
         const previousTimestamp = chat.timestamp ?? 0
         if (!chat.lastMessageId || messageTimestamp >= previousTimestamp) chat.lastMessageId = id
         chat.timestamp = Math.max(previousTimestamp, messageTimestamp) || chat.timestamp
         if (options.countUnread !== false && !wasStored && !message.key.fromMe && this.state.phase === 'ready') {
             chat.unreadCount = Math.min(999, Math.max(0, chat.unreadCount) + 1)
         }
+        this.persistChat(chat)
     }
 
-    private clearStore() {
+    // Opens the on-disk store lazily and hydrates the in-memory chat/contact
+    // maps from it, so the companion view survives app restarts and deploys.
+    private store(): BaileysStore {
+        if (this.storeDb) return this.storeDb
+        const store = new BaileysStore(this.authDir)
+        this.storeDb = store
         this.chats.clear()
         this.contacts.clear()
-        this.messagesByChat.clear()
-        this.messagesById.clear()
+        for (const chat of store.loadChats()) this.chats.set(chat.id, chat)
+        for (const contact of store.loadContacts()) this.contacts.set(contact.id, contact)
+        return store
+    }
+
+    private persistChat(chat: StoredChat) {
+        this.store().upsertChat(chat)
+    }
+
+    private getStoredMessage(id: string): WAMessage | undefined {
+        return this.store().getMessageById(id) ?? undefined
+    }
+
+    private closeStore() {
+        this.storeDb?.close()
+        this.storeDb = null
+        this.chats.clear()
+        this.contacts.clear()
     }
 
     private captureAccountInfo() {
@@ -846,8 +929,8 @@ export class BaileysWhatsAppManager {
     private async status(origin?: string): Promise<WhatsAppIntegrationStatus> {
         const qrUpdatedAt = this.state.qrUpdatedAt
         const connected = Boolean(this.socket && this.state.phase === 'ready')
-        const sessionStored = hasStoredSession()
-        const resumableSessionStored = hasResumableStoredSession()
+        const sessionStored = hasStoredSession(this.authDir)
+        const resumableSessionStored = hasResumableStoredSession(this.authDir)
         const canResumeStoredSession =
             resumableSessionStored &&
             (this.state.phase === 'idle' || this.state.phase === 'disconnected')
@@ -858,7 +941,7 @@ export class BaileysWhatsAppManager {
         return {
             id: 'whatsapp',
             name: 'WhatsApp',
-            description: 'Local WhatsApp companion session using Baileys. Read tools use a bounded recent-message store; sending media/messages and deleting messages for everyone require explicit confirmation.',
+            description: 'Local WhatsApp companion session using Baileys. Read tools use a persistent local message store that fills as messages arrive (full history is requested at pairing); sending media/messages and deleting messages for everyone require explicit confirmation.',
             configured: true,
             connected,
             accountName: this.state.accountName,
@@ -885,20 +968,19 @@ export class BaileysWhatsAppManager {
         return [...this.chats.values()].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
     }
 
-    private messagesForChat(chatId: string): WAMessage[] {
-        return this.messagesByChat.get(normalizeBaileysChatId(chatId)) ?? []
+    /** Newest-first messages for a chat, read from the persistent store. */
+    private messagesForChat(chatId: string, limit: number): WAMessage[] {
+        return this.store().messagesForChat(normalizeBaileysChatId(chatId), limit)
     }
 
     private lastMessageForChat(chatId: string): WAMessage | null {
-        return this.messagesForChat(chatId)
-            .slice()
-            .sort((a, b) => timestampOfMessage(b) - timestampOfMessage(a))[0] ?? null
+        return this.messagesForChat(chatId, 1)[0] ?? null
     }
 
     private requireChat(chatId: string): StoredChat {
         const normalized = normalizeBaileysChatId(chatId)
         const chat = this.chats.get(normalized)
-        if (!chat) throw new Error(`Could not read WhatsApp chat ${normalized}: it is not in the recent Baileys store yet.`)
+        if (!chat) throw new Error(`Could not read WhatsApp chat ${normalized}: it is not in the local Baileys store yet.`)
         return chat
     }
 
@@ -916,7 +998,7 @@ export class BaileysWhatsAppManager {
             lastMessageId: message ? serializeMessageId(message.key) : null,
         }
         this.chats.set(normalized, chat)
-        this.trimChats()
+        this.persistChat(chat)
         return chat
     }
 
@@ -934,7 +1016,10 @@ export class BaileysWhatsAppManager {
                     `WhatsApp group metadata lookup timed out for ${chat.id}.`
                 )
                 const name = stringField(metadata, ['subject', 'name'])
-                if (name) chat.name = name
+                if (name) {
+                    chat.name = name
+                    this.persistChat(chat)
+                }
             } catch {
                 // Best-effort: fall back to the group JID when metadata is unavailable.
             }
@@ -942,7 +1027,7 @@ export class BaileysWhatsAppManager {
     }
 
     private chatSummary(chat: StoredChat): WhatsAppChatSummary {
-        const last = chat.lastMessageId ? this.messagesById.get(chat.lastMessageId) : this.lastMessageForChat(chat.id)
+        const last = chat.lastMessageId ? this.getStoredMessage(chat.lastMessageId) : this.lastMessageForChat(chat.id)
         return {
             id: chat.id,
             name: chat.name || jidDisplay(chat.id),
@@ -1001,19 +1086,7 @@ export class BaileysWhatsAppManager {
     }
 
     private findMessageByKey(key: WAMessageKey): WAMessage | undefined {
-        return this.messagesById.get(serializeMessageId(key))
-    }
-
-    private trimChats() {
-        if (this.chats.size <= STORE_MAX_CHATS) return
-        const keep = new Set(this.sortedChats().slice(0, STORE_MAX_CHATS).map(chat => chat.id))
-        for (const id of this.chats.keys()) {
-            if (keep.has(id)) continue
-            this.chats.delete(id)
-            const messages = this.messagesByChat.get(id) ?? []
-            for (const message of messages) this.messagesById.delete(serializeMessageId(message.key))
-            this.messagesByChat.delete(id)
-        }
+        return this.getStoredMessage(serializeMessageId(key))
     }
 
     private async loadBaileys(): Promise<BaileysModule> {
@@ -1046,17 +1119,17 @@ function authBaseDir(): string {
     return path.join(/* turbopackIgnore: true */ activeRuntimePaths().privateStateDir, 'whatsapp-baileys')
 }
 
-function hasStoredSession(): boolean {
+function hasStoredSession(authDir: string): boolean {
     try {
-        return fs.existsSync(/* turbopackIgnore: true */ baileysCredsPath())
+        return fs.existsSync(/* turbopackIgnore: true */ baileysCredsPath(authDir))
     } catch {
         return false
     }
 }
 
-function hasResumableStoredSession(): boolean {
+function hasResumableStoredSession(authDir: string): boolean {
     try {
-        const parsed = JSON.parse(fs.readFileSync(/* turbopackIgnore: true */ baileysCredsPath(), 'utf-8')) as {
+        const parsed = JSON.parse(fs.readFileSync(/* turbopackIgnore: true */ baileysCredsPath(authDir), 'utf-8')) as {
             me?: { id?: unknown }
         }
         return typeof parsed.me?.id === 'string' && parsed.me.id.trim().length > 0
@@ -1065,8 +1138,8 @@ function hasResumableStoredSession(): boolean {
     }
 }
 
-function baileysCredsPath(): string {
-    return path.join(/* turbopackIgnore: true */ authBaseDir(), 'creds.json')
+function baileysCredsPath(authDir: string): string {
+    return path.join(/* turbopackIgnore: true */ authDir, 'creds.json')
 }
 
 function ensurePrivateDir(dir: string) {
