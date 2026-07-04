@@ -30,6 +30,7 @@ function buildChatStreamRequestBody(input: {
   promptContextSource?: string
   activateIntegrations?: string[]
   preferredFallbackIndex?: number
+  followUpId?: string
 }) {
   const fullBody = JSON.stringify(input)
   if (requestBodySize(fullBody) <= CHAT_REQUEST_BODY_SOFT_LIMIT_BYTES) {
@@ -232,6 +233,7 @@ export function startChatStreamRequest({
   promptContextSource,
   activateIntegrations,
   preferredFallbackIndex,
+  followUpId,
   signal,
 }: {
   conversationId: string
@@ -241,6 +243,7 @@ export function startChatStreamRequest({
   promptContextSource?: string
   activateIntegrations?: string[]
   preferredFallbackIndex?: number
+  followUpId?: string
   signal: AbortSignal
 }) {
   return fetch("/api/chat", {
@@ -254,7 +257,48 @@ export function startChatStreamRequest({
       promptContextSource,
       activateIntegrations,
       preferredFallbackIndex,
+      followUpId,
     }),
     signal,
   })
+}
+
+/**
+ * Steering: send a user message while a turn is still streaming. The server
+ * either injects it into the running turn right now (`steered: true` —
+ * provider supports mid-turn steering, e.g. codex) or persists + queues it to
+ * run as the next turn (`queued: true`). Returns null on network failure
+ * (caller falls back to a normal send when the server reports no active
+ * stream).
+ */
+export async function steerChatMessage(
+  conversationId: string,
+  message: Message
+): Promise<{
+  queued: boolean
+  active: boolean
+  steered: boolean
+  followUpId?: string
+} | null> {
+  // steerPending is client-side render state — never ship it to the server.
+  const wireMessage: Message = { ...message }
+  delete wireMessage.steerPending
+  try {
+    const res = await fetch("/api/chat/steer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ conversationId, message: wireMessage }),
+    })
+    if (!res.ok) return null
+    const data = await res.json().catch(() => null)
+    if (!data || typeof data.queued !== "boolean") return null
+    return {
+      queued: data.queued,
+      active: Boolean(data.active),
+      steered: Boolean(data.steered),
+      followUpId: typeof data.followUpId === "string" ? data.followUpId : undefined,
+    }
+  } catch {
+    return null
+  }
 }

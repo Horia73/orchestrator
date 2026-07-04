@@ -163,7 +163,9 @@ export function ChatInput({
     const isStreamingActiveConversation = Boolean(
         isStreaming && activeConversationId && streamingConversationId === activeConversationId
     )
-    const canSend = hasContent && !hasPendingAttachments && !hasFailedAttachments && !isStreamingActiveConversation
+    // Steering: sending while this conversation streams queues a follow-up
+    // that runs as the next turn — the input stays live during a run.
+    const canSend = hasContent && !hasPendingAttachments && !hasFailedAttachments
     const isCompact = isChat && density === "compact"
     const maxHeight = isCompact ? 92 : isChat ? 160 : 200
 
@@ -277,7 +279,7 @@ export function ChatInput({
 
     const handleSubmit = React.useCallback(() => {
         const trimmed = draft.value.trim()
-        if ((!trimmed && draft.attachments.length === 0) || hasPendingAttachments || hasFailedAttachments || isStreamingActiveConversation) return
+        if ((!trimmed && draft.attachments.length === 0) || hasPendingAttachments || hasFailedAttachments) return
         const uploadedAttachments = draft.attachments.filter(a => a.uploaded).map(a => a.uploaded!)
         const options = buildResolvedSendOptions(trimmed)
         if (onSend) {
@@ -301,7 +303,7 @@ export function ChatInput({
         } else {
             focusWithoutViewportScroll(textareaRef.current)
         }
-    }, [buildResolvedSendOptions, draft, hasFailedAttachments, hasPendingAttachments, isStreamingActiveConversation, onSend, sendMessage])
+    }, [buildResolvedSendOptions, draft, hasFailedAttachments, hasPendingAttachments, onSend, sendMessage])
 
     const handleTextChange = React.useCallback(
         (event: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -423,7 +425,14 @@ export function ChatInput({
                         onKeyDown={handleKeyDown}
                         onPaste={handlePaste}
                         enterKeyHint="enter"
-                        placeholder={placeholder ?? (isChat ? "Reply..." : "How can I help you today?")}
+                        placeholder={
+                            placeholder ??
+                            (isStreamingActiveConversation
+                                ? "Write a follow-up..."
+                                : isChat
+                                    ? "Reply..."
+                                    : "How can I help you today?")
+                        }
                         rows={isChat ? 1 : 2}
                         style={{
                             gridArea: "1 / 1",
@@ -512,6 +521,20 @@ export function ChatInput({
                                         aria-label="Live voice chat"
                                     >
                                         <AudioLines className="size-5.5 stroke-[1.2]" />
+                                    </button>
+                                )}
+                                {isStreamingActiveConversation && hasContent && (
+                                    <button
+                                        type="button"
+                                        onClick={handleSubmit}
+                                        disabled={!canSend}
+                                        className={cn(
+                                            "flex size-8 items-center justify-center rounded-[11px] bg-[#b76440] text-white transition-colors hover:bg-[#a55837] pointer-coarse:size-10",
+                                            !canSend && "cursor-not-allowed opacity-50 hover:bg-[#b76440]"
+                                        )}
+                                        aria-label="Send follow-up"
+                                    >
+                                        <ArrowUp className="size-[17px] stroke-[2.5]" />
                                     </button>
                                 )}
                                 <div className="flex size-9 shrink-0 items-center justify-center pointer-coarse:size-10">

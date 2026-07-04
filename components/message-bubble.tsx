@@ -1,8 +1,9 @@
 "use client"
 
 import * as React from "react"
-import { Brain, Check, ChevronDown, Copy, CheckCircle2, CircleAlert, CircleStop, Clock, Download, ExternalLink, FileText, Loader2, RefreshCw } from "lucide-react"
-import type { AgentCallReasoningEntry, Attachment, ContentSegment, ContextCompactionReasoningEntry, MemoryRecallReasoningEntry, Message, ReasoningEntry, ToolCallReasoningEntry } from "@/lib/types"
+import { Brain, Check, ChevronDown, Copy, CheckCircle2, CircleAlert, CircleStop, Clock, Download, ExternalLink, FileText, Loader2, RefreshCw, Terminal } from "lucide-react"
+import type { AgentCallReasoningEntry, Attachment, ContentSegment, ContextCompactionReasoningEntry, MemoryRecallReasoningEntry, Message, ReasoningEntry, SteeredMessageReasoningEntry, ToolCallReasoningEntry } from "@/lib/types"
+import { parseSteeredMessage } from "@/lib/steered-message"
 import { cn } from "@/lib/utils"
 import { copyTextToClipboard } from "@/lib/clipboard"
 import type { ArtifactPayload } from "@/components/artifact-panel"
@@ -35,6 +36,27 @@ function formatMessageTimestamp(timestamp: number) {
 
 function formatMessageTimestampFull(timestamp: number) {
     return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(timestamp)
+}
+
+// Server-authored background-job completion notices arrive as user-role
+// messages wrapped in this tag (lib/ai/background-jobs.ts). Chat renders them
+// as a muted system card. The trailing "This is an automated…" instruction
+// paragraph is for the model, not the reader — it is dropped from display.
+const BACKGROUND_JOB_NOTICE_RE = /^<background-job-notice>\n?([\s\S]*?)\n?<\/background-job-notice>\s*$/
+
+function parseBackgroundJobNotice(content: string): { headline: string; body: string } | null {
+    const match = BACKGROUND_JOB_NOTICE_RE.exec(content.trim())
+    if (!match) return null
+    const lines = match[1].split("\n")
+    const headlineIndex = lines.findIndex((line) => line.trim().length > 0)
+    if (headlineIndex < 0) return null
+    const headline = lines[headlineIndex].trim()
+    const rest = lines
+        .slice(headlineIndex + 1)
+        .join("\n")
+        .replace(/\n*This is an automated completion notice[\s\S]*$/, "")
+        .trim()
+    return { headline, body: rest }
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +157,7 @@ function formatWorkDuration(ms: number): string {
 type MessageTimelineItem =
     | { type: "reasoning"; phase: number; entries: ReasoningEntry[] }
     | { type: "content"; phase: number; content: string }
+    | { type: "steered"; phase: number; entry: SteeredMessageReasoningEntry }
 
 function groupReasoningByPhase(reasoning: ReasoningEntry[]): Array<{ phase: number; entries: ReasoningEntry[] }> {
     const groups: Array<{ phase: number; entries: ReasoningEntry[] }> = []
@@ -150,10 +173,7 @@ function groupReasoningByPhase(reasoning: ReasoningEntry[]): Array<{ phase: numb
 function buildInterleavedTimeline(
     reasoningGroups: Array<{ phase: number; entries: ReasoningEntry[] }>,
     contentSegments: ContentSegment[]
-): Array<
-    | { type: "reasoning"; phase: number; entries: ReasoningEntry[] }
-    | { type: "content"; phase: number; content: string }
-> {
+): MessageTimelineItem[] {
     const reasoningByPhase = new Map<number, ReasoningEntry[]>()
     for (const g of reasoningGroups) reasoningByPhase.set(g.phase, g.entries)
 
@@ -161,14 +181,31 @@ function buildInterleavedTimeline(
     for (const s of contentSegments) contentByPhase.set(s.phase, (contentByPhase.get(s.phase) ?? "") + s.content)
 
     const phases = Array.from(new Set([...reasoningByPhase.keys(), ...contentByPhase.keys()])).sort((a, b) => a - b)
-    const timeline: Array<
-        | { type: "reasoning"; phase: number; entries: ReasoningEntry[] }
-        | { type: "content"; phase: number; content: string }
-    > = []
+    const timeline: MessageTimelineItem[] = []
 
     for (const phase of phases) {
         const r = reasoningByPhase.get(phase)
-        if (r?.length) timeline.push({ type: "reasoning", phase, entries: r })
+        if (r?.length) {
+            // Steered messages surface as their own timeline items — they are
+            // user speech, not working trace, so they must never disappear
+            // into a ThoughtBlock / "Worked for" disclosure.
+            let run: ReasoningEntry[] = []
+            const flushRun = () => {
+                if (run.length) {
+                    timeline.push({ type: "reasoning", phase, entries: run })
+                    run = []
+                }
+            }
+            for (const entry of r) {
+                if (entry.type === "steered_message") {
+                    flushRun()
+                    timeline.push({ type: "steered", phase, entry })
+                } else {
+                    run.push(entry)
+                }
+            }
+            flushRun()
+        }
         const c = contentByPhase.get(phase)
         if (c?.length) timeline.push({ type: "content", phase, content: c })
     }
@@ -192,7 +229,7 @@ function sliceTimelineByRenderBudget(
 
     for (const item of items) {
         if (remaining <= 0) break
-        if (item.type === "content") {
+        if (item.type !== "reasoning") {
             sliced.push(item)
             remaining -= 1
             continue
@@ -856,6 +893,10 @@ function WorkedForBlock({
                                             onAttachmentClick={onAttachmentClick}
                                             searchToolDisplay="expanded"
                                         />
+                                    ) : item.type === "steered" ? (
+                                        // Steered messages are section barriers —
+                                        // they never fold into "Worked for".
+                                        null
                                     ) : (
                                         <div
                                             key={`work-${item.phase}-${index}`}
@@ -988,6 +1029,13 @@ function ReasoningEntryList({
                     key={`${entry.id}-${index}`}
                     entry={entry}
                 />
+            )
+        } else if (entry.type === "steered_message") {
+            // Steered messages surface as timeline barriers, never inside a
+            // reasoning list — but render defensively (nested agent traces or
+            // legacy data) rather than crashing on the fallthrough.
+            nodes.push(
+                <SteeredMessageBlock key={`${entry.id}-${index}`} entry={entry} />
             )
         } else {
             nodes.push(
@@ -1366,6 +1414,28 @@ function UserMessageContent({ messageId, content }: { messageId: string; content
     )
 }
 
+// ---------------------------------------------------------------------------
+// SteeredMessageBlock — a user message injected INTO a running turn (provider
+// steering, e.g. codex `turn/steer`). Rendered inline inside the assistant
+// turn at the exact injection point: a "Steered message" label on the left,
+// the user bubble on the right, before whatever the model says next. The
+// standalone user row for the same text is tag-hidden (see MessageBubble's
+// user branch), so this block is its only visible rendering.
+// ---------------------------------------------------------------------------
+
+function SteeredMessageBlock({ entry }: { entry: SteeredMessageReasoningEntry }) {
+    return (
+        <div className="my-1.5 flex items-center justify-end gap-3">
+            <span className="shrink-0 select-none text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                Steered message
+            </span>
+            <div className="max-w-[75%] select-text whitespace-pre-wrap break-words rounded-[10px] bg-[#f0ede6] px-4 py-2.5 text-[15px] dark:bg-muted">
+                {entry.content}
+            </div>
+        </div>
+    )
+}
+
 function TerminalMessageStatusLine({ status }: { status?: Message["status"] }) {
     if (status === "aborted") {
         return (
@@ -1609,6 +1679,46 @@ function MessageBubbleComponent({
     )
 
     if (message.role === "user") {
+        // Steered rows (delivered INTO a running turn) render inline inside
+        // that turn's assistant bubble at their injection point — the
+        // standalone bubble would duplicate them, so it stays hidden.
+        if (parseSteeredMessage(message.content) !== null) return null
+        // Pending steering: sent while the turn still streams, delivery not
+        // settled yet — a muted italic bubble at the bottom of the transcript.
+        if (message.steerPending) {
+            return (
+                <div className="flex flex-col items-end gap-2 select-text">
+                    <div className="max-w-[85%] select-text whitespace-pre-wrap break-words rounded-[10px] bg-[#f0ede6]/60 px-4 py-2.5 text-[16px] italic text-muted-foreground dark:bg-muted/60">
+                        {message.content}
+                    </div>
+                </div>
+            )
+        }
+        // Background-job completion notices are server-authored user-role
+        // messages (the wake prompt); render them as a muted system card,
+        // not as something the user typed.
+        const jobNotice = parseBackgroundJobNotice(message.content)
+        if (jobNotice) {
+            return (
+                <div
+                    className="flex flex-col items-stretch gap-2 select-text"
+                    onMouseEnter={() => setHovered(true)}
+                    onMouseLeave={() => setHovered(false)}
+                >
+                    <div className="rounded-xl border border-border/60 bg-muted/40 px-4 py-3">
+                        <div className="flex items-center gap-2 text-[13px] font-medium text-foreground/80">
+                            <Terminal className="size-4 shrink-0 text-muted-foreground" />
+                            {jobNotice.headline}
+                        </div>
+                        {jobNotice.body && (
+                            <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-muted-foreground">
+                                {jobNotice.body}
+                            </pre>
+                        )}
+                    </div>
+                </div>
+            )
+        }
         return (
             <div
                 className="flex flex-col items-end gap-2 select-text"
@@ -1649,15 +1759,21 @@ function MessageBubbleComponent({
     // streaming we leave the live per-phase blocks untouched.
     const collapseWork =
         !isStreamingMessage && !isInProgressReasoning && timeline.length > 0
-    let workItems: MessageTimelineItem[] = []
-    let finalItems: MessageTimelineItem[] = timeline
-    if (collapseWork) {
-        let splitAt = timeline.length
-        while (splitAt > 0 && timeline[splitAt - 1].type === "content") splitAt--
-        workItems = timeline.slice(0, splitAt)
-        finalItems = timeline.slice(splitAt)
+
+    // Steered messages are hard barriers: user speech never folds into
+    // "Worked for". Partition the timeline at steered items; each section
+    // folds independently (everything except its trailing content run), so a
+    // steered turn reads: work ▸ / what the AI said / steered message /
+    // work ▸ / the continuation. A turn with no steers is one section —
+    // byte-identical to the old layout.
+    const sections: Array<{
+        steered: SteeredMessageReasoningEntry | null
+        items: MessageTimelineItem[]
+    }> = [{ steered: null, items: [] }]
+    for (const item of timeline) {
+        if (item.type === "steered") sections.push({ steered: item.entry, items: [] })
+        else sections[sections.length - 1].items.push(item)
     }
-    const showWorkedFor = workItems.length > 0
 
     const renderTimelineItem = (item: MessageTimelineItem) =>
         item.type === "reasoning" ? (
@@ -1673,6 +1789,11 @@ function MessageBubbleComponent({
                 thinkingDuration={message.thinkingDuration}
                 messageStatus={message.status}
                 openOnMount={openLoadedDetails}
+            />
+        ) : item.type === "steered" ? (
+            <SteeredMessageBlock
+                key={`steered-${message.id}-${item.entry.id}`}
+                entry={item.entry}
             />
         ) : (
             <div key={`content-${message.id}-${item.phase}`} className="min-w-0 break-words text-[16px] leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-1">
@@ -1708,22 +1829,46 @@ function MessageBubbleComponent({
                     onOpen={handleOpenDeferredDetails}
                 />
             )}
-            {showWorkedFor ? (
-                <>
-                    <WorkedForBlock
-                        items={workItems}
-                        durationMs={message.durationMs}
-                        status={message.status}
-                        messageId={message.id}
-                        openOnMount={openLoadedDetails}
-                        onArtifactClick={onArtifactClick}
-                        onArtifactExpand={onArtifactExpand}
-                        onAgentOpen={onAgentOpen}
-                        onAttachmentClick={onAttachmentClick}
-                        suppressArtifactTypes={suppressArtifactTypes}
-                    />
-                    {finalItems.map(renderTimelineItem)}
-                </>
+            {collapseWork ? (
+                sections.map((section, index) => {
+                    let splitAt = section.items.length
+                    while (splitAt > 0 && section.items[splitAt - 1].type === "content") splitAt--
+                    const workItems = section.items.slice(0, splitAt)
+                    const finalItems = section.items.slice(splitAt)
+                    const isLastSection = index === sections.length - 1
+                    // Per-section wall-clock from the steered markers' elapsed
+                    // offsets; a steer-free turn is one section = full duration.
+                    const sectionStartMs = section.steered?.elapsedMs ?? 0
+                    const sectionEndMs = isLastSection
+                        ? message.durationMs
+                        : sections[index + 1].steered?.elapsedMs
+                    const sectionDurationMs =
+                        typeof sectionEndMs === "number" && sectionEndMs >= sectionStartMs
+                            ? sectionEndMs - sectionStartMs
+                            : undefined
+                    return (
+                        <React.Fragment key={`section-${message.id}-${index}`}>
+                            {section.steered && (
+                                <SteeredMessageBlock entry={section.steered} />
+                            )}
+                            {workItems.length > 0 && (
+                                <WorkedForBlock
+                                    items={workItems}
+                                    durationMs={sectionDurationMs}
+                                    status={isLastSection ? message.status : undefined}
+                                    messageId={index === 0 ? message.id : `${message.id}#s${index}`}
+                                    openOnMount={openLoadedDetails}
+                                    onArtifactClick={onArtifactClick}
+                                    onArtifactExpand={onArtifactExpand}
+                                    onAgentOpen={onAgentOpen}
+                                    onAttachmentClick={onAttachmentClick}
+                                    suppressArtifactTypes={suppressArtifactTypes}
+                                />
+                            )}
+                            {finalItems.map(renderTimelineItem)}
+                        </React.Fragment>
+                    )
+                })
             ) : (
                 timeline.map(renderTimelineItem)
             )}
@@ -1878,6 +2023,11 @@ export function StreamingBubble({ reasoning, content, contentSegments, streaming
                         thoughtAutoOpen={thoughtAutoOpen}
                         thoughtAutoExpandTools={thoughtAutoExpandTools}
                         liveCollapsedTitle={liveCollapsedTitle}
+                    />
+                ) : item.type === "steered" ? (
+                    <SteeredMessageBlock
+                        key={`stream-steered-${messageId ?? "pending"}-${item.entry.id}`}
+                        entry={item.entry}
                     />
                 ) : (
                     <div key={`stream-content-${item.phase}`} className="min-w-0 break-words text-[16px] leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-1">

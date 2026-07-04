@@ -412,6 +412,16 @@ export interface StreamCallbacks {
     at: number
   }) => void
   /**
+   * Mid-turn steering. Providers that can inject user input into an in-flight
+   * turn (codex app-server `turn/steer`) call this with a delivery function
+   * once the turn accepts input, and with null when it stops accepting it.
+   * The function resolves true only when the provider confirmed the injection
+   * landed in the running turn.
+   */
+  onSteeringAvailable?: (
+    steer: ((text: string) => Promise<boolean>) | null
+  ) => void
+  /**
    * `usage` is the raw provider payload — Gemini's `Usage` shape today, but
    * other providers will return their own shape. Consumers should pass it
    * through `lib/observability/usage-mapper.ts` before reading fields.

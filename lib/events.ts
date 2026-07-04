@@ -31,7 +31,12 @@ type ChatEventBase =
     | { type: 'conversation_title'; payload: { conversationId: string; title: string } }
     | { type: 'delete_conversation'; payload: { id: string } }
     | { type: 'chat_stream_started'; payload: { conversationId: string; messageId: string; startedAt: number } }
-    | { type: 'chat_stream_ended'; payload: { conversationId: string; messageId?: string } };
+    | { type: 'chat_stream_ended'; payload: { conversationId: string; messageId?: string } }
+    // Steering: a follow-up sent while a turn was streaming got queued /
+    // claimed for the next turn / dropped (user pressed Stop).
+    | { type: 'chat_followup_queued'; payload: { conversationId: string; followUpId: string; userMessageId: string; source: 'user' | 'background-job' } }
+    | { type: 'chat_followup_claimed'; payload: { conversationId: string; followUpId: string; userMessageId: string } }
+    | { type: 'chat_followups_cleared'; payload: { conversationId: string } };
 
 export type ChatEvent = ChatEventBase & { profileId?: string };
 

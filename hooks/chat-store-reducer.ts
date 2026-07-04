@@ -5,6 +5,7 @@ import type {
   Conversation,
   MemoryRecallReasoningEntry,
   Message,
+  SteeredMessageReasoningEntry,
   ToolStreamDelta,
 } from "@/lib/types"
 import {
@@ -96,7 +97,14 @@ export type ChatAction =
   | { type: "NEW_CHAT" }
   | { type: "SELECT_CONVERSATION"; id: string }
   | { type: "DELETE_CONVERSATION"; id: string }
-  | { type: "ADD_USER_MESSAGE"; conversationId: string; message: Message }
+  | {
+      type: "ADD_USER_MESSAGE"
+      conversationId: string
+      message: Message
+      /** Steering drain: re-position an already-rendered queued follow-up at
+       *  the end of the list (mirrors the server-side claim re-stamp). */
+      moveToEnd?: boolean
+    }
   | {
       type: "CREATE_CONVERSATION"
       conversation: Conversation
@@ -189,6 +197,20 @@ export type ChatAction =
   | {
       type: "ADD_STREAMING_MEMORY_RECALL"
       entry: MemoryRecallReasoningEntry
+    }
+  | {
+      /** Live steering injection landed in the in-flight turn: surface the
+       *  inline marker entry on the streaming reasoning. (The standalone user
+       *  row is upserted separately via ADD_USER_MESSAGE with the tagged
+       *  server copy, which hides its bubble.) */
+      type: "ADD_STREAMING_STEERED_MESSAGE"
+      entry: SteeredMessageReasoningEntry
+    }
+  | {
+      /** Stop pressed: queued steering messages become plain history — drop
+       *  their pending-steering render state. */
+      type: "CLEAR_STEER_PENDING"
+      conversationId: string
     }
   | {
       type: "UPDATE_CONTEXT_USAGE"
@@ -694,9 +716,16 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
                   messages: conv.messages.some(
                     (m) => m.id === action.message.id
                   )
-                    ? conv.messages.map((m) =>
-                        m.id === action.message.id ? action.message : m
-                      )
+                    ? action.moveToEnd
+                      ? [
+                          ...conv.messages.filter(
+                            (m) => m.id !== action.message.id
+                          ),
+                          action.message,
+                        ]
+                      : conv.messages.map((m) =>
+                          m.id === action.message.id ? action.message : m
+                        )
                     : [...conv.messages, action.message],
                 }
               : conv
@@ -1086,6 +1115,36 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         streamingReasoning: [...state.streamingReasoning, action.entry],
         streamingMode: "reasoning",
         streamingStatus: null,
+      }
+    case "ADD_STREAMING_STEERED_MESSAGE":
+      if (
+        state.streamingReasoning.some(
+          (entry) =>
+            entry.type === "steered_message" && entry.id === action.entry.id
+        )
+      ) {
+        return { ...state, streamingMode: "reasoning", streamingStatus: null }
+      }
+      return {
+        ...state,
+        streamingReasoning: [...state.streamingReasoning, action.entry],
+        streamingMode: "reasoning",
+        streamingStatus: null,
+      }
+    case "CLEAR_STEER_PENDING":
+      return {
+        ...state,
+        conversations: state.conversations.map((conv) =>
+          conv.id === action.conversationId &&
+          conv.messages.some((m) => m.steerPending)
+            ? {
+                ...conv,
+                messages: conv.messages.map((m) =>
+                  m.steerPending ? { ...m, steerPending: undefined } : m
+                ),
+              }
+            : conv
+        ),
       }
     case "UPDATE_CONTEXT_USAGE":
       return {

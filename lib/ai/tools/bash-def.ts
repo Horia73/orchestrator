@@ -28,7 +28,7 @@ export const bashTool: ToolDef = {
             },
             run_in_background: {
                 type: 'boolean',
-                description: 'When true, start the command and return immediately with a log path.',
+                description: 'When true, start the command as a tracked background job and return immediately with a job id + log path. The job survives the end of this turn; when it exits, a completion notice is posted into the conversation and the agent is woken automatically. Manage it with manage_background_jobs.',
             },
             cwd: {
                 type: 'string',

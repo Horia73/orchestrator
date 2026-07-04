@@ -98,7 +98,7 @@ interface WhatsAppRuntime {
     disconnect(): Promise<void>
     stopRuntime?(): Promise<void>
     getQrPng(): Promise<Buffer | null>
-    listChats(maxResults: number): Promise<{ chats: WhatsAppChatSummary[] }>
+    listChats(maxResults: number): Promise<{ chats: WhatsAppChatSummary[]; note?: string }>
     unreadSummary(maxResults: number): Promise<WhatsAppUnreadSummary>
     readChat(chatId: string, maxMessages: number, maxChars: number): Promise<WhatsAppReadChatResult>
     searchMessages(args: {
@@ -146,6 +146,8 @@ export interface WhatsAppUnreadSummary {
     scannedChats: number
     unreadChats: WhatsAppUnreadChatSummary[]
     truncated: boolean
+    /** Set when the local store is empty so callers don't mistake "no data yet" for an empty inbox. */
+    note?: string
 }
 
 export interface WhatsAppMessageSummary {
@@ -1668,7 +1670,7 @@ export function getWhatsAppQrPng(): Promise<Buffer | null> {
     return manager().getQrPng()
 }
 
-export function whatsappListChats(maxResults: number): Promise<{ chats: WhatsAppChatSummary[] }> {
+export function whatsappListChats(maxResults: number): Promise<{ chats: WhatsAppChatSummary[]; note?: string }> {
     return withWhatsAppOwnerProfile(() => manager().listChats(maxResults))
 }
 

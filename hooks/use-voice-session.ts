@@ -21,17 +21,28 @@ export interface VoiceCaption {
   final: boolean
 }
 
+export interface VoiceActivityEntry {
+  id: string
+  name: string
+  status: "running" | "done" | "error"
+  at: number
+}
+
 export interface VoiceSessionHandle {
   state: VoiceSessionState
   error: string | null
   muted: boolean
   activeTool: string | null
+  /** Live feed of tool calls (newest last), for the overlay activity list. */
+  activity: VoiceActivityEntry[]
   userCaption: string
   assistantCaption: string
   start: () => Promise<void>
   stop: () => void
   toggleMute: () => void
 }
+
+const MAX_ACTIVITY_ENTRIES = 8
 
 const OUTPUT_SAMPLE_RATE = 24_000
 const TARGET_INPUT_RATE = 16_000
@@ -95,6 +106,34 @@ export function useVoiceSession(): VoiceSessionHandle {
   const [activeTool, setActiveTool] = React.useState<string | null>(null)
   const [userCaption, setUserCaption] = React.useState("")
   const [assistantCaption, setAssistantCaption] = React.useState("")
+  const [activity, setActivity] = React.useState<VoiceActivityEntry[]>([])
+
+  const recordActivity = React.useCallback(
+    (name: string, status: VoiceActivityEntry["status"]) => {
+      setActivity((current) => {
+        if (status !== "running") {
+          // Close out the most recent running entry for this tool; native
+          // google_search only ever reports "done", so fall through to a
+          // fresh entry when there is nothing to close.
+          for (let i = current.length - 1; i >= 0; i -= 1) {
+            if (current[i].name === name && current[i].status === "running") {
+              const next = [...current]
+              next[i] = { ...next[i], status, at: Date.now() }
+              return next
+            }
+          }
+        }
+        const entry: VoiceActivityEntry = {
+          id: `${name}_${Date.now()}_${current.length}`,
+          name,
+          status,
+          at: Date.now(),
+        }
+        return [...current, entry].slice(-MAX_ACTIVITY_ENTRIES)
+      })
+    },
+    []
+  )
 
   const wsRef = React.useRef<WebSocket | null>(null)
   const audioContextRef = React.useRef<AudioContext | null>(null)
@@ -173,7 +212,7 @@ export function useVoiceSession(): VoiceSessionHandle {
     wsRef.current = null
     void wakeLockRef.current?.release().catch(() => undefined)
     wakeLockRef.current = null
-  }, [])
+  }, [stopWorkingLoop])
 
   const stop = React.useCallback(() => {
     if (stoppedRef.current) return
@@ -228,6 +267,7 @@ export function useVoiceSession(): VoiceSessionHandle {
     setUserCaption("")
     setAssistantCaption("")
     setActiveTool(null)
+    setActivity([])
     setState("connecting")
     try {
       const infoResponse = await fetch("/api/voice/config", { cache: "no-store" })
@@ -354,6 +394,11 @@ export function useVoiceSession(): VoiceSessionHandle {
         }
         case "tool": {
           const name = String(message.name ?? "")
+          const status =
+            message.status === "running" || message.status === "error"
+              ? message.status
+              : "done"
+          recordActivity(name, status)
           if (message.status === "running") {
             setActiveTool(name)
             startWorkingLoop()
@@ -403,6 +448,7 @@ export function useVoiceSession(): VoiceSessionHandle {
     enqueuePlayback,
     flushPlayback,
     playSearchChime,
+    recordActivity,
     startWorkingLoop,
     stopWorkingLoop,
   ])
@@ -427,6 +473,7 @@ export function useVoiceSession(): VoiceSessionHandle {
     error,
     muted,
     activeTool,
+    activity,
     userCaption,
     assistantCaption,
     start,

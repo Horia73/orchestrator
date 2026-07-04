@@ -10,6 +10,7 @@ import type {
   Attachment,
 } from "@/lib/types"
 import { sanitizeMessageForPersistence } from "@/lib/ai/reasoning-limits"
+import { parseSteeredMessage } from "@/lib/steered-message"
 import { emitChatEvent } from "./events"
 import { initializeDatabaseSchema } from "./db-schema"
 import { getActiveProfileId, runWithProfileContext } from "@/lib/profiles/context"
@@ -218,6 +219,24 @@ function slimMessageFromRow(msgRow: MessageRow): Message {
   const hasDeferred =
     deferred.reasoning || deferred.contentSegments || deferred.toolCalls
 
+  // Steered turns keep their injection markers (plus the text segmentation
+  // around them) in the slim payload — the steered user bubble renders FROM
+  // these entries, so deferring them would hide the message until the details
+  // load. Cheap string probe first: only steered turns pay the JSON parse.
+  let steeredReasoning: Message["reasoning"]
+  let steeredSegments: Message["contentSegments"]
+  if (deferred.reasoning && msgRow.reasoning?.includes('"steered_message"')) {
+    const reasoning = parseJsonField<Message["reasoning"]>(msgRow.reasoning)
+    const steered = reasoning?.filter((e) => e.type === "steered_message")
+    if (steered?.length) {
+      steeredReasoning = steered
+      steeredSegments = parseJsonField<Message["contentSegments"]>(
+        msgRow.contentSegments
+      )
+      if (steeredSegments?.length) delete deferred.contentSegments
+    }
+  }
+
   return {
     id: msgRow.id,
     role: msgRow.role,
@@ -225,6 +244,8 @@ function slimMessageFromRow(msgRow: MessageRow): Message {
     status: msgRow.status ?? undefined,
     thinkingDuration: msgRow.thinkingDuration ?? undefined,
     durationMs: msgRow.durationMs ?? undefined,
+    ...(steeredReasoning ? { reasoning: steeredReasoning } : {}),
+    ...(steeredSegments?.length ? { contentSegments: steeredSegments } : {}),
     attachments: parseJsonField<Message["attachments"]>(msgRow.attachments),
     replyActions: parseJsonField<Message["replyActions"]>(msgRow.replyActions),
     ...(hasDeferred ? { deferred } : {}),
@@ -240,6 +261,13 @@ function slimMessageForClient(message: Message): Message {
   const hasDeferred =
     deferred.reasoning || deferred.contentSegments || deferred.toolCalls
 
+  // Mirror slimMessageFromRow: steered injection markers (and the text
+  // segmentation around them) always ride along, or the steered user bubble
+  // disappears until deferred details load.
+  const steered = message.reasoning?.filter((e) => e.type === "steered_message")
+  const keepSegments = steered?.length ? message.contentSegments : undefined
+  if (keepSegments?.length) delete deferred.contentSegments
+
   return {
     id: message.id,
     role: message.role,
@@ -247,6 +275,8 @@ function slimMessageForClient(message: Message): Message {
     status: message.status,
     thinkingDuration: message.thinkingDuration,
     durationMs: message.durationMs,
+    ...(steered?.length ? { reasoning: steered } : {}),
+    ...(keepSegments?.length ? { contentSegments: keepSegments } : {}),
     attachments: message.attachments,
     replyActions: message.replyActions,
     ...(hasDeferred ? { deferred } : {}),
@@ -258,7 +288,10 @@ function compactPreview(
   value: string | null | undefined,
   maxLength = 220
 ): string {
-  const singleLine = (value ?? "").replace(/\s+/g, " ").trim()
+  // Steered rows are tagged wrappers around plain user text — the sidebar
+  // preview should show the text, not the markup.
+  const steered = parseSteeredMessage(value ?? "")
+  const singleLine = (steered ?? value ?? "").replace(/\s+/g, " ").trim()
   if (singleLine.length <= maxLength) return singleLine
   return `${singleLine.slice(0, maxLength - 1).trimEnd()}...`
 }
