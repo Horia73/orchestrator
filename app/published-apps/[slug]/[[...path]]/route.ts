@@ -53,6 +53,34 @@ const BINARY_TYPES: Record<string, string> = {
   '.otf': 'font/otf',
 }
 
+// User-facing document deliverables the assistant drops next to (or in place of)
+// an app — offers, reports, spec sheets. Two reasons they get their own map
+// instead of falling through to `application/octet-stream`:
+//   1. Real Content-Type so the browser previews them inline (its PDF viewer)
+//      instead of force-downloading a nameless octet-stream blob — which on
+//      mobile lands in an external viewer where a stale/duplicate-looking copy
+//      is easy to mistake for "the same file".
+//   2. They are regenerated IN PLACE at the same URL (the agent overwrites
+//      `Oferta.pdf` across edits), so they must never be cached: a max-age keeps
+//      serving the previous version for minutes after a change. See CACHE below.
+// (Note: these can't just borrow UPLOAD_MIME_MAP — this route intentionally
+// serves .html/.js/.svg as executable/renderable app types, not text/plain.)
+const DOCUMENT_TYPES: Record<string, string> = {
+  '.pdf': 'application/pdf',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.ppt': 'application/vnd.ms-powerpoint',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.csv': 'text/csv; charset=utf-8',
+  '.rtf': 'application/rtf',
+  '.odt': 'application/vnd.oasis.opendocument.text',
+  '.ods': 'application/vnd.oasis.opendocument.spreadsheet',
+  '.odp': 'application/vnd.oasis.opendocument.presentation',
+  '.epub': 'application/epub+zip',
+}
+
 export async function GET(request: Request, context: RouteContext) {
   return servePublishedApp(request, context, false)
 }
@@ -126,7 +154,16 @@ function tryServePublishedAppFromProfile(
   const headers = new Headers({
     'Content-Type': contentType(ext),
     'Content-Length': String(stat.size),
-    'Cache-Control': ext === '.html' || ext === '.htm' ? 'private, no-store' : 'private, max-age=300',
+    // CACHE: html is never stored; document deliverables (see DOCUMENT_TYPES)
+    // are revalidated every view because the agent overwrites them in place, so
+    // a max-age would keep showing the previous version after a regeneration;
+    // static app assets (js/css/wasm/images/fonts) stay cacheable for perf.
+    'Cache-Control':
+      ext === '.html' || ext === '.htm'
+        ? 'private, no-store'
+        : ext in DOCUMENT_TYPES
+          ? 'private, no-cache'
+          : 'private, max-age=300',
     'X-Content-Type-Options': 'nosniff',
     'X-Robots-Tag': 'noindex, nofollow',
     'X-Orchestrator-Published-App': slug,
@@ -211,7 +248,7 @@ function publishedAppCsp(browserOrigin: string, slug: string): string {
 }
 
 function contentType(ext: string): string {
-  return TEXT_TYPES[ext] ?? BINARY_TYPES[ext] ?? 'application/octet-stream'
+  return TEXT_TYPES[ext] ?? BINARY_TYPES[ext] ?? DOCUMENT_TYPES[ext] ?? 'application/octet-stream'
 }
 
 function isForbiddenSegment(segment: string): boolean {
