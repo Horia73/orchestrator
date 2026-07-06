@@ -277,7 +277,18 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
   )
 }
 
-function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
+function MarkdownImage({
+  src,
+  alt,
+  width,
+}: {
+  src?: string | Blob
+  alt?: string
+  // Optional pixel width. Set when the image comes from an inline HTML `<img>`
+  // (e.g. a scraped poster/thumbnail column in a table) that carried a `width`
+  // attribute — renders a compact inline thumbnail instead of a full-width block.
+  width?: number
+}) {
   const onPreview = React.useContext(MarkdownImageClickContext)
   const [failed, setFailed] = React.useState(false)
   const rawSrc = typeof src === "string" ? src : undefined
@@ -306,7 +317,7 @@ function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
   if (!imageSrc) return null
   if (failed) {
     return (
-      <span className="my-2 inline-flex rounded-md border border-border/70 bg-muted/40 px-2 py-1 text-[12px] text-muted-foreground">
+      <span className="my-1 inline-flex rounded-md border border-border/70 bg-muted/40 px-2 py-1 text-[12px] text-muted-foreground">
         {isWhatsAppQr ? "WhatsApp QR expired" : alt || "Image unavailable"}
       </span>
     )
@@ -347,8 +358,11 @@ function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
     <img
       src={imageSrc}
       alt={alt || ""}
+      style={width ? { width: `${width}px` } : undefined}
       className={cn(
-        "my-2 max-w-full rounded-lg",
+        width
+          ? "my-1 h-auto max-w-full rounded-md align-middle"
+          : "my-2 max-w-full rounded-lg",
         canPreview && "cursor-zoom-in transition-opacity hover:opacity-90"
       )}
       onError={() => setFailed(true)}
@@ -680,6 +694,179 @@ function MarkdownLink({ href, children }: { href?: string; children?: React.Reac
 }
 
 // ---------------------------------------------------------------------------
+// Inline HTML image rendering inside table cells
+//
+// Agents that scrape sites frequently emit a poster/thumbnail column as raw
+// HTML — `<a href="..."><img src="..." width="70"></a>` — inside a GFM table.
+// We deliberately don't run rehype-raw (it would parse *all* HTML and open an
+// XSS surface), so those tags otherwise render as literal text. Instead we
+// recognize just the image/anchor shape and render a real, sized, error-guarded
+// image. Only http(s)/relative sources are honored; any other scheme (e.g.
+// `javascript:`) is left as text, so nothing arbitrary is executed.
+// ---------------------------------------------------------------------------
+
+const HTML_ENTITY_MAP: Record<string, string> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  "#39": "'",
+  apos: "'",
+  "#x2f": "/",
+  "#x27": "'",
+}
+
+function decodeHtmlEntities(value: string): string {
+  return value.replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (whole, name: string) => {
+    const key = name.toLowerCase()
+    if (key in HTML_ENTITY_MAP) return HTML_ENTITY_MAP[key]
+    if (key.startsWith("#x")) {
+      const code = Number.parseInt(key.slice(2), 16)
+      return Number.isFinite(code) ? String.fromCodePoint(code) : whole
+    }
+    if (key.startsWith("#")) {
+      const code = Number.parseInt(key.slice(1), 10)
+      return Number.isFinite(code) ? String.fromCodePoint(code) : whole
+    }
+    return whole
+  })
+}
+
+// Read one attribute value out of a raw start-tag string.
+function htmlAttr(tag: string, name: string): string | undefined {
+  const re = new RegExp(
+    `\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'>]+))`,
+    "i"
+  )
+  const m = re.exec(tag)
+  if (!m) return undefined
+  const raw = m[1] ?? m[2] ?? m[3]
+  return raw == null ? undefined : decodeHtmlEntities(raw)
+}
+
+// Only render sources/links we can trust: http(s), protocol-relative, or
+// same-site relative paths. Any explicit non-http scheme is rejected so a
+// crafted `javascript:`/`data:text/html` URL never becomes a live element.
+function isSafeInlineUrl(url: string | undefined): url is string {
+  if (!url) return false
+  const u = url.trim()
+  if (!u) return false
+  if (/^(?:https?:)?\/\//i.test(u)) return true
+  if (u.startsWith("/") || u.startsWith("#")) return true
+  return !/^[a-z][a-z0-9+.-]*:/i.test(u)
+}
+
+function inlineImageWidth(tag: string): number | undefined {
+  const raw = htmlAttr(tag, "width")
+  if (!raw) return undefined
+  const n = Number.parseInt(raw, 10)
+  if (!Number.isFinite(n) || n <= 0) return undefined
+  // Keep table posters compact but visible regardless of the scraped value.
+  return Math.min(220, Math.max(44, n))
+}
+
+const INLINE_HTML_TOKEN_RE = /<a\b[^>]*>|<\/a\s*>|<img\b[^>]*?\/?>/gi
+
+// Given the concatenated raw text of a table cell, render any `<img>` (and the
+// `<a>` wrapping it) as real elements. Returns null when the text carries no
+// renderable image, so the caller can fall back to the original text.
+function parseInlineHtmlImages(raw: string): React.ReactNode[] | null {
+  if (!/<img\b/i.test(raw)) return null
+
+  const nodes: React.ReactNode[] = []
+  let lastIndex = 0
+  let pendingHref: string | undefined
+  let renderedImage = false
+  let key = 0
+  INLINE_HTML_TOKEN_RE.lastIndex = 0
+
+  let match: RegExpExecArray | null
+  while ((match = INLINE_HTML_TOKEN_RE.exec(raw)) !== null) {
+    const before = raw.slice(lastIndex, match.index)
+    if (before) nodes.push(before)
+    lastIndex = INLINE_HTML_TOKEN_RE.lastIndex
+    const tag = match[0]
+
+    if (/^<img/i.test(tag)) {
+      const src = htmlAttr(tag, "src")
+      if (!isSafeInlineUrl(src)) {
+        nodes.push(tag)
+        continue
+      }
+      renderedImage = true
+      const image = (
+        <MarkdownImage
+          key={`img-${key++}`}
+          src={src}
+          alt={htmlAttr(tag, "alt")}
+          width={inlineImageWidth(tag)}
+        />
+      )
+      if (isSafeInlineUrl(pendingHref)) {
+        const href = pendingHref
+        nodes.push(
+          <a
+            key={`a-${key++}`}
+            href={appPath(href)}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(event) => handleNewTabLinkClick(event, appPath(href))}
+            className="inline-flex"
+          >
+            {image}
+          </a>
+        )
+      } else {
+        nodes.push(image)
+      }
+    } else if (/^<a/i.test(tag)) {
+      pendingHref = htmlAttr(tag, "href")
+    } else {
+      pendingHref = undefined
+    }
+  }
+
+  if (!renderedImage) return null
+  const tail = raw.slice(lastIndex)
+  if (tail) nodes.push(tail)
+  return nodes
+}
+
+// Table-cell child renderer: swaps inline HTML poster/thumbnail markup for real
+// images, and otherwise renders children unchanged. Runs of adjacent string
+// children are joined before parsing because react-markdown hands the raw tags
+// back as separate `["<a ...>", "<img ...>", "</a>"]` string fragments.
+function renderTableCellChildren(children: React.ReactNode): React.ReactNode {
+  const items = React.Children.toArray(children)
+  if (!items.some((c) => typeof c === "string" && /<img\b/i.test(c))) {
+    return children
+  }
+
+  const out: React.ReactNode[] = []
+  let buffer: string[] = []
+  const flush = () => {
+    if (buffer.length === 0) return
+    const raw = buffer.join("")
+    buffer = []
+    const parsed = parseInlineHtmlImages(raw)
+    if (parsed) out.push(...parsed)
+    else out.push(raw)
+  }
+
+  for (const item of items) {
+    if (typeof item === "string") {
+      buffer.push(item)
+    } else {
+      flush()
+      out.push(item)
+    }
+  }
+  flush()
+
+  return out.map((node, i) => <React.Fragment key={i}>{node}</React.Fragment>)
+}
+
+// ---------------------------------------------------------------------------
 // Custom react-markdown components
 // ---------------------------------------------------------------------------
 
@@ -774,10 +961,12 @@ const baseComponents: Components = {
   tr: ({ children }) => <tr>{children}</tr>,
   th: ({ children }) => (
     <th className="px-3 py-2 text-left text-[13px] font-semibold text-muted-foreground">
-      {children}
+      {renderTableCellChildren(children)}
     </th>
   ),
-  td: ({ children }) => <td className="px-3 py-2">{children}</td>,
+  td: ({ children }) => (
+    <td className="px-3 py-2">{renderTableCellChildren(children)}</td>
+  ),
   img: ({ src, alt }) => <MarkdownImage src={src} alt={alt} />,
 }
 
