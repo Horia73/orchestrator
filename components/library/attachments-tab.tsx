@@ -194,7 +194,11 @@ export function AttachmentsTab({
       const anchor = document.createElement("a")
       anchor.href = libraryItemUrl(item)
       anchor.download = item.filename
-      anchor.rel = "noopener noreferrer"
+      // Keep `noopener` but NOT `noreferrer`: the same-origin Referer is what
+      // lets this download pass the API request-guard on non-loopback hosts
+      // (Safari omits Sec-Fetch-Site on downloads). `noreferrer` would strip it
+      // and the browser would save the guard's 403 JSON as a corrupt file.
+      anchor.rel = "noopener"
       document.body.append(anchor)
       anchor.click()
       anchor.remove()

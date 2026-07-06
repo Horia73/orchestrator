@@ -36,6 +36,7 @@ function getGuardFailureMessage(request: Request): string | null {
         return 'Malformed request URL.'
     }
 
+    const method = request.method.toUpperCase()
     const host = request.headers.get('host')
     const forwardedHost = firstHeaderValue(request.headers.get('x-forwarded-host'))
     const forwardedProto = firstHeaderValue(request.headers.get('x-forwarded-proto'))
@@ -58,6 +59,19 @@ function getGuardFailureMessage(request: Request): string | null {
 
     const origin = request.headers.get('origin')?.trim()
     if (!origin) {
+        // A same-origin browser *navigation* — a file download (`<a download>`),
+        // an iframe used for printing, or a direct file link — carries no Origin
+        // header, and Safari additionally omits Sec-Fetch-Site on downloads. Such
+        // a request to a non-loopback host otherwise looks like a tokenless
+        // "direct API" hit and is answered with a 403 JSON body, which the browser
+        // saves under the requested filename — the user gets a ~100-byte "corrupt"
+        // PDF/Office file instead of the download. A same-origin Referer proves our
+        // own page initiated the request (a cross-origin attacker cannot forge it),
+        // so for safe methods treat it as same-origin. Defense-in-depth on top of
+        // the profile-session gate, which still applies.
+        if (isSafeMethod(method) && refererMatchesOrigin(request, effectiveProtocol, effectiveHost)) {
+            return null
+        }
         const fetchSite = request.headers.get('sec-fetch-site')?.trim().toLowerCase()
         if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') {
             return 'Cross-origin requests are not allowed.'
@@ -95,6 +109,38 @@ function getGuardFailureMessage(request: Request): string | null {
     }
 
     return null
+}
+
+function isSafeMethod(method: string): boolean {
+    return method === 'GET' || method === 'HEAD'
+}
+
+// A Referer whose origin matches the request's effective origin is proof the
+// request was initiated by one of our own pages. Browsers set Referer from the
+// initiating document, so a cross-origin attacker cannot forge a same-origin
+// value; only same-origin navigations (which omit the Origin header) can carry
+// it. Used to admit same-origin file downloads that would otherwise be blocked.
+function refererMatchesOrigin(
+    request: Request,
+    effectiveProtocol: string,
+    effectiveHost: string
+): boolean {
+    const referer = request.headers.get('referer')?.trim()
+    if (!referer) return false
+
+    let refererUrl: URL
+    try {
+        refererUrl = new URL(referer)
+    } catch {
+        return false
+    }
+
+    const refererProtocol = refererUrl.protocol.replace(':', '').toLowerCase()
+    if (refererProtocol !== effectiveProtocol) return false
+
+    const normalizedEffectiveHost = normalizeHost(effectiveHost)
+    if (!normalizedEffectiveHost) return false
+    return normalizeHost(refererUrl.host) === normalizedEffectiveHost
 }
 
 function firstHeaderValue(value: string | null): string | null {
