@@ -28,7 +28,6 @@ import { cn } from "@/lib/utils"
 import type { Attachment } from "@/lib/types"
 
 const CHAT_INPUT_FOCUS_EVENT = "chat-input-focus"
-const CREATIVE_MODE_STORAGE_KEY = "chat:creative-mode"
 
 type ChatFallbackStatus = {
     index: number
@@ -169,15 +168,16 @@ export function ChatInput({
     const isCompact = isChat && density === "compact"
     const maxHeight = isCompact ? 92 : isChat ? 160 : 200
 
+    // Creative is a transient composer toggle: it defaults off, never persists
+    // across reloads, and resets whenever the user moves to a different
+    // conversation — so an old "on" state can't silently linger for a whole
+    // session until it's noticed and turned off by hand.
+    const previousConversationIdRef = React.useRef(activeConversationId)
     React.useEffect(() => {
-        if (typeof window === "undefined") return
-        setCreativeMode(window.localStorage.getItem(CREATIVE_MODE_STORAGE_KEY) === "true")
-    }, [])
-
-    React.useEffect(() => {
-        if (typeof window === "undefined") return
-        window.localStorage.setItem(CREATIVE_MODE_STORAGE_KEY, creativeMode ? "true" : "false")
-    }, [creativeMode])
+        if (previousConversationIdRef.current === activeConversationId) return
+        previousConversationIdRef.current = activeConversationId
+        setCreativeMode(false)
+    }, [activeConversationId])
 
     React.useEffect(() => {
         if (!canUseCreative && creativeMode) setCreativeMode(false)
@@ -500,16 +500,16 @@ export function ChatInput({
                                                 : "Fallback 1 is not available"
                                         }
                                         className={cn(
-                                            "flex h-9 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors pointer-coarse:h-10",
+                                            "flex h-9 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium ring-1 ring-inset transition-colors pointer-coarse:h-10",
                                             creativeMode && canUseCreative
-                                                ? "bg-[#b76440] text-white hover:bg-[#a55837]"
-                                                : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+                                                ? "bg-[#b76440]/12 text-[#8b4a32] ring-[#b76440]/30 hover:bg-[#b76440]/18 dark:bg-[#d78a66]/15 dark:text-[#d78a66] dark:ring-[#d78a66]/30 dark:hover:bg-[#d78a66]/22"
+                                                : "text-muted-foreground ring-transparent hover:bg-muted/50 hover:text-foreground",
                                             (!canUseCreative || isStreamingActiveConversation) && "cursor-not-allowed opacity-50"
                                         )}
                                         aria-pressed={creativeMode && canUseCreative}
                                         aria-label="Creative"
                                     >
-                                        <Sparkles className="size-4 stroke-[1.6]" />
+                                        <Sparkles className={cn("size-4 stroke-[1.6]", creativeMode && canUseCreative && "fill-current")} />
                                         <span>Creative</span>
                                     </button>
                                 )}
