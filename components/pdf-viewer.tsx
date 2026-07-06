@@ -27,6 +27,50 @@ const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.roun
 
 const toolbarBtnCls = "flex size-8 items-center justify-center rounded text-pdf-text hover:bg-pdf-hover hover:text-white transition-colors disabled:opacity-30 disabled:pointer-events-none"
 
+// Print rasterized page images via an off-screen (NOT display:none) iframe.
+// Safari refuses to render a PDF embedded in a hidden iframe, so printing the
+// raw PDF blob there produces blank pages; printing plain <img> HTML is reliable
+// across browsers. The iframe is positioned off-screen rather than hidden so its
+// content is still laid out and actually paints for the print. One image per
+// printed page, contained so a page is never split across two sheets.
+function printPageImages(images: string[]): void {
+    const iframe = document.createElement("iframe")
+    iframe.setAttribute("aria-hidden", "true")
+    iframe.style.position = "fixed"
+    iframe.style.left = "-10000px"
+    iframe.style.top = "0"
+    iframe.style.width = "100%"
+    iframe.style.height = "100%"
+    iframe.style.border = "0"
+    iframe.srcdoc = `<!doctype html><meta charset="utf-8"><style>
+@page { margin: 0 }
+* { margin: 0; padding: 0; box-sizing: border-box }
+.page { display: flex; align-items: center; justify-content: center; width: 100%; height: 100vh; overflow: hidden; break-inside: avoid; page-break-after: always }
+.page:last-child { page-break-after: auto }
+.page img { max-width: 100%; max-height: 100%; }
+</style>${images.map((src) => `<div class="page"><img src="${src}"></div>`).join("")}`
+    iframe.onload = () => {
+        const win = iframe.contentWindow
+        const doc = iframe.contentDocument
+        const imgs = doc ? Array.from(doc.images) : []
+        Promise.all(
+            imgs.map((img) =>
+                img.complete
+                    ? Promise.resolve()
+                    : new Promise<void>((resolve) => {
+                          img.onload = () => resolve()
+                          img.onerror = () => resolve()
+                      })
+            )
+        ).then(() => {
+            win?.focus()
+            win?.print()
+            setTimeout(() => iframe.remove(), 1000)
+        })
+    }
+    document.body.appendChild(iframe)
+}
+
 export function PdfViewer({
     url,
     filename,
@@ -53,6 +97,7 @@ export function PdfViewer({
     const [pageInput, setPageInput] = React.useState("1")
     const pageRefs = React.useRef<(HTMLDivElement | null)[]>([])
     const pdfBytesRef = React.useRef<ArrayBuffer | null>(null)
+    const [printing, setPrinting] = React.useState(false)
     // Password-protected PDFs: pdfjs pauses the loading task and hands us a
     // callback; the promise stays pending until the callback gets the password.
     const [passwordPrompt, setPasswordPrompt] = React.useState<null | { incorrect: boolean }>(null)
@@ -237,19 +282,42 @@ export function PdfViewer({
         submit(passwordInput)
     }
 
-    const handlePrint = () => {
-        if (!pdfBytesRef.current) return
-        const blob = new Blob([pdfBytesRef.current], { type: "application/pdf" })
-        const blobUrl = URL.createObjectURL(blob)
-        const iframe = document.createElement("iframe")
-        iframe.style.display = "none"
-        iframe.src = blobUrl
-        document.body.appendChild(iframe)
-        iframe.addEventListener("load", () => {
-            iframe.contentWindow?.print()
-            setTimeout(() => { document.body.removeChild(iframe); URL.revokeObjectURL(blobUrl) }, 1000)
-        })
-    }
+    const handlePrint = React.useCallback(async () => {
+        const bytes = pdfBytesRef.current
+        if (printing || !bytes) return
+        setPrinting(true)
+        try {
+            const pdfjsLib = await import("pdfjs-dist")
+            pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs"
+            // Rasterize at 3x (~216 DPI for a 72-DPI PDF) so A3 line work stays
+            // legible on paper. slice(0) hands getDocument its own buffer —
+            // it detaches the one it is given, and we keep pdfBytesRef for reuse.
+            const pdf = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise
+            const images: string[] = []
+            for (let i = 1; i <= pdf.numPages; i++) {
+                const page = await pdf.getPage(i)
+                const natural = page.getViewport({ scale: 1 })
+                // Target ~3x (~216 DPI) for crisp A3 line work, but cap the longest
+                // side so large-format pages (A1/A0) don't exceed the browser's
+                // canvas area limit (~16M px) and come back blank.
+                const scale = Math.max(1, Math.min(3, 4500 / Math.max(natural.width, natural.height)))
+                const viewport = page.getViewport({ scale })
+                const canvas = document.createElement("canvas")
+                canvas.width = viewport.width
+                canvas.height = viewport.height
+                const ctx = canvas.getContext("2d")
+                if (!ctx) continue
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                await page.render({ canvasContext: ctx, viewport } as any).promise
+                images.push(canvas.toDataURL("image/png"))
+            }
+            if (images.length > 0) printPageImages(images)
+        } catch (err) {
+            console.error("PDF print failed:", err)
+        } finally {
+            setPrinting(false)
+        }
+    }, [printing])
 
     const handleDownload = () => {
         const a = document.createElement("a")
@@ -344,8 +412,8 @@ export function PdfViewer({
                     <button type="button" onClick={() => setRotation((r) => (r + 90) % 360)} className={toolbarBtnCls} aria-label="Rotate" title="Rotate">
                         <RotateCw className="size-4" />
                     </button>
-                    <button type="button" onClick={handlePrint} className={toolbarBtnCls} aria-label="Print" title="Print">
-                        <Printer className="size-4" />
+                    <button type="button" onClick={handlePrint} disabled={printing || pages.length === 0} className={toolbarBtnCls} aria-label="Print" title="Print">
+                        {printing ? <Loader2 className="size-4 animate-spin" /> : <Printer className="size-4" />}
                     </button>
                     <button type="button" onClick={handleDownload} className={toolbarBtnCls} aria-label="Download" title="Download">
                         <Download className="size-4" />
