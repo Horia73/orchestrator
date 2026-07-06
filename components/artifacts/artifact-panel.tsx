@@ -53,6 +53,7 @@ function sourceLanguageFor(artifact: ArtifactRow): string {
         case 'application/vnd.ant.weather': return 'json'
         case 'application/vnd.ant.recipe': return 'json'
         case 'application/vnd.ant.workout': return 'json'
+        case 'application/vnd.ant.question': return 'json'
         case 'image/svg+xml': return 'xml'
         case 'text/vnd.graphviz': return 'dot'
         default: return 'text'
@@ -301,6 +302,7 @@ function prettyType(mime: string): string {
         case 'application/vnd.ant.map': return 'map'
         case 'application/vnd.ant.weather': return 'weather'
         case 'application/vnd.ant.workout': return 'workout'
+        case 'application/vnd.ant.question': return 'question'
         case 'application/xml': return 'xml'
         case 'text/vnd.graphviz': return 'graphviz'
         default: return mime

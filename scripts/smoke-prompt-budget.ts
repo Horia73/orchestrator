@@ -33,7 +33,12 @@ process.env.ORCHESTRATOR_STATE_DIR = stateDir
 // allows organic growth without re-tripping on every copy edit. If this
 // fails, run scripts/inspect-orchestrator-prompt-full.ts for the breakdown
 // and either trim or consciously raise the budget in the same change.
-const MAX_PROMPT_CHARS = 165_000
+//
+// 2026-07: raised 165k → 170k. The baseline had already drifted to ~167.3k on
+// master (organic prompt growth, over the old ceiling before this change), and
+// the `ask_user` guidance block adds a lean ~0.9k on top. Restores real
+// headroom so the guard catches the NEXT creep instead of staying tripped.
+const MAX_PROMPT_CHARS = 170_000
 
 let failures = 0
 function check(label: string, cond: unknown, detail?: unknown) {

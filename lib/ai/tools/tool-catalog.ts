@@ -15,6 +15,7 @@ import { grepTool } from "./grep"
 import { webFetchTool } from "./web"
 import { todoWriteTool } from "./todo-write"
 import { reportAgentNeedTool, resolveAgentNeedTool } from "./agent-needs"
+import { askUserTool } from "./ask-user"
 import { setEnvTool } from "./set-env"
 import { listEnvVarsTool } from "./env-vars"
 import {
@@ -98,6 +99,7 @@ export const ALL_TOOL_DEFS: ToolDef[] = [
   todoWriteTool,
   reportAgentNeedTool,
   resolveAgentNeedTool,
+  askUserTool,
   listEnvVarsTool,
   setEnvTool,
   activateIntegrationToolsTool,

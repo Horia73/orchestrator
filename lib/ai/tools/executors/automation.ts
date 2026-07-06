@@ -126,9 +126,11 @@ import {
   executeRemoteAccessInstallTailscale,
   executeRemoteAccessSetupHttps,
 } from "../remote-access"
+import { executeAskUser, ASK_USER_TOOL_ID } from "../ask-user"
 import type { ToolExecutor } from "./types"
 
 export const automationToolExecutors: Record<string, ToolExecutor> = {
+  [ASK_USER_TOOL_ID]: executeAskUser,
   schedule_task: executeScheduleTask,
   list_tasks: executeListTasks,
   cancel_task: executeCancelTask,

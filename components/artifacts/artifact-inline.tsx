@@ -15,6 +15,7 @@ import { LatexRenderer } from "./renderers/latex-renderer"
 import { MapRenderer } from "./renderers/map-renderer"
 import { MarkdownArtifactRenderer } from "./renderers/markdown-artifact-renderer"
 import { MermaidRenderer } from "./renderers/mermaid-renderer"
+import { QuestionRenderer } from "./renderers/question-renderer"
 import { ReactSandboxRenderer } from "./renderers/react-sandbox-renderer"
 import { RecipeRenderer } from "./renderers/recipe-renderer"
 import { SvgRenderer } from "./renderers/svg-renderer"
@@ -117,6 +118,8 @@ export function ArtifactBody({
             return <WorkoutRenderer source={content} title={artifact.title} mode={mode} artifactId={artifact.id} />
         case 'application/vnd.ant.cad':
             return <CadRenderer source={content} title={artifact.title} mode={mode} artifactId={artifact.id} />
+        case 'application/vnd.ant.question':
+            return <QuestionRenderer artifact={artifact} />
         case 'application/vnd.ant.dev-preview':
             return <DevPreviewRenderer source={content} title={artifact.title} mode={mode} artifactId={artifact.id} />
         case 'application/xml':

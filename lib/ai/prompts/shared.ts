@@ -159,6 +159,27 @@ export function buildArtifactAuthoring(): string {
 }
 
 // ---------------------------------------------------------------------------
+// Asking the user a structured question.
+//
+// The orchestrator can pause and ask the user a decision question with tappable
+// options via the `ask_user` tool (renders a `vnd.ant.question` card). This
+// block states WHEN to reach for it vs. just proceeding, and the emit-then-stop
+// contract. Orchestrator-only — delegated agents surface a blocker instead.
+// ---------------------------------------------------------------------------
+
+const ASK_USER_GUIDANCE = `
+<asking_the_user>
+When a real decision is genuinely the user's to make and you cannot settle it from the request, memory, context, or a safe default, prefer the \`ask_user\` tool over asking in prose: it renders tappable options and the user's tap continues this turn. Use it for genuine forks (which approach / account / scope), not for choices with an obvious default, facts you can look up, or "should I proceed?" when intent is already clear — there, just act and say what you did. One question per call.
+
+After calling \`ask_user\`, STOP: end your turn without more prose or tool calls, and do not answer your own question — the user's next message IS the answer. It does not weaken <safety_core>: a hard-confirmation action still needs its full summary (action, provider, exact data, cost, timing, reversibility) in the question text before a yes counts.
+</asking_the_user>
+`.trim()
+
+export function buildAskUserGuidance(): string {
+    return ASK_USER_GUIDANCE
+}
+
+// ---------------------------------------------------------------------------
 // Safety core.
 //
 // The non-negotiable rules every text agent must carry — not just the

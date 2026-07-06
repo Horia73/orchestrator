@@ -3265,3 +3265,14 @@ export function useChatStore() {
   }
   return context
 }
+
+/**
+ * Non-throwing variant for components that can render both inside a
+ * conversation (sidebar, panel) AND in provider-less contexts (message
+ * previews, the standalone /artifact route). Returns null when there is no
+ * ChatStoreProvider so callers can degrade to a read-only view instead of
+ * crashing.
+ */
+export function useChatStoreOptional() {
+  return React.useContext(ChatContext)
+}

@@ -2,6 +2,7 @@ import type { PromptContext } from '@/lib/ai/agents/types'
 import {
     buildAgentsSection,
     buildArtifactAuthoring,
+    buildAskUserGuidance,
     buildClockContext,
     buildRuntimeContext,
     buildSafetyCore,
@@ -27,6 +28,7 @@ export function buildOrchestratorPrompt(ctx: PromptContext): string {
         buildOrchestratorStaticPrompt({ bootActive: workspaceFileExists('BOOT.md') }),
         buildSafetyCore(),
         buildArtifactAuthoring(),
+        buildAskUserGuidance(),
         buildSkillsIndex(),
         buildToolsSection(ctx),
         buildAgentsSection(ctx), // Populated from orchestrator.canCallAgents via route.ts.

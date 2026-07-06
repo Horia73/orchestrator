@@ -126,6 +126,7 @@ function extensionFor(type: string, language?: string | null): string {
         case 'application/vnd.ant.recipe': return 'json'
         case 'application/vnd.ant.workout': return 'json'
         case 'application/vnd.ant.cad': return 'json'
+        case 'application/vnd.ant.question': return 'json'
         case 'application/vnd.ant.dev-preview': return 'json'
         case 'application/vnd.ant.app-link': return 'json'
         case 'application/xml': return 'xml'
@@ -212,6 +213,44 @@ export function insertArtifact(args: InsertArgs): ArtifactRow {
     })
 
     return inserted
+}
+
+/**
+ * Update an artifact's body IN PLACE (same id, same version). Used for small
+ * self-contained mutations that are not a new authored version — e.g. recording
+ * the user's answer onto a `vnd.ant.question` card so a reload shows the locked,
+ * resolved state. Rewrites the backing file too and emits `artifacts.changed`
+ * so open conversations reconcile. Returns the updated row, or null if missing.
+ */
+export function updateArtifactContentById(id: string, content: string): ArtifactRow | null {
+    const existing = getArtifactById(id)
+    if (!existing) return null
+
+    const validation = validateArtifactContent(existing.type, content)
+    if (!validation.ok) {
+        throw new Error(`Invalid artifact update "${existing.identifier}": ${validation.error}`)
+    }
+
+    db.prepare(`UPDATE artifacts SET content = ? WHERE id = ?`).run(content, id)
+    if (existing.filePath) {
+        try {
+            fs.mkdirSync(/* turbopackIgnore: true */ path.dirname(existing.filePath), { recursive: true })
+            fs.writeFileSync(/* turbopackIgnore: true */ existing.filePath, content, 'utf8')
+        } catch {
+            // The DB row is the source of truth for rendering; a file-write miss
+            // (e.g. pruned artifacts dir) must not fail the answer.
+        }
+    }
+
+    emitAppEvent({
+        type: 'artifacts.changed',
+        conversationId: existing.conversationId,
+        messageId: existing.messageId,
+        artifactId: id,
+        action: 'changed',
+    })
+
+    return { ...existing, content }
 }
 
 /** All artifact versions for a conversation, oldest first per identifier chain. */

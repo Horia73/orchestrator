@@ -216,6 +216,14 @@ export const REMOTE_MCP_TOOL_IDS: string[] = [
     'RemoteMcpCallTool',
 ]
 
+// Structured user questions. Orchestrator-only by design: the orchestrator is
+// the user-facing agent, so it is the one that pauses to ask a decision
+// question with tappable options (`ask_user`). Delegated agents surface a
+// blocker to the orchestrator instead (see <sub_agent_collaboration>).
+export const QUESTION_TOOL_IDS: string[] = [
+    'ask_user',
+]
+
 export const SCHEDULING_TOOL_IDS: string[] = [
     'schedule_task',
     'list_tasks',
