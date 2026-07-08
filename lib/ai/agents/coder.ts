@@ -25,7 +25,7 @@ import { CLI_WORKSPACE_BUILTINS } from './builtins'
 export const coder: AgentConfig = {
     id: 'coder',
     name: 'Coder',
-    description: 'Coding specialist — pure CLI coder by default; API-backed runs receive Orchestrator tools and skills.',
+    description: 'Code/repo changes ONLY — writes/edits code in a repository. NOT for drafting, analysis, synthesis, docs/decks/sheets, or automations/integrations that touch no repo (those → worker). Pure CLI coder by default; API-backed runs receive Orchestrator tools and skills.',
     kind: 'text',
     provider: 'claude-code',
     model: 'default',

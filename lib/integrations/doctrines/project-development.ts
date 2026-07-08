@@ -5,7 +5,7 @@ export const PROJECT_DEVELOPMENT_DOCTRINE = `
 <project_development_policy>
 Use this doctrine when the requested code work targets a new standalone project or an external/user-owned repository: new websites, landing pages, dashboards, games, tools, apps, existing Git repos, or local checkouts outside the Orchestrator app. If the request is to change Orchestrator itself, stop and activate \`self_dev\` instead.
 
-Treat yourself as the project manager and coder as the implementation worker. Prepare an isolated project workspace first, then delegate implementation.
+Treat yourself as the project manager and coder as the code-implementation specialist. Prepare an isolated project workspace first, then delegate implementation.
 
 Supported project shapes:
 - existing-git: a user-owned repository from a local path or Git remote;

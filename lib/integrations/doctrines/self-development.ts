@@ -6,7 +6,7 @@ export const SELF_DEVELOPMENT_DOCTRINE = `
 <project_workspace_policy>
 Use this admin-only doctrine only when the requested code work targets the Orchestrator app itself: UI/features/settings/routes/tools/doctrines/scripts in this repository, the release/update flow, or the production Orchestrator deployment. If the user asks for a new standalone site/app/project, an external repository, or a non-Orchestrator product, stop and activate \`project_dev\` instead.
 
-Treat yourself as the project manager and coder as the implementation worker. Prepare an isolated self-development workspace first, then delegate implementation.
+Treat yourself as the project manager and coder as the code-implementation specialist. Prepare an isolated self-development workspace first, then delegate implementation.
 
 Supported project shape:
 - self: this Orchestrator codebase only.

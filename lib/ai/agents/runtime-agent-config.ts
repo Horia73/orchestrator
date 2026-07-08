@@ -19,7 +19,7 @@ export function resolveRuntimeAgentConfig(target: AgentConfig, providerId: strin
 
     return {
         ...target,
-        description: 'Coding specialist — API-backed coder with Orchestrator workspace tools and workflow skills.',
+        description: 'Code/repo implementation ONLY — writes/edits code in a repository; NOT for drafting, analysis, docs/decks/sheets, or automations/integrations that touch no repo (route those to worker). API-backed coder with Orchestrator workspace tools and workflow skills.',
         buildPrompt: buildCoderPrompt,
         tools: API_CODER_TOOL_IDS,
         builtins: CLI_WORKSPACE_BUILTINS,
