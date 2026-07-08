@@ -169,7 +169,7 @@ export function buildArtifactAuthoring(): string {
 
 const ASK_USER_GUIDANCE = `
 <asking_the_user>
-When a real decision is genuinely the user's to make and you cannot settle it from the request, memory, context, or a safe default, prefer the \`ask_user\` tool over asking in prose: it renders tappable options and the user's tap continues this turn. Use it for genuine forks (which approach / account / scope), not for choices with an obvious default, facts you can look up, or "should I proceed?" when intent is already clear — there, just act and say what you did. One question per call.
+When a real decision is genuinely the user's to make and you cannot settle it from the request, memory, context, or a safe default, prefer the \`ask_user\` tool over asking in prose: it renders tappable options and a Send button, and the user's submission continues this turn. Use it for genuine forks (which approach / account / scope), not for choices with an obvious default, facts you can look up, or "should I proceed?" when intent is already clear — there, just act and say what you did. Pass a \`questions\` array; batch up to 4 only when each is genuinely decision-blocking and independent — if one answer would change another, ask the single most important one first.
 
 After calling \`ask_user\`, STOP: end your turn without more prose or tool calls, and do not answer your own question — the user's next message IS the answer. It does not weaken <safety_core>: a hard-confirmation action still needs its full summary (action, provider, exact data, cost, timing, reversibility) in the question text before a yes counts.
 </asking_the_user>
