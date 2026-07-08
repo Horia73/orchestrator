@@ -350,6 +350,42 @@ def run(ctx):
     const directFileAfter = getMicroscript(directFile.id)
     check('trusted Python direct file access works inside workspace', directFileResult.ok && directFileAfter?.state.content === 'hello', directFileAfter)
 
+    // Tail read: ctx.file_read(path, tail_bytes=N) returns only the last N bytes
+    // of a growing journal (with tail/truncated/totalBytes flags), so a script
+    // can follow an append-only log without pulling the whole file each run.
+    const tailReadCode = `
+def run(ctx):
+    body = "".join("line%d\\n" % i for i in range(1000))
+    ctx.file_write("journal.log", body)
+    r = ctx.file_read("journal.log", tail_bytes=40)
+    d = r["data"]
+    return ctx.complete(state={"content": d["content"], "truncated": d.get("truncated"), "total": d.get("totalBytes")}, summary="tail ok")
+`.trim()
+    const tailRead = createMicroscript({
+        title: 'Smoke tail read',
+        code: tailReadCode,
+        enabled: false,
+        manifest: {
+            description: 'Smoke file tail-read test',
+            schedule: { kind: 'manual' },
+            permissions: [],
+            stop: { persistent: false, expiresAt: Date.now() + 60_000 },
+            limits: { timeoutMs: 5_000, maxPhases: 4, minIntervalMs: 60_000, maxConsecutiveFailures: 3 },
+        },
+    })
+    await runMicroscript(tailRead, { trigger: 'manual', preserveEnabled: true })
+    const tailReadAfter = getMicroscript(tailRead.id)
+    const tailState = tailReadAfter?.state as { content?: string; truncated?: boolean; total?: number } | undefined
+    check(
+        'file_read tail_bytes returns only the last slice with truncated/total flags',
+        typeof tailState?.content === 'string' &&
+            tailState.content.length === 40 &&
+            tailState.content.endsWith('line999\n') &&
+            tailState.truncated === true &&
+            (tailState.total ?? 0) > 40,
+        tailState
+    )
+
     const zoneInfoCode = `
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -497,6 +533,15 @@ def run(ctx):
     const deniedAfter = getMicroscript(denied.id)
     check('permission denial is in-band and run completes', deniedResult.ok && deniedAfter?.state.denied === true, deniedAfter)
     check('permission denial records operation_error', listMicroscriptEvents(denied.id).some((e) => e.kind === 'operation_error'))
+    // A run whose Python phase completed but whose only operation failed is
+    // unhealthy: it must count toward the consecutive-failure breaker (so a
+    // bulk sender against a dead integration self-pauses) and be recorded as an
+    // errored run, even though the runner did not throw.
+    check(
+        'all-operations-failed run counts toward the failure breaker',
+        deniedAfter?.consecutiveFailures === 1 && deniedAfter?.lastRunStatus === 'error',
+        { consecutiveFailures: deniedAfter?.consecutiveFailures, lastRunStatus: deniedAfter?.lastRunStatus }
+    )
 
     const agentDeniedCode = `
 def run(ctx):

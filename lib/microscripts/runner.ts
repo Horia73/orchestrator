@@ -156,8 +156,11 @@ class MicroscriptContext(dict):
             request["body"] = body
         return self._result_or_pending(request)
 
-    def file_read(self, path, id="file_read"):
-        return self._result_or_pending({"kind": "file.read", "id": id, "path": path})
+    def file_read(self, path, tail_bytes=None, id="file_read"):
+        request = {"kind": "file.read", "id": id, "path": path}
+        if tail_bytes is not None:
+            request["tail_bytes"] = int(tail_bytes)
+        return self._result_or_pending(request)
 
     def file_write(self, path, content, append=False, id="file_write"):
         return self._result_or_pending({
@@ -239,6 +242,13 @@ def read_only_mode(mode):
     return not any(flag in str(mode) for flag in ("w", "a", "x", "+"))
 
 def safe_open(file, mode="r", *args, **kwargs):
+    # An integer first arg is an already-open file descriptor, not a path
+    # (e.g. io.open(pipe_fd, "rb") inside subprocess when allowShell is on).
+    # os.fspath() would raise TypeError on it, so pass it straight through:
+    # the fd was necessarily obtained through an already-vetted open, so this
+    # opens no new filesystem surface.
+    if isinstance(file, int):
+        return ORIGINAL_OPEN(file, mode, *args, **kwargs)
     readonly_system = read_only_system_path(file)
     if readonly_system is not None:
         if not read_only_mode(mode):
@@ -602,6 +612,7 @@ export async function runMicroscript(
     let lastResponse: MicroscriptRunResponse = {}
     let phases = 0
     let operations = 0
+    let operationsFailed = 0
     let summary = 'Microscript ran.'
     let ok = false
     let error: string | undefined
@@ -643,6 +654,7 @@ export async function runMicroscript(
                 operations += 1
                 const result = await executeOperation(script, request, pendingNotifications, inboxConversationId, counters, state)
                 operationResults[key] = result
+                if (!result.ok) operationsFailed += 1
                 recordMicroscriptEvent(script.id, result.ok ? 'operation_ok' : 'operation_error', {
                     key,
                     kind: request.kind,
@@ -678,6 +690,7 @@ export async function runMicroscript(
             nextRunAt,
             phases,
             operations,
+            operationsFailed,
             surfaced,
             conversationId,
         })
@@ -1012,7 +1025,7 @@ async function executeOperation(
             case 'tool.call':
                 return { ok: true, data: await executeToolCall(script, parsed, conversationId, counters) }
             case 'file.read':
-                return { ok: true, data: executeFileRead(script, parsed.path) }
+                return { ok: true, data: executeFileRead(script, parsed.path, parsed.tail_bytes) }
             case 'file.write':
                 return { ok: true, data: executeFileWrite(script, parsed.path, parsed.content, parsed.append === true) }
         }
@@ -1071,7 +1084,7 @@ async function executeDryRunOperation(
                 assertToolCall(script, parsed, counters)
                 return dryRunSkippedOperation(parsed.kind, parsed.id)
             case 'file.read':
-                return { ok: true, data: executeFileReadAtRoot(script, dryScriptRoot, parsed.path) }
+                return { ok: true, data: executeFileReadAtRoot(script, dryScriptRoot, parsed.path, parsed.tail_bytes) }
             case 'file.write':
                 return { ok: true, data: executeFileWriteAtRoot(script, dryScriptRoot, parsed.path, parsed.content, parsed.append === true) }
         }
@@ -1820,20 +1833,42 @@ async function readResponseText(resp: Response, maxBytes: number): Promise<strin
     return new TextDecoder().decode(Buffer.concat(chunks))
 }
 
-function executeFileRead(script: Microscript, relPath: string): { path: string; content: string } {
-    return executeFileReadAtRoot(script, scriptWorkDir(script.id), relPath)
+function executeFileRead(script: Microscript, relPath: string, tailBytes?: number): { path: string; content: string; tail?: boolean; truncated?: boolean; totalBytes?: number } {
+    return executeFileReadAtRoot(script, scriptWorkDir(script.id), relPath, tailBytes)
 }
 
 function executeFileWrite(script: Microscript, relPath: string, content: string, append: boolean): { path: string; bytes: number } {
     return executeFileWriteAtRoot(script, scriptWorkDir(script.id), relPath, content, append)
 }
 
-function executeFileReadAtRoot(script: Microscript, scriptRoot: string, relPath: string): { path: string; content: string } {
+function executeFileReadAtRoot(script: Microscript, scriptRoot: string, relPath: string, tailBytes?: number): { path: string; content: string; tail?: boolean; truncated?: boolean; totalBytes?: number } {
     const permission = filePermission(script)
     if (!permission.read) throw new Error('Microscript file read permission is disabled.')
     const resolved = resolveScriptFileAtRoot(scriptRoot, relPath)
     const stat = fs.statSync(resolved)
     if (!stat.isFile()) throw new Error('Requested path is not a file.')
+    // Tail read: return only the last `tailBytes` bytes so a script can follow a
+    // growing append-only journal without pulling (and echoing) the whole file
+    // through the run. Only the bounded slice is read, so the whole-file cap does
+    // not apply; the slice itself is capped by the schema (max 5 MB).
+    if (tailBytes !== undefined && tailBytes > 0) {
+        const start = Math.max(0, stat.size - tailBytes)
+        const length = stat.size - start
+        const fd = fs.openSync(resolved, 'r')
+        try {
+            const buffer = Buffer.alloc(length)
+            if (length > 0) fs.readSync(fd, buffer, 0, length, start)
+            return {
+                path: relPath,
+                content: buffer.toString('utf-8'),
+                tail: true,
+                truncated: start > 0,
+                totalBytes: stat.size,
+            }
+        } finally {
+            fs.closeSync(fd)
+        }
+    }
     if (stat.size > permission.maxBytes) throw new Error(`File exceeds ${permission.maxBytes} bytes.`)
     return { path: relPath, content: fs.readFileSync(resolved, 'utf-8') }
 }

@@ -260,8 +260,13 @@ export const OBSERVABILITY_TOOL_IDS: string[] = [
 // Deliberate semantic lookup over the user's long-term memory (durable files,
 // full daily-memory history, and prior conversation messages). Complements the
 // automatic per-turn <recalled_memory> hint injected by the chat route.
+// memory_recent_activity is the chronological companion to memory_search: the
+// nightly Memory reflection prompt tells the agent to call it (~14d) to spot
+// repeated workflows for playbook synthesis, so it MUST be granted here — being
+// registered in the tool catalog is not enough to surface it to a run.
 export const MEMORY_TOOL_IDS: string[] = [
     'memory_search',
+    'memory_recent_activity',
     'library_search',
 ]
 

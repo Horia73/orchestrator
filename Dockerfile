@@ -66,6 +66,7 @@ RUN apt-get update \
     g++ \
     fonts-liberation \
     imagemagick \
+    librsvg2-bin \
     make \
     openbox \
     pkg-config \
@@ -119,6 +120,7 @@ RUN pip3 install --break-system-packages --no-cache-dir \
     openpyxl \
     reportlab \
     scikit-image \
+    shapely \
     python-pptx \
     pypdf
 

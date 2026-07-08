@@ -311,6 +311,11 @@ export const MicroscriptOperationSchema = z.discriminatedUnion('kind', [
         kind: z.literal('file.read'),
         id: z.string().min(1).max(120),
         path: z.string().min(1).max(300),
+        // Read only the last N bytes of a (typically append-only) file instead
+        // of the whole thing. Lets a script tail a growing journal without
+        // pulling the entire file through the run each time. When set, the
+        // whole-file size cap is skipped and only this slice is returned.
+        tail_bytes: z.number().int().positive().max(5_000_000).optional(),
     }),
     z.object({
         kind: z.literal('file.write'),

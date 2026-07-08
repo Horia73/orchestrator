@@ -542,6 +542,10 @@ export interface FinishMicroscriptRunInput {
     nextRunAt?: number | null
     phases: number
     operations: number
+    /** How many of this run's executed operations failed. When every executed
+     *  operation failed the run is treated as unhealthy for the consecutive-
+     *  failure breaker even though the Python phase itself did not throw. */
+    operationsFailed?: number
     surfaced: boolean
     conversationId: string | null
 }
@@ -550,21 +554,32 @@ export function finishMicroscriptRun(id: string, input: FinishMicroscriptRunInpu
     const current = getMicroscript(id)
     if (!current) return null
     const now = Date.now()
-    const nextFailures = input.ok ? 0 : current.consecutiveFailures + 1
-    let nextStatus: MicroscriptStatus = input.status ?? (input.ok ? 'active' : 'error')
+    // A run whose Python phase completed but ALL of whose side-effecting
+    // operations failed (e.g. every WhatsApp send while the session is down) is
+    // not a healthy run. Treat it as failed for the breaker so a script churning
+    // a list against a dead integration self-pauses instead of draining it and
+    // marking every recipient failed. A run with no operations, or with at least
+    // one success, stays healthy.
+    const allOperationsFailed = input.operations > 0 && (input.operationsFailed ?? 0) >= input.operations
+    const recordedOk = input.ok && !allOperationsFailed
+    const nextFailures = recordedOk ? 0 : current.consecutiveFailures + 1
+    let nextStatus: MicroscriptStatus = input.status ?? (recordedOk ? 'active' : 'error')
     let enabled = input.enabled ?? current.enabled
     let nextRunAt = input.nextRunAt ?? null
 
-    if (!input.ok && nextFailures >= current.manifest.limits.maxConsecutiveFailures) {
+    if (!recordedOk && nextFailures >= current.manifest.limits.maxConsecutiveFailures) {
         nextStatus = 'paused'
         enabled = false
         nextRunAt = null
     }
-    if (input.ok && current.manifest.limits.maxRuns && current.runCount + 1 >= current.manifest.limits.maxRuns) {
+    if (recordedOk && current.manifest.limits.maxRuns && current.runCount + 1 >= current.manifest.limits.maxRuns) {
         nextStatus = 'completed'
         enabled = false
         nextRunAt = null
     }
+    const recordedError = recordedOk
+        ? null
+        : input.error ?? (allOperationsFailed ? `All ${input.operations} operation(s) failed this run.` : 'Unknown error')
 
     const tx = db.transaction(() => {
         db.prepare(
@@ -584,8 +599,8 @@ export function finishMicroscriptRun(id: string, input: FinishMicroscriptRunInpu
             state: serializeState(input.state ?? current.state),
             nextRunAt,
             lastRunAt: now,
-            lastRunStatus: input.ok ? 'ok' : 'error',
-            lastRunError: input.ok ? null : input.error ?? 'Unknown error',
+            lastRunStatus: recordedOk ? 'ok' : 'error',
+            lastRunError: recordedError,
             consecutiveFailures: nextFailures,
             updatedAt: now,
         })
@@ -606,27 +621,27 @@ export function finishMicroscriptRun(id: string, input: FinishMicroscriptRunInpu
             scriptId: id,
             startedAt: input.startedAt,
             endedAt: now,
-            status: input.ok ? 'ok' : 'error',
+            status: recordedOk ? 'ok' : 'error',
             trigger: input.trigger,
             summary: input.summary.slice(0, 20_000),
-            error: input.error ?? null,
+            error: recordedError,
             phases: input.phases,
             operations: input.operations,
             surfaced: input.surfaced ? 1 : 0,
             conversationId: input.conversationId,
         })
-        recordMicroscriptEvent(id, input.ok ? 'run_ok' : 'run_error', {
+        recordMicroscriptEvent(id, recordedOk ? 'run_ok' : 'run_error', {
             runId,
             trigger: input.trigger,
             summary: input.summary.slice(0, 1_000),
-            error: input.error ?? null,
+            error: recordedError,
             nextRunAt,
             status: nextStatus,
         })
         emitMicroscriptRunsChanged(id, runId)
     })
     tx()
-    emitMicroscriptsChanged(id, input.ok ? 'run-ok' : 'run-error')
+    emitMicroscriptsChanged(id, recordedOk ? 'run-ok' : 'run-error')
     return getMicroscript(id)
 }
 

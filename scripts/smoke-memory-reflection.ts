@@ -133,6 +133,26 @@ async function main(): Promise<void> {
       recentTool?.tags
     )
 
+    // Registration in the catalog is NOT enough — the tool only reaches a run if
+    // it is in the agent's grant list. The nightly reflection runs as the
+    // orchestrator, whose prompt tells it to call memory_recent_activity, so the
+    // orchestrator MUST grant it. This guards the recurring "tool not available"
+    // regression that three prior AGENT_NEEDS "resolutions" missed by only
+    // checking catalog registration.
+    const { MEMORY_TOOL_IDS } = await import("@/lib/ai/agents/builtins")
+    check(
+      "memory_recent_activity is in the MEMORY_TOOL_IDS grant",
+      MEMORY_TOOL_IDS.includes("memory_recent_activity"),
+      MEMORY_TOOL_IDS
+    )
+    const { getAgent } = await import("@/lib/ai/agents/registry")
+    const orchestrator = getAgent("orchestrator")
+    check(
+      "orchestrator agent grants memory_recent_activity to its runs",
+      orchestrator?.tools?.includes("memory_recent_activity") === true,
+      orchestrator?.tools?.filter((t) => t.startsWith("memory"))
+    )
+
     // Seed two conversations: one inside the window, one ancient.
     const { default: db } = await import("@/lib/db")
     const now = Date.now()

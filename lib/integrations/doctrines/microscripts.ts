@@ -43,7 +43,7 @@ Runtime contract:
 - trusted_python is the only runtime. Request phases still exist internally for helpers/app-tool calls, but the script authoring model is normal Python.
 - In trusted_python, ctx is dict-like and also exposes helpers: ctx.notify, ctx.http_fetch, ctx.file_read, ctx.file_write, ctx.call_tool, ctx.continue_after, ctx.complete, ctx.pause.
 - It must finish quickly. Do not write sleep loops, while-true daemons, background threads, or long polling.
-- Return nextCheckAfterMs or nextRunAt to continue later.
+- Return nextCheckAfterMs or nextRunAt to continue later. The scheduler polls on a ~60s heartbeat, so ~60s is the effective floor for how often a script can run and actual cadence is quantized to that tick — a requested 60s interval can land near ~120s when the due time falls just after a tick. Ask for sub-minute cadence only if you can tolerate that quantization.
 - Return status="complete" when the job is done, status="pause" when it should stop but remain available, or omit/return status="continue" when it should keep running.
 - Store all durable private memory in returned state. Read current memory from ctx["state"].
 - Direct Python networking is allowed by default in trusted_python. Direct file access is confined to the script workspace. Env secrets and shell/process control are blocked by default.
@@ -86,7 +86,7 @@ Supported operation request kinds:
 - home_assistant.call_service: requires home_assistant_call_service with matching domain/service/target entity boundary, domains, or allowAll=true.
 - http.fetch: allowed broadly by default in trusted_python unless trustedPython.allowNetwork=false or a narrower http_fetch permission is declared.
 - tool.call: requires tool_call. It may allow exact toolIds, toolPatterns, or allowIntegrationTools=true for connected integration operational tools. Host-mutation tools, activation tools, and recursive microscript lifecycle calls are blocked.
-- file.read / file.write: allowed in the script workspace by default in trusted_python unless trustedPython.allowWorkspaceFiles=false or a narrower files permission is declared.
+- file.read / file.write: allowed in the script workspace by default in trusted_python unless trustedPython.allowWorkspaceFiles=false or a narrower files permission is declared. For a growing append-only journal, pass ctx.file_read(path, tail_bytes=N) to read only the last N bytes (the result carries tail/truncated/totalBytes) instead of pulling the whole file through the run each cycle.
 
 Wake prompt contract (agent.wake):
 The runtime gives the woken agent real context automatically: the durable memory files (USER.md, MEMORY.md, recent daily memory), MONITORS.md in full, the script's prior wake exchanges (persistent per-script agent thread), and a snapshot of the script's current state. It does NOT see the conversation that created the script — your prompt payload carries the live observed facts and is the authoritative trigger briefing. A thin payload still produces a generic, hesitant wake; a complete payload produces a production-quality result first shot. Write it like a brief for a capable colleague who just walked in:
