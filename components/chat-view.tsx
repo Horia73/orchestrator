@@ -14,6 +14,7 @@ import {
   MESSAGE_ANCHOR_SCROLL_DURATION_MS,
   MESSAGE_ANCHOR_TOP_OFFSET,
   MESSAGE_VERTICAL_GAP,
+  OLDER_MESSAGES_AUTOLOAD_THRESHOLD_PX,
   POST_RESTORE_HOLD_MS,
   SCROLL_ANCHOR_STORAGE_PREFIX,
   SCROLL_BOTTOM_SENTINEL,
@@ -299,10 +300,6 @@ export function ChatView() {
   )
   const hasOlderMessages = Boolean(messagePage?.hasMore)
   const isLoadingOlderMessages = Boolean(messagePage?.isLoadingOlder)
-  const olderMessagesError = messagePage?.error
-  const totalMessageCount =
-    messagePage?.total ?? activeConversation?.messageCount ?? messageCount
-  const loadedMessageCount = messagePage?.loadedCount ?? messageCount
   const latestAssistantMessageId = React.useMemo(() => {
     const messages = activeConversation?.messages ?? []
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -957,6 +954,21 @@ export function ChatView() {
     lastDistanceFromBottomRef.current = distanceFromBottom
     const isPinnedToBottom = distanceFromBottom <= STICKY_BOTTOM_THRESHOLD
 
+    // Auto-load older messages as the user nears the top (replaces the manual
+    // "Load older messages" button). Gated on a settled restore and a genuine
+    // (non-programmatic) scroll so a transient scrollTop≈0 while the view opens
+    // or settles doesn't prematurely page. requestOlderMessages self-guards
+    // against concurrent/exhausted loads and captures the prepend anchor, so
+    // firing it every near-top scroll tick is safe — after a prepend the anchor
+    // restore pushes scrollTop back down, away from the trigger zone.
+    if (
+      !ignoreSyncRef.current &&
+      restoredScrollConversationRef.current === activeIdRef.current &&
+      element.scrollTop <= OLDER_MESSAGES_AUTOLOAD_THRESHOLD_PX
+    ) {
+      requestOlderMessages()
+    }
+
     if (
       activeIdRef.current &&
       !ignoreSyncRef.current &&
@@ -1014,6 +1026,7 @@ export function ChatView() {
     }
   }, [
     getCurrentScrollAnchor,
+    requestOlderMessages,
     revealScrollbar,
     saveScrollAnchor,
     scheduleScrollSave,
@@ -3181,27 +3194,15 @@ export function ChatView() {
                 <div className="mx-auto max-w-[700px] space-y-6 px-2 select-none">
                   {isInitialMessagesLoading ? null : (
                     <>
-                      {(hasOlderMessages ||
-                        isLoadingOlderMessages ||
-                        olderMessagesError) && (
-                        <div className="flex justify-center py-1">
-                          <button
-                            type="button"
-                            onClick={requestOlderMessages}
-                            disabled={isLoadingOlderMessages}
-                            className="inline-flex h-8 items-center gap-2 rounded-md border border-border bg-background px-3 text-[13px] text-muted-foreground shadow-sm transition-colors hover:bg-muted/40 hover:text-foreground disabled:cursor-default disabled:opacity-70"
-                          >
-                            {isLoadingOlderMessages && (
-                              <Loader2 className="size-3.5 animate-spin" />
-                            )}
-                            <span>
-                              {isLoadingOlderMessages
-                                ? "Loading older messages"
-                                : olderMessagesError
-                                  ? "Retry older messages"
-                                  : `Load older messages (${loadedMessageCount}/${totalMessageCount})`}
-                            </span>
-                          </button>
+                      {/* Older messages auto-load on scroll near the top
+                          (see syncScrollState). This is just a passive loading
+                          hint — no manual button. */}
+                      {isLoadingOlderMessages && (
+                        <div
+                          className="flex justify-center py-2"
+                          aria-hidden="true"
+                        >
+                          <Loader2 className="size-4 animate-spin text-muted-foreground/70" />
                         </div>
                       )}
 

@@ -1489,28 +1489,44 @@ function DeferredThoughtBlock({
                     ? "Tools and thinking"
                     : "Thinking"
 
+    // Mirror WorkedForBlock's collapsed header exactly — a borderless inline
+    // "Worked for …" with a trailing chevron, no box, no "Open" label — so a
+    // conversation never shows two different treatments. Clicking still lazily
+    // loads the deferred reasoning/tool payload; once hydrated this unmounts and
+    // the real WorkedForBlock renders (openOnMount), keeping the perf win of not
+    // eagerly parsing every committed message's hidden reasoning at open.
     return (
-        <div className="relative z-10 w-full max-w-[760px]">
+        <div className="flex w-full min-w-0 flex-col">
             <button
                 type="button"
                 onClick={onOpen}
                 disabled={loading}
+                aria-expanded={false}
+                aria-label="Open thinking and tool details"
                 className={cn(
-                    "group flex w-full items-center gap-2 rounded-md border border-border/70 bg-muted/35 px-3 py-2 text-left text-[13px] transition-colors hover:border-border hover:bg-muted/55 disabled:cursor-default disabled:opacity-70",
+                    "flex items-center gap-1.5 text-[15px] transition-colors group w-fit max-w-full min-w-0 disabled:cursor-default",
                     status === "error"
                         ? "text-destructive hover:text-destructive"
                         : "text-muted-foreground hover:text-foreground"
                 )}
-                aria-label="Open thinking and tool details"
             >
-                <ChevronDown className="size-4 shrink-0 -rotate-90 transition-transform group-hover:text-foreground" />
-                <span className="min-w-0 flex-1 truncate">{title}</span>
+                {status === "aborted" ? (
+                    <CircleStop className="size-4 shrink-0" />
+                ) : status === "error" ? (
+                    <CircleAlert className="size-4 shrink-0" />
+                ) : null}
+                <span className="min-w-0 truncate">{title}</span>
                 {loading ? (
-                    <Loader2 className="size-3.5 shrink-0 animate-spin" />
+                    <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground/70" />
                 ) : (
-                    <span className="shrink-0 text-[12px] text-muted-foreground/70">
-                        Open
-                    </span>
+                    <ChevronDown
+                        className={cn(
+                            "size-4 shrink-0 -rotate-90 transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+                            status === "error"
+                                ? "text-destructive/80 group-hover:text-destructive"
+                                : "text-muted-foreground/70 group-hover:text-foreground"
+                        )}
+                    />
                 )}
             </button>
         </div>

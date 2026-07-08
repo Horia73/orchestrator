@@ -31,6 +31,10 @@ export const MESSAGE_ANCHOR_SCROLL_DURATION_MS = 420
 export const SCROLL_BUTTON_FADE_DISTANCE_PX = 2700
 export const MESSAGE_VERTICAL_GAP = 24
 export const TAIL_SPACER_UPDATE_THRESHOLD_PX = 4
+// Auto-load the next older page once the user scrolls within this many pixels
+// of the top — replaces the manual "Load older messages" button. Roughly a
+// viewport of lead time so the prepend lands before the user hits the very top.
+export const OLDER_MESSAGES_AUTOLOAD_THRESHOLD_PX = 1200
 
 export type SavedScrollRestore = {
   messageId: string
