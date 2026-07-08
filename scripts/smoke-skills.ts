@@ -1,5 +1,7 @@
 import assert from "assert"
 import fs from "fs"
+import os from "os"
+import path from "path"
 
 import { coder } from "@/lib/ai/agents/coder"
 import { orchestrator } from "@/lib/ai/agents/orchestrator"
@@ -18,6 +20,7 @@ import {
   isWritableSkillScope,
   listSkillFiles,
   listSkills,
+  promoteLegacyProfileSkillsToGlobal,
   readSkillFile,
   writableSkillRoots,
 } from "@/lib/skills/registry"
@@ -92,6 +95,8 @@ async function main() {
   )
   assert.strictEqual(isWritableSkillScope("global"), true, "global should be writable")
   assert.strictEqual(isWritableSkillScope("profile"), false, "profile skills should be legacy read-only")
+
+  assertLegacyProfileSkillMigration()
 
   for (const expected of EXPECTED_SKILLS) {
     const skill = findSkill(expected.id)
@@ -268,6 +273,65 @@ async function main() {
   }
 
   console.log(`smoke-skills passed (${skills.length} installed skill${skills.length === 1 ? "" : "s"}).`)
+}
+
+function assertLegacyProfileSkillMigration() {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "orch-skill-migrate-"))
+  try {
+    const profileDir = path.join(base, "profile-skills")
+    const globalDir = path.join(base, "global-skills")
+
+    // A unique legacy profile skill → should move up to global.
+    writeSkillFixture(profileDir, "legacy-drafting", "Legacy Drafting", "draft 2d plans")
+    // An id already owned globally → the legacy copy must be left untouched.
+    writeSkillFixture(profileDir, "dup-skill", "Dup Skill", "profile copy")
+    writeSkillFixture(globalDir, "dup-skill", "Dup Skill", "global copy")
+    // A stray non-skill directory (no SKILL.md) → ignored.
+    fs.mkdirSync(path.join(profileDir, "not-a-skill"), { recursive: true })
+
+    const first = promoteLegacyProfileSkillsToGlobal({
+      profileSkillsDir: profileDir,
+      globalSkillsDir: globalDir,
+    })
+    assert.deepStrictEqual(first.moved, ["legacy-drafting"], "unique legacy skill should move to global")
+    assert.deepStrictEqual(first.skipped, ["dup-skill"], "colliding legacy skill should be skipped")
+    assert.ok(
+      fs.existsSync(path.join(globalDir, "legacy-drafting", "SKILL.md")),
+      "migrated skill should exist in the global root"
+    )
+    assert.ok(
+      !fs.existsSync(path.join(profileDir, "legacy-drafting")),
+      "migrated skill should be removed from the profile root"
+    )
+    assert.ok(
+      fs.existsSync(path.join(profileDir, "dup-skill", "SKILL.md")),
+      "colliding legacy skill must be left in place (not deleted)"
+    )
+    assert.ok(
+      fs.readFileSync(path.join(globalDir, "dup-skill", "SKILL.md"), "utf8").includes("global copy"),
+      "existing global skill must not be overwritten by the legacy copy"
+    )
+
+    // Idempotent: a second run moves nothing new and still reports the collision.
+    const second = promoteLegacyProfileSkillsToGlobal({
+      profileSkillsDir: profileDir,
+      globalSkillsDir: globalDir,
+    })
+    assert.deepStrictEqual(second.moved, [], "second run should move nothing")
+    assert.deepStrictEqual(second.skipped, ["dup-skill"], "second run should still report the collision")
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true })
+  }
+}
+
+function writeSkillFixture(rootDir: string, id: string, name: string, description: string) {
+  const dir = path.join(rootDir, id)
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(
+    path.join(dir, "SKILL.md"),
+    `---\nid: ${id}\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n`,
+    "utf8"
+  )
 }
 
 function assertNoProviderNativeSkillLeaks() {

@@ -24,6 +24,32 @@ export async function registerRuntime(): Promise<void> {
             console.error('[voice] failed to register voice gateway', err)
         }
     }
+    // Data migration (not background work): promote any legacy profile-scoped
+    // skills into the shared global skills root. Custom skills are global-only
+    // by policy; this back-fills installs that predate that migration so nothing
+    // lingers with a read-only "Profile" badge. Idempotent — a cheap no-op once
+    // each profile's private/skills dir is drained. Runs before the background
+    // gate so it still applies when schedulers/monitors are disabled.
+    if (process.env.ORCHESTRATOR_PREVIEW !== '1') {
+        try {
+            const { promoteLegacyProfileSkillsToGlobal } = await import('@/lib/skills/registry')
+            await forEachProfile((profileId) => {
+                const { moved, skipped } = promoteLegacyProfileSkillsToGlobal()
+                if (moved.length) {
+                    console.log(
+                        `[skills] promoted ${moved.length} legacy profile skill(s) to global for ${profileId}: ${moved.join(', ')}`,
+                    )
+                }
+                if (skipped.length) {
+                    console.warn(
+                        `[skills] kept ${skipped.length} legacy profile skill(s) for ${profileId} (a global skill already owns the id): ${skipped.join(', ')}`,
+                    )
+                }
+            })
+        } catch (err) {
+            console.error('[skills] failed to promote legacy profile skills', err)
+        }
+    }
     if (backgroundWorkDisabled()) return
     const { startScheduler } = await import('@/lib/scheduling/scheduler')
     startScheduler()

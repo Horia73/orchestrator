@@ -296,6 +296,83 @@ export function deleteCustomSkill(
   fs.rmSync(skill.root, { recursive: true, force: true })
 }
 
+/**
+ * Promote any legacy profile-scoped skills into the shared global skills root.
+ *
+ * Custom skills are global-only by policy (writableSkillRoots returns only
+ * "global"), but installs that predate that migration left skills in a profile's
+ * private/skills dir, where they still surface as read-only "profile" scope. This
+ * moves each such skill up to the global root so nothing lingers as profile-bound.
+ *
+ * Idempotent: once a profile's legacy dir is drained it is a cheap no-op.
+ * Non-destructive on collision — if the global root already owns a skill with the
+ * same id, the legacy copy is left in place (it is already shadowed by the global
+ * one in listSkills) and reported as skipped rather than overwriting either side.
+ *
+ * Directory defaults resolve from the active profile's runtime paths; the
+ * overrides exist for tests.
+ */
+export function promoteLegacyProfileSkillsToGlobal(options?: {
+  profileSkillsDir?: string
+  globalSkillsDir?: string
+}): { moved: string[]; skipped: string[] } {
+  const profileSkillsDir =
+    options?.profileSkillsDir ??
+    path.join(activeRuntimePaths().privateStateDir, "skills")
+  const globalSkillsDir =
+    options?.globalSkillsDir ?? path.join(ORCHESTRATOR_STATE_DIR, "skills")
+  const moved: string[] = []
+  const skipped: string[] = []
+
+  // Admin profiles resolve privateStateDir under ORCHESTRATOR_STATE_DIR, so both
+  // dirs are distinct in practice; guard defensively in case they ever collapse.
+  if (path.resolve(profileSkillsDir) === path.resolve(globalSkillsDir)) {
+    return { moved, skipped }
+  }
+
+  const legacySkills = scanSkillRoot({
+    scope: "profile",
+    source: "active profile legacy state",
+    dir: profileSkillsDir,
+  })
+  if (legacySkills.length === 0) return { moved, skipped }
+
+  const existingGlobalIds = new Set(
+    scanSkillRoot({
+      scope: "global",
+      source: "orchestrator state",
+      dir: globalSkillsDir,
+    }).map((skill) => skill.id)
+  )
+
+  for (const skill of legacySkills) {
+    const dirName = path.basename(skill.root)
+    const target = path.join(globalSkillsDir, dirName)
+    if (existingGlobalIds.has(skill.id) || fs.existsSync(target)) {
+      skipped.push(skill.id)
+      continue
+    }
+    try {
+      fs.mkdirSync(globalSkillsDir, { recursive: true })
+      fs.renameSync(skill.root, target)
+    } catch {
+      // Cross-device rename (state dir on a different mount than the profile
+      // store): fall back to a recursive copy, then drop the legacy copy.
+      try {
+        fs.cpSync(skill.root, target, { recursive: true })
+        fs.rmSync(skill.root, { recursive: true, force: true })
+      } catch {
+        skipped.push(skill.id)
+        continue
+      }
+    }
+    existingGlobalIds.add(skill.id)
+    moved.push(skill.id)
+  }
+
+  return { moved, skipped }
+}
+
 function scanSkillRoot(root: SkillRoot): RuntimeSkill[] {
   if (!fs.existsSync(root.dir)) return []
   return fs
