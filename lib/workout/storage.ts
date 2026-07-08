@@ -31,6 +31,18 @@ export function exercisesDir(): string {
 }
 
 /**
+ * Verified demo-image library, keyed by exercise slug. Unlike the built-in
+ * fuzzy-matched `exercise-image-db` (which the renderer resolves blindly at
+ * render time and often picks the wrong movement), entries here are the ones
+ * the model deliberately searched, confirmed against the exact exercise, and
+ * saved — once per exercise/machine, reused forever. The /api/workout-images
+ * route serves these first, before any fuzzy fallback.
+ */
+export function exerciseImagesDir(): string {
+    return path.join(workoutsDir(), 'exercise-images')
+}
+
+/**
  * In-progress session state lives here, keyed by the stable artifact row id
  * (NOT the sessionId), so a session resumes when the artifact is re-opened
  * from the inbox or on another device. This is the live autosave; the
@@ -54,6 +66,17 @@ export function sessionMarkdownPath(slug: string): string {
 
 export function exerciseHistoryPath(id: string): string {
     return path.join(exercisesDir(), `${id}.json`)
+}
+
+/** Sanitize an exercise slug into a safe single-segment filename. Exercise
+ *  ids are validated kebab-case upstream, but sanitize defensively so a stray
+ *  id can never escape the directory. */
+function safeExerciseSlug(id: string): string {
+    return id.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'exercise'
+}
+
+export function exerciseImagePath(id: string): string {
+    return path.join(exerciseImagesDir(), `${safeExerciseSlug(id)}.json`)
 }
 
 /** Sanitize an artifact id into a safe single-segment filename. */
@@ -115,6 +138,48 @@ export function writeExerciseHistory(history: ExerciseHistory): string {
 
 export function readExerciseHistory(id: string): ExerciseHistory | null {
     return readJsonOrNull<ExerciseHistory>(exerciseHistoryPath(id))
+}
+
+// === verified exercise demo images =========================================
+
+/**
+ * A model-verified demo image for one exercise/machine. Saved once and reused
+ * across every future session for that exercise id.
+ */
+export interface ExerciseImageRecord {
+    /** Kebab-case exercise slug — matches the artifact `exercises[].id`. */
+    id: string
+    /** Verified image/GIF URL (or an /api/uploads path if cached locally). */
+    url: string
+    /** Display name at save time, for the Library / debugging. */
+    name?: string
+    /** Where it came from (source domain, "ExerciseDB OSS", "web search"). */
+    source?: string
+    /** Short confirmation note from the model ("front view, cable machine"). */
+    note?: string
+    /** ISO timestamp the image was verified + saved. */
+    verifiedAt: string
+}
+
+export function writeExerciseImage(record: ExerciseImageRecord): string {
+    const filePath = exerciseImagePath(record.id)
+    writeAtomic(filePath, JSON.stringify(record, null, 2))
+    return filePath
+}
+
+export function readExerciseImage(id: string): ExerciseImageRecord | null {
+    return readJsonOrNull<ExerciseImageRecord>(exerciseImagePath(id))
+}
+
+export function listExerciseImageIds(): string[] {
+    try {
+        if (!fs.existsSync(exerciseImagesDir())) return []
+        return fs.readdirSync(exerciseImagesDir())
+            .filter((f) => f.endsWith('.json'))
+            .map((f) => f.slice(0, -5))
+    } catch {
+        return []
+    }
 }
 
 // === active (in-progress) session autosave =================================

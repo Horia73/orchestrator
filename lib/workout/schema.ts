@@ -1,6 +1,55 @@
 import { z } from 'zod'
 
 // ---------------------------------------------------------------------------
+// Model-tolerance coercions.
+//
+// The strict schema rejects the whole artifact on the first mismatch, and
+// models (GPT-family especially) reliably make a few *shape-equivalent* slips
+// that carry no ambiguity: a `notes` field emitted as an array of bullet
+// strings instead of one string, or a number emitted as a numeric string
+// ("39"). Coercing these at parse time — mirroring the existing `difficulty`
+// alias below — turns a first-attempt rejection into a clean parse instead of
+// burning a repair round-trip (the confirmed real-world failure was gpt-5.5
+// emitting root `notes` as an array). We convert ONLY when the intent is
+// unambiguous; anything else passes through untouched so the wrapped schema
+// still reports a precise error (e.g. a letter day "A" is not numeric, so it
+// stays a string and is still rejected — repair handles it).
+// ---------------------------------------------------------------------------
+
+/** Join an array of strings into one newline-separated string; leave scalars
+ *  untouched. A blank/empty array becomes undefined so `.optional()` holds. */
+function coerceTextArray(value: unknown): unknown {
+    if (!Array.isArray(value)) return value
+    const parts = value
+        .filter((v): v is string => typeof v === 'string')
+        .map((v) => v.trim())
+        .filter((v) => v.length > 0)
+    return parts.length ? parts.join('\n') : undefined
+}
+
+/** Coerce a numeric-looking string ("39", " 2.5 ") to a number. Leaves
+ *  non-numeric strings (e.g. a letter day "A") and every other type as-is so
+ *  the wrapped numeric schema still rejects them with a precise message. */
+function coerceNumericString(value: unknown): unknown {
+    if (typeof value !== 'string') return value
+    const trimmed = value.trim()
+    if (trimmed === '') return value
+    const n = Number(trimmed)
+    return Number.isFinite(n) ? n : value
+}
+
+/** Wrap a string schema so array-of-strings input is joined into one string. */
+const flexibleText = (schema: z.ZodString) => z.preprocess(coerceTextArray, schema)
+/** Wrap a numeric schema so numeric-string input is coerced to a number. */
+const num = <T extends z.ZodTypeAny>(schema: T) => z.preprocess(coerceNumericString, schema)
+/** Coerce a rep range: a numeric string → number, an array → its elements
+ *  each coerced, so `["6","10"]` becomes `[6, 10]`. */
+function coerceRepRange(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map(coerceNumericString)
+    return coerceNumericString(value)
+}
+
+// ---------------------------------------------------------------------------
 // Workout artifact domain schema.
 //
 // A `WorkoutArtifact` is the JSON payload the orchestrator emits inside an
@@ -187,19 +236,19 @@ export type ProgressionRule = z.infer<typeof ProgressionRuleSchema>
  * RPE (Rate of Perceived Exertion): 1..10. Half-steps allowed (7.5).
  * Bounded so the model can't emit nonsense like 12.
  */
-const RpeSchema = z.number().min(1).max(10)
+const RpeSchema = num(z.number().min(1).max(10))
 
 /**
  * RIR (Reps in Reserve): 0..5. Alternative tracking style to RPE — some
  * people prefer "I had 2 left in the tank" to "that was a 7.5 RPE".
  */
-const RirSchema = z.number().int().min(0).max(5)
+const RirSchema = num(z.number().int().min(0).max(5))
 
 /**
  * Rep range. Either a single number ("8 reps") or a [low, high] interval
  * ("6-10 reps"). The renderer formats this as "8" or "6-10".
  */
-const RepRangeSchema = z.union([
+const RepRangeSchema = z.preprocess(coerceRepRange, z.union([
     z.number().int().min(0).max(1000),
     z.tuple([
         z.number().int().min(0).max(1000),
@@ -207,7 +256,7 @@ const RepRangeSchema = z.union([
     ]).refine(([lo, hi]) => lo <= hi, {
         message: 'rep range low must be ≤ high',
     }),
-])
+]))
 export type RepRange = z.infer<typeof RepRangeSchema>
 
 // === planned set (discriminated by exercise kind) =========================
@@ -222,7 +271,7 @@ const PlannedSetBaseSchema = z.object({
     kind: SetKindSchema.default('working'),
     /** Override the exercise-level defaultRestSec. Useful for drop sets (0)
      *  or top sets (longer rest). */
-    restSec: z.number().int().min(0).max(1800).optional(),
+    restSec: num(z.number().int().min(0).max(1800)).optional(),
     /** Target RPE for the set. Mutually exclusive with RIR but we don't
      *  enforce — the renderer prefers RPE if both present. */
     rpe: RpeSchema.optional(),
@@ -230,15 +279,15 @@ const PlannedSetBaseSchema = z.object({
     rir: RirSchema.optional(),
     /** Inline notes shown next to the set. Tempo prescriptions, technique
      *  reminders specific to this set, etc. */
-    notes: z.string().min(1).max(200).optional(),
+    notes: flexibleText(z.string().min(1).max(200)).optional(),
 })
 
 /** Weighted set: bench, squat, deadlift, dumbbell row, etc. */
 const WeightedPlannedSetSchema = PlannedSetBaseSchema.extend({
     /** Absolute weight target — preferred over weightPct when both present. */
-    weightKg: z.number().min(0).max(2000).optional(),
+    weightKg: num(z.number().min(0).max(2000)).optional(),
     /** Alternative: percent of estimated 1RM. Renderer multiplies on display. */
-    weightPct: z.number().min(0).max(200).optional(),
+    weightPct: num(z.number().min(0).max(200)).optional(),
     /** Target reps. Required for weighted sets. */
     reps: RepRangeSchema,
 })
@@ -252,28 +301,28 @@ const BodyweightPlannedSetSchema = PlannedSetBaseSchema.extend({
  *  (negative kg means assistance). */
 const WeightedBwPlannedSetSchema = PlannedSetBaseSchema.extend({
     /** Negative means assistance, positive means added weight. */
-    weightKg: z.number().min(-200).max(200).optional(),
+    weightKg: num(z.number().min(-200).max(200)).optional(),
     reps: RepRangeSchema,
 })
 
 /** Isometric hold: plank, hollow hold, L-sit, wall sit. */
 const HoldPlannedSetSchema = PlannedSetBaseSchema.extend({
     /** Hold duration in seconds. */
-    durationSec: z.number().int().min(1).max(3600),
+    durationSec: num(z.number().int().min(1).max(3600)),
     /** Optional added load for weighted holds (weighted plank). */
-    weightKg: z.number().min(0).max(500).optional(),
+    weightKg: num(z.number().min(0).max(500)).optional(),
 })
 
 /** Cardio by duration: 20 min easy bike, 10 min row Z2. */
 const CardioDurPlannedSetSchema = PlannedSetBaseSchema.extend({
-    durationSec: z.number().int().min(1).max(36000),
+    durationSec: num(z.number().int().min(1).max(36000)),
     /** Optional target heart rate zone, watts (cycling), pace (m/s), etc. */
     targetMetric: z.string().min(1).max(60).optional(),
 })
 
 /** Cardio by distance: 5 km run, 2000 m row. */
 const CardioDistPlannedSetSchema = PlannedSetBaseSchema.extend({
-    distanceM: z.number().min(1).max(1_000_000),
+    distanceM: num(z.number().min(1).max(1_000_000)),
     /** Optional target pace ("4:30/km") or split time. */
     targetMetric: z.string().min(1).max(60).optional(),
 })
@@ -283,11 +332,11 @@ const CardioDistPlannedSetSchema = PlannedSetBaseSchema.extend({
  *  reused as `rounds` count via the discriminator below. */
 const IntervalPlannedSetSchema = PlannedSetBaseSchema.extend({
     /** Number of rounds inside this set (e.g. 8 for Tabata's 8-round structure). */
-    rounds: z.number().int().min(1).max(200),
-    workSec: z.number().int().min(1).max(3600),
+    rounds: num(z.number().int().min(1).max(200)),
+    workSec: num(z.number().int().min(1).max(3600)),
     /** Rest between rounds inside the interval. The set-level restSec is
      *  the rest AFTER all rounds complete. */
-    intraRestSec: z.number().int().min(0).max(600).default(0),
+    intraRestSec: num(z.number().int().min(0).max(600)).default(0),
     /** Optional movement variants per round if not uniform. */
     targetMetric: z.string().min(1).max(60).optional(),
 })
@@ -349,13 +398,13 @@ export type LoggedSet = z.infer<typeof LoggedSetSchema>
 export const ProgressionConfigSchema = z.object({
     rule: ProgressionRuleSchema.default('none'),
     /** Increment in kg (or % depending on rule). */
-    increment: z.number().min(0).max(500).optional(),
+    increment: num(z.number().min(0).max(500)).optional(),
     /** Target rep range or RPE for the rule. */
     target: z.object({
-        reps: z.tuple([
+        reps: z.preprocess(coerceRepRange, z.tuple([
             z.number().int().min(0).max(1000),
             z.number().int().min(0).max(1000),
-        ]).optional(),
+        ])).optional(),
         rpe: RpeSchema.optional(),
     }).optional(),
 })
@@ -372,18 +421,18 @@ export const PreviousSessionSnapshotSchema = z.object({
     /** The single best set from that session (highest weight × reps product
      *  for weighted, longest hold, fastest pace, etc.). */
     bestSet: z.object({
-        weightKg: z.number().optional(),
-        reps: z.number().int().optional(),
-        durationSec: z.number().int().optional(),
-        distanceM: z.number().optional(),
+        weightKg: num(z.number()).optional(),
+        reps: num(z.number().int()).optional(),
+        durationSec: num(z.number().int()).optional(),
+        distanceM: num(z.number()).optional(),
         rpe: RpeSchema.optional(),
     }),
     /** All sets from that session, for compact "60/60/57 × 8/8/7" display. */
     allSets: z.array(z.object({
-        weightKg: z.number().optional(),
-        reps: z.number().int().optional(),
-        durationSec: z.number().int().optional(),
-        distanceM: z.number().optional(),
+        weightKg: num(z.number()).optional(),
+        reps: num(z.number().int()).optional(),
+        durationSec: num(z.number().int()).optional(),
+        distanceM: num(z.number()).optional(),
         rpe: RpeSchema.optional(),
     })).max(50).optional(),
 })
@@ -394,13 +443,13 @@ export type PreviousSessionSnapshot = z.infer<typeof PreviousSessionSnapshotSche
  * exercise header. Server populates from history.
  */
 export const PersonalBestSchema = z.object({
-    weightKg: z.number().optional(),
-    reps: z.number().int().optional(),
-    durationSec: z.number().int().optional(),
-    distanceM: z.number().optional(),
+    weightKg: num(z.number()).optional(),
+    reps: num(z.number().int()).optional(),
+    durationSec: num(z.number().int()).optional(),
+    distanceM: num(z.number()).optional(),
     /** Estimated 1RM from the PR set (Epley / Brzycki average). Renderer
      *  shows this next to PB weight for quick "I'm at ~X 1RM" feel. */
-    estimated1RM: z.number().optional(),
+    estimated1RM: num(z.number()).optional(),
     achievedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'must be ISO date YYYY-MM-DD'),
 })
 export type PersonalBest = z.infer<typeof PersonalBestSchema>
@@ -443,7 +492,7 @@ const ExerciseBaseSchema = z.object({
     videoUrl: z.string().url().max(2048).optional(),
     /** Default rest after each set in this exercise (seconds). Override per
      *  set via PlannedSet.restSec. */
-    defaultRestSec: z.number().int().min(0).max(1800).optional(),
+    defaultRestSec: num(z.number().int().min(0).max(1800)).optional(),
     /** Snapshot of last session for prefill / context. */
     previous: PreviousSessionSnapshotSchema.optional(),
     /** Personal best summary. */
@@ -517,10 +566,10 @@ export const ExerciseGroupSchema = z.object({
     /** Rounds count for circuit / giant_set. Each exercise's `planned` sets
      *  represent one round when this is set; the renderer multiplies. Omit
      *  for `straight`/`superset` (sets already encode the work). */
-    rounds: z.number().int().min(1).max(50).optional(),
+    rounds: num(z.number().int().min(1).max(50)).optional(),
     /** Override default rest between rounds (for circuits) or between
      *  superset rounds. Per-set restSec still wins if specified. */
-    restBetweenSec: z.number().int().min(0).max(1800).optional(),
+    restBetweenSec: num(z.number().int().min(0).max(1800)).optional(),
     exercises: z.array(ExerciseSchema).min(1).max(12),
 })
 export type ExerciseGroup = z.infer<typeof ExerciseGroupSchema>
@@ -535,7 +584,7 @@ export type ExerciseGroup = z.infer<typeof ExerciseGroupSchema>
  */
 export const WorkoutChecklistSchema = z.object({
     items: z.array(z.string().min(1).max(240)).min(1).max(20),
-    estimatedMinutes: z.number().int().min(0).max(120).optional(),
+    estimatedMinutes: num(z.number().int().min(0).max(120)).optional(),
 })
 export type WorkoutChecklist = z.infer<typeof WorkoutChecklistSchema>
 
@@ -550,10 +599,10 @@ export type WorkoutChecklist = z.infer<typeof WorkoutChecklistSchema>
  */
 export const WorkoutProgramSchema = z.object({
     name: z.string().min(1).max(120),
-    week: z.number().int().min(1).max(520).optional(),
-    day: z.number().int().min(1).max(10).optional(),
+    week: num(z.number().int().min(1).max(520)).optional(),
+    day: num(z.number().int().min(1).max(10)).optional(),
     /** Total session number in the program — sequential across weeks. */
-    sessionN: z.number().int().min(1).max(10000).optional(),
+    sessionN: num(z.number().int().min(1).max(10000)).optional(),
 })
 export type WorkoutProgram = z.infer<typeof WorkoutProgramSchema>
 
@@ -572,7 +621,7 @@ export const WorkoutArtifactSchema = z.object({
     /** Program metadata when part of a named program. */
     program: WorkoutProgramSchema.optional(),
     /** Estimated total session time (warmup + work + rest + cooldown). */
-    estimatedDurationMin: z.number().int().min(1).max(600).optional(),
+    estimatedDurationMin: num(z.number().int().min(1).max(600)).optional(),
     /** Difficulty hint. */
     difficulty: WorkoutDifficultySchema.optional(),
 
@@ -580,10 +629,10 @@ export const WorkoutArtifactSchema = z.object({
     units: WorkoutUnitsSchema.default('kg'),
     /** Bar weight in kg (or lb, matching `units`). Default 20 (men's
      *  olympic). Renderer uses this for plate calculator. */
-    barWeightKg: z.number().min(0).max(50).optional(),
+    barWeightKg: num(z.number().min(0).max(50)).optional(),
     /** Available plate sizes the user owns, descending. Used by plate
      *  calculator. Defaults to a reasonable kg set when omitted. */
-    plateIncrements: z.array(z.number().min(0.1).max(100)).max(20).optional(),
+    plateIncrements: z.array(num(z.number().min(0.1).max(100))).max(20).optional(),
     /** Whether to show RPE inputs in the UI. User pref override. */
     trackRpe: z.boolean().optional(),
     /** Whether to show RIR inputs. */
@@ -591,7 +640,7 @@ export const WorkoutArtifactSchema = z.object({
     /** Auto-start rest timer on set check. */
     autoStartRest: z.boolean().optional(),
     /** Chime N seconds before rest timer ends. 0 = no early chime. */
-    restAlertSec: z.number().int().min(0).max(60).optional(),
+    restAlertSec: num(z.number().int().min(0).max(60)).optional(),
 
     /** Optional warmup checklist shown above the first exercise. */
     warmup: WorkoutChecklistSchema.optional(),
@@ -610,8 +659,10 @@ export const WorkoutArtifactSchema = z.object({
     /** ISO timestamp the user finished. */
     completedAt: z.string().min(1).max(40).optional(),
 
-    /** Free-form notes from the model: "deload week, intensity 70%". */
-    notes: z.string().min(1).max(800).optional(),
+    /** Free-form notes from the model: "deload week, intensity 70%". Models
+     *  often emit this as an array of bullet strings — we join those into one
+     *  string rather than reject the whole artifact. */
+    notes: flexibleText(z.string().min(1).max(800)).optional(),
     /** Attribution: program source, coach, original article. */
     attribution: z.string().min(1).max(200).optional(),
 })
@@ -687,4 +738,7 @@ export type WorkoutArtifact = z.infer<typeof WorkoutArtifactSchema>
  *  of silently rendering an empty card when the model emits malformed JSON. */
 export type WorkoutArtifactParseResult =
     | { ok: true; value: WorkoutArtifact }
-    | { ok: false; error: string }
+    // `error` is the first (most actionable) issue for the renderer's error
+    // card; `issues` carries every validation issue so the repair pass can fix
+    // them all in one round-trip instead of one-per-attempt.
+    | { ok: false; error: string; issues?: string[] }

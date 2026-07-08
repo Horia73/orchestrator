@@ -188,6 +188,9 @@ export const SUBSYSTEM_MANIFEST: readonly SubsystemManifestEntry[] = [
             'GetBodyMetrics',
             'SaveBodyMetrics',
             'PatchWorkout',
+            'GetExerciseImage',
+            'SearchExerciseImages',
+            'SaveExerciseImage',
         ],
     },
     {

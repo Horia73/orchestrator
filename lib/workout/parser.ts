@@ -22,9 +22,14 @@ export function parseWorkoutArtifact(rawJson: string): WorkoutArtifactParseResul
     }
     const parsed = WorkoutArtifactSchema.safeParse(value)
     if (!parsed.success) {
-        const first = parsed.error.issues[0]
-        const path = first.path.length ? first.path.join('.') : '(root)'
-        return { ok: false, error: `${path}: ${first.message}` }
+        const issues = parsed.error.issues.map((issue) => {
+            const path = issue.path.length ? issue.path.join('.') : '(root)'
+            return `${path}: ${issue.message}`
+        })
+        // `error` stays the single first issue (the renderer error card and
+        // callers that read `.error` are unchanged); `issues` is the full list
+        // for the repair pass.
+        return { ok: false, error: issues[0], issues }
     }
     return { ok: true, value: parsed.data as WorkoutArtifact }
 }

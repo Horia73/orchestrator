@@ -7,7 +7,9 @@ import { parseWorkoutArtifact } from '@/lib/workout/parser'
 
 export type ArtifactContentValidationResult =
     | { ok: true }
-    | { ok: false; error: string }
+    // `issues` (when present) lists every validation issue so the repair pass
+    // can fix them all at once; `error` remains the single first issue.
+    | { ok: false; error: string; issues?: string[] }
 
 /**
  * Renderer-backed artifact types whose body must satisfy a strict schema.
@@ -53,7 +55,14 @@ export function validateArtifactContent(type: string, content: string): Artifact
     }
 }
 
-function parseResult(type: string, result: { ok: true } | { ok: false; error: string }): ArtifactContentValidationResult {
+function parseResult(
+    type: string,
+    result: { ok: true } | { ok: false; error: string; issues?: string[] },
+): ArtifactContentValidationResult {
     if (result.ok) return { ok: true }
-    return { ok: false, error: `${type}: ${result.error}` }
+    return {
+        ok: false,
+        error: `${type}: ${result.error}`,
+        issues: result.issues?.map((issue) => `${type}: ${issue}`),
+    }
 }

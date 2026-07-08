@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { searchWorkoutImages } from '@/lib/workout/image-search'
 import { resolveExerciseImage } from '@/lib/workout/exercise-image-db'
 import { resolveExerciseGif } from '@/lib/workout/exercise-gif-search'
+import { readExerciseImage } from '@/lib/workout/storage'
 import { runWithRequestProfile } from "@/lib/profiles/server"
 
 export const runtime = 'nodejs'
@@ -25,7 +26,21 @@ export async function GET(request: Request) {
         const muscles = splitList(url.searchParams.get('muscle'))
         const equipment = splitList(url.searchParams.get('equipment'))
 
-        // Primary source: ExerciseDB OSS animated GIFs. For a personal,
+        // Authoritative source: a model-verified image saved once for this
+        // exercise id (SaveExerciseImage). The model picked it deliberately for
+        // this exact movement/machine, so it always wins over the fuzzy chain
+        // below — that fuzzy matching is exactly what produced wrong demos.
+        if (id) {
+            const saved = readExerciseImage(id)
+            if (saved?.url) {
+                return NextResponse.json(
+                    { images: [savedImageResult(saved.url)] },
+                    { headers: SUCCESS_HEADERS },
+                )
+            }
+        }
+
+        // Fallback source: ExerciseDB OSS animated GIFs. For a personal,
         // non-commercial workout card, seeing the movement is more useful
         // than a static setup photo. The local Free Exercise DB photo index
         // remains a deterministic fallback when the GIF API has no confident
@@ -66,6 +81,20 @@ export async function GET(request: Request) {
             )
         }
   })
+}
+
+function savedImageResult(url: string) {
+    const isGif = /\.gif(?:[?#]|$)/i.test(url)
+    return {
+        url,
+        sourceUrl: url,
+        attribution: 'Verified',
+        // Aspect ratio is unknown for a saved URL; the renderer only uses this
+        // to reserve space and avoid layout shift.
+        width: isGif ? 1 : 4,
+        height: isGif ? 1 : 3,
+        mime: isGif ? 'image/gif' : 'image/jpeg',
+    }
 }
 
 function clampInt(raw: string | null, fallback: number, min: number, max: number): number {

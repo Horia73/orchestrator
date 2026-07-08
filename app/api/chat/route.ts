@@ -1114,7 +1114,7 @@ export async function POST(request: Request) {
                 type: repair.attrs.type,
                 content: repair.content,
                 error: repair.error,
-                maxAttempts: 2,
+                maxAttempts: 3,
                 generate: async (userPrompt) => {
                   const result = await runTextSubAgent({
                     target: repairTarget,

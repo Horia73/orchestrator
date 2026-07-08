@@ -110,6 +110,27 @@ export async function searchExerciseGifs(
     return entries.slice(0, limit).map(toWorkoutImage)
 }
 
+export interface ExerciseGifCandidate {
+    /** The exact canonical exercise name from ExerciseDB — the strongest
+     *  signal the model has to confirm a candidate matches the prescribed move
+     *  (it cannot see the pixels through a tool result). */
+    name: string
+    url: string
+    exerciseId: string
+}
+
+/** Like `searchExerciseGifs` but keeps each result's canonical name so the
+ *  model can deliberately match a candidate to the exercise it is prescribing.
+ *  Used by the SearchExerciseImages tool. */
+export async function searchExerciseGifCandidates(
+    rawQuery: string,
+    options: { limit?: number; signal?: AbortSignal } = {},
+): Promise<ExerciseGifCandidate[]> {
+    const limit = Math.min(10, Math.max(1, Math.floor(options.limit ?? 6)))
+    const entries = await searchExerciseDbGifEntries(rawQuery, { signal: options.signal })
+    return entries.slice(0, limit).map((e) => ({ name: e.name, url: e.gifUrl, exerciseId: e.exerciseId }))
+}
+
 export function parseExerciseDbGifEntries(json: ExerciseDbSearchResponse): ExerciseDbGifEntry[] {
     if (!json.success || !Array.isArray(json.data)) return []
     const out: ExerciseDbGifEntry[] = []

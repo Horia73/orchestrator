@@ -70,6 +70,11 @@ import {
   saveBodyMetricsTool,
 } from "./workout-history"
 import { patchWorkoutTool } from "./workout-patch"
+import {
+  getExerciseImageTool,
+  searchExerciseImagesTool,
+  saveExerciseImageTool,
+} from "./exercise-images"
 import { APPS_TOOLS } from "./apps"
 import { applyUpdateTool } from "./update-app"
 import { memoryRecentActivityTool, memorySearchTool } from "./memory-search"
@@ -146,6 +151,9 @@ export const ALL_TOOL_DEFS: ToolDef[] = [
   getBodyMetricsTool,
   saveBodyMetricsTool,
   patchWorkoutTool,
+  getExerciseImageTool,
+  searchExerciseImagesTool,
+  saveExerciseImageTool,
   ...APPS_TOOLS,
   applyUpdateTool,
   memorySearchTool,

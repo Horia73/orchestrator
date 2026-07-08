@@ -27,7 +27,7 @@ export interface RepairMessageArtifactsArgs {
     generate: (userPrompt: string) => Promise<string | null>
     /** Caller label for log lines: 'scheduled-run' | 'microscript' | 'inbox-reply'. */
     surface: string
-    /** Model round-trips per broken artifact before giving up. Default 2. */
+    /** Model round-trips per broken artifact before giving up. Default 3. */
     maxAttemptsPerArtifact?: number
 }
 
@@ -108,8 +108,9 @@ export async function repairMessageArtifacts(
             type: block.attrs.type,
             content: candidate,
             error: validation.error,
+            issues: validation.issues,
             generate: args.generate,
-            maxAttempts: args.maxAttemptsPerArtifact ?? 2,
+            maxAttempts: args.maxAttemptsPerArtifact ?? 3,
         })
 
         if (!result.ok) {

@@ -68,6 +68,14 @@ import {
 } from "../workout-history"
 import { executePatchWorkout, PATCH_WORKOUT_TOOL_ID } from "../workout-patch"
 import {
+  executeGetExerciseImage,
+  executeSaveExerciseImage,
+  executeSearchExerciseImages,
+  GET_EXERCISE_IMAGE_TOOL_ID,
+  SAVE_EXERCISE_IMAGE_TOOL_ID,
+  SEARCH_EXERCISE_IMAGES_TOOL_ID,
+} from "../exercise-images"
+import {
   executeAppDataGet,
   executeAppDataSet,
   executeAppDelete,
@@ -164,6 +172,9 @@ export const automationToolExecutors: Record<string, ToolExecutor> = {
   [GET_BODY_METRICS_TOOL_ID]: executeGetBodyMetrics,
   [SAVE_BODY_METRICS_TOOL_ID]: executeSaveBodyMetrics,
   [PATCH_WORKOUT_TOOL_ID]: executePatchWorkout,
+  [GET_EXERCISE_IMAGE_TOOL_ID]: executeGetExerciseImage,
+  [SEARCH_EXERCISE_IMAGES_TOOL_ID]: executeSearchExerciseImages,
+  [SAVE_EXERCISE_IMAGE_TOOL_ID]: executeSaveExerciseImage,
   [APPS_LIST_TOOL_ID]: executeAppsList,
   [APP_GET_TOOL_ID]: executeAppGet,
   [APP_SAVE_TOOL_ID]: executeAppSave,
