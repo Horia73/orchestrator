@@ -18,6 +18,8 @@ import { resolveBin, augmentedEnv } from '@/lib/cli/resolve-bin'
 import { createBinding, clearBinding } from '@/lib/cli/mcp-bindings'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { normalizeUsage } from '@/lib/observability/usage-mapper'
+import { attachBillingMetadata } from '@/lib/observability/billing-metadata'
+import type { BillingUsageEntry } from '@/lib/observability/schema'
 import { latestUserPromptWithPortableHistory } from './history'
 
 // Our custom tools reach Claude Code through one stdio MCP server. Claude Code
@@ -346,6 +348,9 @@ async function runClaudeStreamJson({ bin, args, model, cwd, signal, callbacks, i
         let finalUsage: unknown = undefined
         let finalSessionId: string | undefined = initialSessionId
         let finalDurationMs: number | undefined
+        let finalCostUsd: number | undefined
+        let finalModelUsage: unknown
+        let latestActualModel = model
         let thinkingStartedAt: number | null = null
         let thinkingTotalMs = 0
 
@@ -449,6 +454,9 @@ async function runClaudeStreamJson({ bin, args, model, cwd, signal, callbacks, i
 
             if (t === 'assistant') {
                 const msg = env.message as AnyObj | undefined
+                if (typeof msg?.model === 'string' && msg.model.trim()) {
+                    latestActualModel = msg.model.trim()
+                }
                 if (msg?.usage && typeof msg.usage === 'object') {
                     rememberPerCallUsage(msg.usage)
                 }
@@ -502,6 +510,9 @@ async function runClaudeStreamJson({ bin, args, model, cwd, signal, callbacks, i
                 if (typeof env.session_id === 'string') finalSessionId = env.session_id
                 // Cumulative whole-turn usage — for cost/onDone only, never the gauge.
                 if (env.usage) rememberFinalUsage(env.usage)
+                const reportedCost = finiteNonNegative(env.total_cost_usd ?? env.totalCostUsd)
+                if (reportedCost !== null) finalCostUsd = reportedCost
+                finalModelUsage = env.model_usage ?? env.modelUsage ?? finalModelUsage
                 if (typeof env.duration_ms === 'number') finalDurationMs = env.duration_ms
                 if (env.is_error && typeof env.result === 'string') {
                     callbacks.onError(env.result)
@@ -574,7 +585,12 @@ async function runClaudeStreamJson({ bin, args, model, cwd, signal, callbacks, i
             }
             callbacks.onDone({
                 sessionId: finalSessionId,
-                usage: finalUsage,
+                usage: attachBillingMetadata(finalUsage, claudeCodeBillingEntries({
+                    modelUsage: finalModelUsage,
+                    totalCostUsd: finalCostUsd,
+                    fallbackModel: latestActualModel,
+                    fallbackUsage: finalUsage,
+                })),
                 thinkingDuration: finalDurationMs !== undefined
                     ? finalDurationMs / 1000
                     : (thinkingTotalMs > 0 ? thinkingTotalMs / 1000 : undefined),
@@ -582,6 +598,93 @@ async function runClaudeStreamJson({ bin, args, model, cwd, signal, callbacks, i
             finish()
         })
     })
+}
+
+export function claudeCodeBillingEntries(args: {
+    modelUsage: unknown
+    totalCostUsd?: number
+    fallbackModel: string
+    fallbackUsage: unknown
+}): BillingUsageEntry[] {
+    const modelUsage = objectRecord(args.modelUsage)
+    const entries: BillingUsageEntry[] = []
+
+    for (const [model, value] of Object.entries(modelUsage)) {
+        const usage = objectRecord(value)
+        const input = integerOrZero(usage.inputTokens)
+        const output = integerOrZero(usage.outputTokens)
+        const cacheRead = integerOrZero(usage.cacheReadInputTokens)
+        const cacheCreate = integerOrZero(usage.cacheCreationInputTokens)
+        const totalInput = input + cacheRead + cacheCreate
+        const cost = finiteNonNegative(usage.costUSD)
+        entries.push({
+            provider: 'claude-code',
+            model,
+            requests: 1,
+            inputTokens: totalInput,
+            outputTokens: output,
+            thinkingTokens: 0,
+            cachedTokens: cacheRead + cacheCreate,
+            toolUseTokens: 0,
+            totalTokens: totalInput + output,
+            ...(cost !== null ? {
+                apiEquivalentCostUsd: cost,
+                costSource: 'provider-estimate' as const,
+                costAccuracy: 'provider' as const,
+                pricingSource: 'https://code.claude.com/docs/en/agent-sdk/cost-tracking',
+            } : {}),
+        })
+    }
+
+    const totalCost = finiteNonNegative(args.totalCostUsd)
+    if (entries.length > 0) {
+        if (totalCost !== null) {
+            const perModelTotal = entries.reduce((sum, entry) => sum + (entry.apiEquivalentCostUsd ?? 0), 0)
+            entries[0].apiEquivalentCostUsd = Math.max(0, (entries[0].apiEquivalentCostUsd ?? 0) + totalCost - perModelTotal)
+            entries[0].costSource = 'provider-estimate'
+            entries[0].costAccuracy = 'provider'
+            entries[0].pricingSource = 'https://code.claude.com/docs/en/agent-sdk/cost-tracking'
+        }
+        return entries
+    }
+
+    const usage = normalizeUsage('claude-code', args.fallbackUsage)
+    const hasUsage = [usage.inputTokens, usage.outputTokens, usage.cachedTokens, usage.totalTokens]
+        .some(value => typeof value === 'number')
+    if (!hasUsage && totalCost === null) return []
+
+    return [{
+        provider: 'claude-code',
+        model: args.fallbackModel.trim() || 'default',
+        requests: 1,
+        inputTokens: usage.inputTokens ?? 0,
+        outputTokens: usage.outputTokens ?? 0,
+        thinkingTokens: 0,
+        cachedTokens: usage.cachedTokens ?? 0,
+        toolUseTokens: 0,
+        totalTokens: usage.totalTokens ?? 0,
+        ...(totalCost !== null ? {
+            apiEquivalentCostUsd: totalCost,
+            costSource: 'provider-estimate' as const,
+            costAccuracy: 'provider' as const,
+            pricingSource: 'https://code.claude.com/docs/en/agent-sdk/cost-tracking',
+        } : {}),
+    }]
+}
+
+function objectRecord(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : {}
+}
+
+function finiteNonNegative(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+}
+
+function integerOrZero(value: unknown): number {
+    const number = finiteNonNegative(value)
+    return number === null ? 0 : Math.floor(number)
 }
 
 // ---------------------------------------------------------------------------

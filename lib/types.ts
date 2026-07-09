@@ -274,9 +274,9 @@ export interface Message {
     toolCalls?: boolean
   }
   /**
-   * Client-only: a steering send whose delivery (live injection or queued
-   * follow-up run) hasn't settled yet — rendered as a muted italic bubble.
-   * Stripped before any persistence; never stored.
+   * Legacy client-only steering marker. New clients keep pending delivery in
+   * ChatState.pendingFollowUps so server echoes cannot erase it. Still stripped
+   * before persistence for compatibility with optimistic rows from older tabs.
    */
   steerPending?: boolean
   timestamp: number

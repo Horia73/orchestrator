@@ -5,6 +5,7 @@ import net from 'net'
 import path from 'path'
 
 import next from 'next'
+import { resolveProjectRunsRoot } from './project-run-paths.mjs'
 
 const projectDir = process.cwd()
 const host = resolveHost()
@@ -215,7 +216,7 @@ function buildUpgradeRequest(req, upstreamPath, previewPort) {
 }
 
 function readRunState(runId) {
-  const stateRoot = path.join(projectDir, '.orchestrator', 'project-runs')
+  const stateRoot = resolveProjectRunsRoot(projectDir)
   const statePath = path.join(stateRoot, runId, 'run-state.json')
   const resolved = path.resolve(statePath)
   if (!resolved.startsWith(`${path.resolve(stateRoot)}${path.sep}`)) return null

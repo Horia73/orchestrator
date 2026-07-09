@@ -24,6 +24,7 @@ import {
 import type { ContentSegment, ReasoningEntry } from '@/lib/types'
 import { normalizeUsage } from './usage-mapper'
 import { estimateCost, type PricingState } from './cost'
+import { estimateCliApiEquivalentAggregate } from './api-equivalent'
 import { getEffectiveRegistry } from '@/lib/models/registry'
 
 // ---------------------------------------------------------------------------
@@ -678,6 +679,53 @@ type ModelUsageEntry = BillingUsageEntry & {
     toolUseTokens: number
 }
 
+interface UsageCostEstimate {
+    usd: number
+    notionalUsd: number
+    state: PricingState
+    costSource: UsageByModel['costSource']
+    costAccuracy: UsageByModel['costAccuracy']
+    pricingSource: string | null
+    pricingAsOf: string | null
+}
+
+function estimateUsageCost(
+    pricing: Parameters<typeof estimateCost>[0],
+    usage: ModelUsageEntry
+): UsageCostEstimate {
+    if (typeof usage.apiEquivalentCostUsd === 'number' && Number.isFinite(usage.apiEquivalentCostUsd)) {
+        return {
+            usd: 0,
+            notionalUsd: Math.max(0, usage.apiEquivalentCostUsd),
+            state: 'subscription',
+            costSource: usage.costSource ?? null,
+            costAccuracy: usage.costAccuracy ?? null,
+            pricingSource: usage.pricingSource ?? null,
+            pricingAsOf: usage.pricingAsOf ?? null,
+        }
+    }
+
+    const registryCost = estimateCost(pricing, usage)
+    if (registryCost.state === 'priced' || registryCost.notionalUsd > 0) {
+        return { ...registryCost, costSource: null, costAccuracy: null, pricingSource: null, pricingAsOf: null }
+    }
+
+    const cliEstimate = estimateCliApiEquivalentAggregate(usage.provider, usage.model, usage)
+    if (cliEstimate) {
+        return {
+            usd: 0,
+            notionalUsd: cliEstimate.usd,
+            state: 'subscription',
+            costSource: cliEstimate.costSource,
+            costAccuracy: cliEstimate.costAccuracy,
+            pricingSource: cliEstimate.pricingSource,
+            pricingAsOf: cliEstimate.pricingAsOf,
+        }
+    }
+
+    return { ...registryCost, costSource: null, costAccuracy: null, pricingSource: null, pricingAsOf: null }
+}
+
 function estimateRowCost(row: RequestLogRow, registry: EffectiveRegistrySnapshot): RowCostSummary {
     const entries = modelUsageEntries(row)
     let usd = 0
@@ -687,7 +735,7 @@ function estimateRowCost(row: RequestLogRow, registry: EffectiveRegistrySnapshot
 
     for (const entry of entries) {
         const pricing = registry[entry.provider]?.models[entry.model]?.pricing ?? null
-        const cost = estimateCost(pricing, entry)
+        const cost = estimateUsageCost(pricing, entry)
         usd += cost.usd
         if (cost.state === 'unknown') hasUnknown = true
         if (cost.state === 'subscription') {
@@ -728,6 +776,13 @@ function normalizeBillingEntry(entry: BillingUsageEntry): ModelUsageEntry {
         cachedTokens: Math.max(0, Math.floor(entry.cachedTokens || 0)),
         toolUseTokens: Math.max(0, Math.floor(entry.toolUseTokens || 0)),
         totalTokens: Math.max(0, Math.floor(entry.totalTokens || 0)),
+        ...(typeof entry.apiEquivalentCostUsd === 'number' && Number.isFinite(entry.apiEquivalentCostUsd)
+            ? { apiEquivalentCostUsd: Math.max(0, entry.apiEquivalentCostUsd) }
+            : {}),
+        ...(entry.costSource ? { costSource: entry.costSource } : {}),
+        ...(entry.costAccuracy ? { costAccuracy: entry.costAccuracy } : {}),
+        ...(entry.pricingSource ? { pricingSource: entry.pricingSource } : {}),
+        ...(entry.pricingAsOf ? { pricingAsOf: entry.pricingAsOf } : {}),
     }
 }
 
@@ -736,6 +791,18 @@ function mergePricingState(a: PricingState, b: PricingState): PricingState {
     if (a === 'unknown' || b === 'unknown') return 'unknown'
     if (a === 'priced' || b === 'priced') return 'priced'
     return 'subscription'
+}
+
+function mergeCostMetadata<T extends string>(a: T | 'mixed' | null, b: T | 'mixed' | null): T | 'mixed' | null {
+    if (a === null) return b
+    if (b === null || a === b) return a
+    return 'mixed'
+}
+
+function mergeExactMetadata(a: string | null, b: string | null): string | null {
+    if (a === null) return b
+    if (b === null || a === b) return a
+    return null
 }
 
 function computeTotals(rows: RequestLogRow[]): UsageTotals {
@@ -812,6 +879,7 @@ function computeDaily(
                 thinkingTokens: 0,
                 cachedTokens: 0,
                 estimatedCostUsd: 0,
+                subscriptionNotionalUsd: 0,
             })
         }
     }
@@ -827,6 +895,7 @@ function computeDaily(
             thinkingTokens: 0,
             cachedTokens: 0,
             estimatedCostUsd: 0,
+            subscriptionNotionalUsd: 0,
         }
         bucket.requests += 1
         bucket.inputTokens += row.inputTokens ?? 0
@@ -835,6 +904,7 @@ function computeDaily(
         bucket.cachedTokens += row.cachedTokens ?? 0
         const cost = estimateRowCost(row, registry)
         bucket.estimatedCostUsd += cost.usd
+        bucket.subscriptionNotionalUsd += cost.subscriptionNotionalUsd
         buckets.set(key, bucket)
     }
 
@@ -849,7 +919,7 @@ function computeByModel(rows: RequestLogRow[]): UsageByModel[] {
             const key = `${usage.provider}:${usage.model}`
             const existing = map.get(key)
             const pricing = registry[usage.provider]?.models[usage.model]?.pricing ?? null
-            const cost = estimateCost(pricing, usage)
+            const cost = estimateUsageCost(pricing, usage)
 
             if (!existing) {
                 map.set(key, {
@@ -867,6 +937,10 @@ function computeByModel(rows: RequestLogRow[]): UsageByModel[] {
                     avgThinkingMs: 0,
                     lastUsedAt: row.startedAt,
                     pricingState: cost.state,
+                    costSource: cost.costSource,
+                    costAccuracy: cost.costAccuracy,
+                    pricingSource: cost.pricingSource,
+                    pricingAsOf: cost.pricingAsOf,
                     _thinkingMsSum: row.thinkingMs ?? 0,
                     _thinkingMsCount: row.thinkingMs !== null ? 1 : 0,
                 })
@@ -880,6 +954,10 @@ function computeByModel(rows: RequestLogRow[]): UsageByModel[] {
                 existing.estimatedCostUsd += cost.usd
                 existing.notionalUsd += cost.notionalUsd
                 existing.pricingState = mergePricingState(existing.pricingState, cost.state)
+                existing.costSource = mergeCostMetadata(existing.costSource, cost.costSource)
+                existing.costAccuracy = mergeCostMetadata(existing.costAccuracy, cost.costAccuracy)
+                existing.pricingSource = mergeExactMetadata(existing.pricingSource, cost.pricingSource)
+                existing.pricingAsOf = mergeExactMetadata(existing.pricingAsOf, cost.pricingAsOf)
                 existing.lastUsedAt = Math.max(existing.lastUsedAt, row.startedAt)
                 if (row.thinkingMs !== null) {
                     existing._thinkingMsSum += row.thinkingMs
@@ -911,6 +989,7 @@ function computeByAgent(rows: RequestLogRow[]): UsageByAgent[] {
                 outputTokens: row.outputTokens ?? 0,
                 thinkingTokens: row.thinkingTokens ?? 0,
                 estimatedCostUsd: cost.usd,
+                subscriptionNotionalUsd: cost.subscriptionNotionalUsd,
             })
         } else {
             existing.requests++
@@ -919,6 +998,7 @@ function computeByAgent(rows: RequestLogRow[]): UsageByAgent[] {
             existing.outputTokens += row.outputTokens ?? 0
             existing.thinkingTokens += row.thinkingTokens ?? 0
             existing.estimatedCostUsd += cost.usd
+            existing.subscriptionNotionalUsd += cost.subscriptionNotionalUsd
         }
     }
     return [...map.values()].sort((a, b) => b.requests - a.requests)
@@ -1099,6 +1179,13 @@ function parseBillingEntry(value: unknown): BillingUsageEntry | null {
     const provider = typeof raw.provider === 'string' ? raw.provider.trim() : ''
     const model = typeof raw.model === 'string' ? raw.model.trim() : ''
     if (!provider || !model) return null
+    const apiEquivalentCostUsd = nonNegativeNumber(raw.apiEquivalentCostUsd)
+    const costSource = raw.costSource === 'provider-estimate' || raw.costSource === 'api-pricing'
+        ? raw.costSource
+        : undefined
+    const costAccuracy = raw.costAccuracy === 'provider' || raw.costAccuracy === 'per-call' || raw.costAccuracy === 'aggregate'
+        ? raw.costAccuracy
+        : undefined
     return {
         provider,
         model,
@@ -1109,6 +1196,15 @@ function parseBillingEntry(value: unknown): BillingUsageEntry | null {
         cachedTokens: nonNegativeInt(raw.cachedTokens, 0),
         toolUseTokens: nonNegativeInt(raw.toolUseTokens, 0),
         totalTokens: nonNegativeInt(raw.totalTokens, 0),
+        ...(apiEquivalentCostUsd !== null ? { apiEquivalentCostUsd } : {}),
+        ...(costSource ? { costSource } : {}),
+        ...(costAccuracy ? { costAccuracy } : {}),
+        ...(typeof raw.pricingSource === 'string' && raw.pricingSource.trim()
+            ? { pricingSource: raw.pricingSource.trim() }
+            : {}),
+        ...(typeof raw.pricingAsOf === 'string' && raw.pricingAsOf.trim()
+            ? { pricingAsOf: raw.pricingAsOf.trim() }
+            : {}),
     }
 }
 
@@ -1161,6 +1257,10 @@ function sumBillingBreakdown(entries: BillingUsageEntry[]): Omit<BillingUsageEnt
 function nonNegativeInt(value: unknown, fallback: number): number {
     if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return fallback
     return Math.floor(value)
+}
+
+function nonNegativeNumber(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
 }
 
 function parseToolLogRow(r: RawToolLogRow): ToolLogRow {

@@ -60,10 +60,10 @@ export interface ExposureOptions {
 const DEFAULT_ACTIVATED_BY_AGENT: Record<string, readonly string[]> = {
     // Inbox replies post to the inbox and frequently schedule follow-ups.
     'inbox-agent': ['scheduling', 'inbox'],
-    // Smart Monitor's whole job is monitoring; give wakes the doctrine + watch
-    // tools up front, plus the inbox primitives (notify_inbox / set_task_state /
-    // monitor_wake_feedback) every wake relies on, without a hop.
-    'smart-monitor-agent': ['monitoring', 'inbox'],
+    // Exact active watch records and the wake-specific monitoring policy are
+    // already in the wake packet. Only the Inbox/task-state primitives need to
+    // be active; watch lifecycle tools belong to user conversations.
+    'smart-monitor-agent': ['inbox'],
 }
 
 /** Capability ids pre-activated for an agent without an explicit activation call. */
@@ -348,7 +348,7 @@ export function describeActivatedIntegration(capabilityId: string): string {
             parts.push(`${integration.label} has no operational tools or doctrine to load (setup/lifecycle only).`)
         }
         if (integration.doctrine) {
-            parts.push(`The full doctrine for ${integration.id} (schema, flow, cross-integration recipes) is now in your prompt under <active_capability_doctrines> from the next turn onward — read it there before composing.`)
+            parts.push(`The full doctrine for ${integration.id} (schema, flow, cross-integration recipes) is included in this activation result for immediate use and remains under <active_capability_doctrines> on later turns.`)
         }
         return parts.join(' ')
     }
@@ -360,7 +360,7 @@ export function describeActivatedIntegration(capabilityId: string): string {
             ? `${subsystem.label} tools are now active for this conversation: ${toolIds.join(', ')}. Use the direct tool when visible, or RunActivatedIntegrationTool with a listed tool_id and arguments in this same turn.`
             : ''
         const doctrinePart = subsystem.doctrine
-            ? `${subsystem.label} doctrine is now loaded — the full doctrine for ${subsystem.id} (schema, flow, gotchas) is in your prompt under <active_capability_doctrines> from the next turn onward; read it there before composing.`
+            ? `${subsystem.label} doctrine is now loaded — the full doctrine for ${subsystem.id} (schema, flow, gotchas) is included in this activation result for immediate use and remains under <active_capability_doctrines> on later turns.`
             : ''
         return [toolPart, doctrinePart].filter(Boolean).join(' ') || `${subsystem.label} activated.`
     }

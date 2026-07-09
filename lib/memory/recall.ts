@@ -44,10 +44,13 @@ import { createHash } from "crypto"
 import type { MemoryRecallHit } from "@/lib/types"
 import db from "@/lib/db"
 import { stripArtifactBlocksForPreview } from "@/lib/artifacts/text"
-import { getConfiguredTimezone, getMemoryEmbeddingSettings } from "@/lib/config"
+import { getMemoryEmbeddingSettings } from "@/lib/config"
 import { MAX_CONTEXT_FILE_CHARS } from "@/lib/ai/prompts/shared"
+import {
+  MAX_PLAYBOOKS_CONTEXT_CHARS,
+  MAX_USER_CONTEXT_CHARS,
+} from "@/lib/memory/recent-context"
 import { activeRuntimePaths } from "@/lib/runtime-paths"
-import { dateStampInTimezone } from "@/lib/timezone"
 import {
   embedAsset,
   embedDocuments,
@@ -294,14 +297,24 @@ const INDEXED_DURABLE_FILES = [
   "PLAYBOOKS.md",
 ]
 
-// The HOT tier the prompt builder injects in full every ordinary orchestrator
-// turn (lib/ai/prompts/shared.ts buildWorkspaceContextFiles). The silent recall
-// pass excludes these so it only surfaces *new* signal — see inContextSources,
-// which also re-enables a hot file whose tail overflowed the per-file budget.
+// The HOT tier the prompt builder injects every ordinary orchestrator turn
+// (lib/ai/prompts/shared.ts buildWorkspaceContextFiles). MEMORY is full within
+// its safety cap; larger USER/PLAYBOOKS files use bounded extractive views. The
+// silent recall pass excludes a source only when its raw content fully fits the
+// corresponding prompt-view budget — see inContextSources.
 // MEMORY_ARCHIVE.md is the recall-only cold tier and MONITORS.md is injected
 // only on the Smart Monitor wake (not this chat recall path), so NEITHER is hot
-// here: both must stay recall-reachable.
-const HOT_DURABLE_SOURCES = ["USER.md", "MEMORY.md", "PLAYBOOKS.md"]
+// here: both must stay recall-reachable. Recent MEMORY_DAY files are also kept
+// recall-reachable because the prompt now carries only a bounded extractive
+// orientation view, not the complete raw ledger.
+const HOT_DURABLE_SOURCE_BUDGETS = new Map<string, number>([
+  ["USER.md", Math.min(MAX_CONTEXT_FILE_CHARS, MAX_USER_CONTEXT_CHARS)],
+  ["MEMORY.md", MAX_CONTEXT_FILE_CHARS],
+  [
+    "PLAYBOOKS.md",
+    Math.min(MAX_CONTEXT_FILE_CHARS, MAX_PLAYBOOKS_CONTEXT_CHARS),
+  ],
+])
 const MEMORY_DAY_DIR = "MEMORY_DAY"
 const CONVERSATION_SOURCE_PREFIX = "conversation:"
 const MAX_CONVERSATION_ATTACHMENT_NAMES = 12
@@ -613,26 +626,23 @@ export function listMemorySources(): string[] {
 /**
  * Sources already fully in the prompt this turn — excluded from the silent pass
  * so it only surfaces *new* signal. The hot durable files (USER/MEMORY/PLAYBOOKS)
- * plus the last 3 configured-local days are injected by the prompt builder.
+ * are injected by the prompt builder either fully or as explicit compact views.
  *
- * Crucially, a hot file is only excluded when it FITS the per-file budget. If it
- * overflowed (the prompt builder clips the tail with a `[truncated]` marker), the
- * dropped tail is NOT in the prompt, so we leave the source recall-eligible and
- * let semantic recall surface the overflow on demand. Nothing is silently lost.
+ * Crucially, a hot file is only excluded when its raw content FITS that source's
+ * prompt-view budget. If it is compacted or clipped, the omitted raw detail is
+ * NOT fully in the prompt, so the source remains recall-eligible. Nothing is
+ * silently lost.
  * MONITORS.md and MEMORY_ARCHIVE.md are deliberately absent here (cold tier).
+ * MEMORY_DAY is deliberately absent too: recent days appear only as compact
+ * extractive views, so their complete raw entries must remain recall-eligible.
  * Exported for the recall smoke test.
  */
 export function inContextSources(): Set<string> {
   const set = new Set<string>()
-  for (const source of HOT_DURABLE_SOURCES) {
+  for (const [source, promptBudget] of HOT_DURABLE_SOURCE_BUDGETS) {
     const content = readSource(source)
     if (content === null) continue
-    if (content.length <= MAX_CONTEXT_FILE_CHARS) set.add(source)
-  }
-  const timezone = getConfiguredTimezone()
-  for (let back = 0; back <= 2; back++) {
-    const stamp = dateStampInTimezone(Date.now() - back * 86_400_000, timezone)
-    set.add(`${MEMORY_DAY_DIR}/${stamp}.md`)
+    if (content.length <= promptBudget) set.add(source)
   }
   return set
 }

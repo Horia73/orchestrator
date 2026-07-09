@@ -147,7 +147,7 @@ export async function registerRuntime(): Promise<void> {
     // Arm the nightly Memory reflection system task. Idempotent — creates the
     // single "Memory reflection" agent wake on first boot and reconciles its
     // schedule/prompt on each boot. Stays enabled unconditionally; the heavy
-    // logic is model-owned in <memory_reflection_protocol>, not in code.
+    // logic is model-owned in the task's dedicated wake prompt, not in code.
     try {
         const { wireMemoryReflection } = await import('@/lib/monitoring/memory-reflection-adapter')
         await forEachProfile(() => wireMemoryReflection())

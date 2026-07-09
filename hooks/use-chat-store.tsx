@@ -24,7 +24,7 @@ import {
   addConversationMessageRequest,
   createConversationRequest,
   deleteConversationRequest,
-  fetchActiveChatStream,
+  fetchChatRuntimeState,
   fetchActiveChatStreams,
   fetchConversationMessageDetails,
   fetchConversationMessagePage,
@@ -72,6 +72,7 @@ import {
   showChatCompletionNotification,
   sleep,
   sleepUntilOnline,
+  shouldSendAsSteering,
   unreadSetsEqual,
   writeUnreadConversationIds,
   type ActiveChatStream,
@@ -223,6 +224,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   // as the same stall.
   const streamPostInFlightRef = React.useRef(false)
   const streamStallRequestedRef = React.useRef(false)
+  const steeringGenerationRef = React.useRef(0)
   // Single-flight per conversation: focus/online/poll triggers can all ask
   // for recovery at once; they join the in-flight run instead of stacking
   // loops that re-dispatch streaming state over each other.
@@ -256,6 +258,27 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       options?: SendMessageOptions
     ) => Promise<string | null>) | null
   >(null)
+  const drainNextFollowUp = React.useCallback((conversationId: string) => {
+    if (
+      streamingRef.current ||
+      activeChatStreamsRef.current[conversationId]
+    ) {
+      return
+    }
+    const queue = followUpQueuesRef.current.get(conversationId)
+    if (!queue?.length) return
+    const next = queue.shift()!
+    if (queue.length === 0) followUpQueuesRef.current.delete(conversationId)
+    window.setTimeout(() => {
+      void sendMessageToConversationRef.current?.(
+        conversationId,
+        next.userMessage.content,
+        undefined,
+        next.userMessage.attachments,
+        { internalFollowUp: next, activateConversation: false }
+      )
+    }, 0)
+  }, [])
   const conversationLoadStateRef = React.useRef<
     Record<string, ConversationLoadState>
   >({})
@@ -635,6 +658,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   }, [pathname, detachStreaming])
 
   const stopStreaming = React.useCallback(() => {
+    steeringGenerationRef.current += 1
     const conversationId = activeConversationIdRef.current
     const stream = conversationId
       ? activeChatStreamsRef.current[conversationId]
@@ -931,7 +955,14 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   const checkServerStreaming = React.useCallback(
     async (conversationId: string): Promise<ActiveChatStream | null> => {
       if (pathname?.startsWith("/profiles")) return null
-      return fetchActiveChatStream(conversationId)
+      const runtime = await fetchChatRuntimeState(conversationId)
+      if (!runtime) return null
+      dispatch({
+        type: "SYNC_PENDING_FOLLOWUPS",
+        conversationId,
+        followUps: runtime.followUps,
+      })
+      return runtime.stream
     },
     [pathname]
   )
@@ -995,7 +1026,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           refreshConversationMessages(conversationId),
           checkServerStreaming(conversationId),
         ])
-        // fetchActiveChatStream swallows network errors into null, so the
+        // fetchChatRuntimeState swallows network errors into null, so the
         // messages fetch (which rejects on failure) is the reachability
         // canary. Without it, a dead radio read as "server says nothing is
         // running" and recovery marked live runs as aborted.
@@ -1568,15 +1599,32 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             data.payload.conversationId,
             "after stream start for unknown conversation"
           )
+          const stream: ActiveChatStream = {
+            conversationId: data.payload.conversationId,
+            messageId: data.payload.messageId,
+            startedAt: data.payload.startedAt,
+          }
+          activeChatStreamsRef.current = {
+            ...activeChatStreamsRef.current,
+            [stream.conversationId]: stream,
+          }
+          dispatch({ type: "CHAT_STREAM_STARTED", stream })
           dispatch({
-            type: "CHAT_STREAM_STARTED",
-            stream: {
-              conversationId: data.payload.conversationId,
-              messageId: data.payload.messageId,
-              startedAt: data.payload.startedAt,
-            },
+            type: "SETTLE_FIRST_CLAIMED_FOLLOWUP",
+            conversationId: stream.conversationId,
           })
         } else if (data.type === "chat_stream_ended") {
+          const current =
+            activeChatStreamsRef.current[data.payload.conversationId]
+          if (
+            !data.payload.messageId ||
+            !current ||
+            current.messageId === data.payload.messageId
+          ) {
+            const activeChatStreams = { ...activeChatStreamsRef.current }
+            delete activeChatStreams[data.payload.conversationId]
+            activeChatStreamsRef.current = activeChatStreams
+          }
           dispatch({
             type: "CHAT_STREAM_ENDED",
             conversationId: data.payload.conversationId,
@@ -1595,6 +1643,39 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                 : undefined
             )
           }
+          window.setTimeout(
+            () => drainNextFollowUp(data.payload.conversationId),
+            0
+          )
+        } else if (data.type === "chat_followup_queued") {
+          if (data.payload.source === "user") {
+            dispatch({
+              type: "UPSERT_PENDING_FOLLOWUP",
+              conversationId: data.payload.conversationId,
+              followUp: {
+                followUpId: data.payload.followUpId,
+                userMessageId: data.payload.userMessageId,
+                source: "user",
+                queuedAt:
+                  typeof data.payload.queuedAt === "number"
+                    ? data.payload.queuedAt
+                    : Date.now(),
+                status: "queued",
+              },
+            })
+          }
+        } else if (data.type === "chat_followup_claimed") {
+          dispatch({
+            type: "SET_PENDING_FOLLOWUP_STATUS",
+            conversationId: data.payload.conversationId,
+            userMessageId: data.payload.userMessageId,
+            status: "claimed",
+          })
+        } else if (data.type === "chat_followups_cleared") {
+          dispatch({
+            type: "CLEAR_STEER_PENDING",
+            conversationId: data.payload.conversationId,
+          })
         }
       } catch (err) {
         console.error("Failed to parse SSE event", err)
@@ -1653,6 +1734,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     reconcileUnknownConversation,
     recoverInterruptedStream,
     refreshConversationMessages,
+    drainNextFollowUp,
   ])
 
   const newChat = React.useCallback(() => {
@@ -1906,16 +1988,18 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     ): Promise<string | null> => {
       const followUpClaim = options?.internalFollowUp ?? null
       // Steering: a send while this conversation's turn is still streaming is
-      // queued server-side and runs as the next turn — not blocked, and not
-      // interrupting the in-flight run.
-      const isSteering = streamingRef.current && !followUpClaim
-      if (
-        isSteering &&
-        (!targetConversationId ||
-          streamingConversationIdRef.current !== targetConversationId)
-      ) {
-        return null
-      }
+      // routed through /api/chat/steer even when this tab only OBSERVES the
+      // server run (recovery, refresh, another tab). Reader ownership is not
+      // the source of truth for whether a turn exists.
+      const isSteering = shouldSendAsSteering({
+        targetConversationId,
+        hasInternalFollowUp: Boolean(followUpClaim),
+        ownsStream: streamingRef.current,
+        ownedConversationId: streamingConversationIdRef.current,
+        isStreaming: isStreamingStateRef.current,
+        streamingConversationId: streamingConversationIdRef.current,
+        activeChatStreams: activeChatStreamsRef.current,
+      })
 
       // Use pre-uploaded attachments or upload new files
       let attachments: import("@/lib/types").Attachment[] | undefined =
@@ -1938,10 +2022,6 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             role: "user",
             content,
             attachments: finalAttachments,
-            // Pending-steering look (muted italic bubble) until delivery
-            // settles: live injection, queued-run drain, or normal-send
-            // fallback all clear it.
-            ...(isSteering ? { steerPending: true } : {}),
             timestamp: Date.now(),
           }
 
@@ -1949,10 +2029,22 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       let allMessages: Message[]
 
       if (isSteering && conversationId) {
+        const steeringGeneration = steeringGenerationRef.current
         dispatch({
           type: "ADD_USER_MESSAGE",
           conversationId,
           message: userMessage,
+        })
+        dispatch({
+          type: "UPSERT_PENDING_FOLLOWUP",
+          conversationId,
+          followUp: {
+            followUpId: userMessage.id,
+            userMessageId: userMessage.id,
+            source: "user",
+            queuedAt: userMessage.timestamp,
+            status: "submitting",
+          },
         })
         markConversationRead(conversationId)
         // Short retry loop — a flaky first POST must not drop the follow-up,
@@ -1960,12 +2052,21 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         // abort the in-flight run).
         let steer: Awaited<ReturnType<typeof steerChatMessage>> = null
         for (let attempt = 0; attempt < 4 && !steer; attempt++) {
+          if (steeringGenerationRef.current !== steeringGeneration) break
           if (attempt > 0) {
             await new Promise((resolve) =>
               setTimeout(resolve, Math.min(4_000, 500 * 2 ** attempt))
             )
           }
           steer = await steerChatMessage(conversationId, userMessage)
+        }
+        if (steeringGenerationRef.current !== steeringGeneration) {
+          dispatch({
+            type: "REMOVE_PENDING_FOLLOWUP",
+            conversationId,
+            userMessageId: userMessage.id,
+          })
+          return conversationId
         }
         if (steer?.steered) {
           // Delivered INTO the running turn (provider steering). Swap the
@@ -1982,19 +2083,30 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
               timestamp: Date.now(),
             },
           })
+          dispatch({
+            type: "REMOVE_PENDING_FOLLOWUP",
+            conversationId,
+            userMessageId: userMessage.id,
+          })
           return conversationId
         }
         if (steer?.queued && steer.followUpId) {
           const queue = followUpQueuesRef.current.get(conversationId) ?? []
-          queue.push({ followUpId: steer.followUpId, userMessage })
-          followUpQueuesRef.current.set(conversationId, queue)
-          if (options?.activateConversation !== false) {
-            publishLocalSubmitAnchor({
-              conversationId,
-              messageId: userMessage.id,
-              submittedAt: userMessage.timestamp,
-            })
+          if (!queue.some((entry) => entry.followUpId === steer.followUpId)) {
+            queue.push({ followUpId: steer.followUpId, userMessage })
           }
+          followUpQueuesRef.current.set(conversationId, queue)
+          dispatch({
+            type: "UPSERT_PENDING_FOLLOWUP",
+            conversationId,
+            followUp: {
+              followUpId: steer.followUpId,
+              userMessageId: userMessage.id,
+              source: "user",
+              queuedAt: userMessage.timestamp,
+              status: "queued",
+            },
+          })
           return conversationId
         }
         if (!steer) {
@@ -2006,6 +2118,11 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             type: "ADD_USER_MESSAGE",
             conversationId,
             message: orphan,
+          })
+          dispatch({
+            type: "REMOVE_PENDING_FOLLOWUP",
+            conversationId,
+            userMessageId: userMessage.id,
           })
           void postWithRetry(() =>
             addConversationMessageRequest(conversationId!, orphan)
@@ -2019,6 +2136,11 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           type: "ADD_USER_MESSAGE",
           conversationId,
           message: userMessage,
+        })
+        dispatch({
+          type: "REMOVE_PENDING_FOLLOWUP",
+          conversationId,
+          userMessageId: userMessage.id,
         })
       }
 
@@ -2079,6 +2201,12 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         // time, so without this the follow-up would sit ABOVE the answer it
         // followed. The server does the same on claim (authoritative copy).
         const restamped: Message = { ...userMessage, timestamp: Date.now() }
+        dispatch({
+          type: "SET_PENDING_FOLLOWUP_STATUS",
+          conversationId,
+          userMessageId: userMessage.id,
+          status: "claimed",
+        })
         dispatch({
           type: "ADD_USER_MESSAGE",
           conversationId,
@@ -2217,6 +2345,108 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
               .catch(() => ({ error: "Unknown error" }))
             if (
               response.status === 409 &&
+              err?.code === "stream_already_active" &&
+              typeof err.activeMessageId === "string"
+            ) {
+              streamDoneRef.current = true
+              const activeStream: ActiveChatStream = {
+                conversationId: finalConvId,
+                messageId: err.activeMessageId,
+                startedAt:
+                  typeof err.activeStartedAt === "number"
+                    ? err.activeStartedAt
+                    : Date.now(),
+              }
+              activeChatStreamsRef.current = {
+                ...activeChatStreamsRef.current,
+                [finalConvId]: activeStream,
+              }
+              thinkingStartRef.current = activeStream.startedAt
+              dispatch({
+                type: "SET_STREAMING",
+                isStreaming: true,
+                conversationId: finalConvId,
+                messageId: activeStream.messageId,
+                status: recoveryStreamingStatus(),
+              })
+              dispatch({ type: "CHAT_STREAM_STARTED", stream: activeStream })
+              void recoverInterruptedStream(
+                finalConvId,
+                activeStream.messageId
+              )
+              return
+            }
+            if (
+              response.status === 409 &&
+              (err?.code === "stream_active_queued" ||
+                err?.code === "followup_deferred") &&
+              typeof err.followUpId === "string" &&
+              typeof err.activeMessageId === "string"
+            ) {
+              const queuedMessage = followUpClaim?.userMessage ?? userMessage
+              const queue = followUpQueuesRef.current.get(finalConvId) ?? []
+              if (!queue.some((entry) => entry.followUpId === err.followUpId)) {
+                const queuedEntry = {
+                  followUpId: err.followUpId,
+                  userMessage: queuedMessage,
+                }
+                if (followUpClaim) queue.unshift(queuedEntry)
+                else queue.push(queuedEntry)
+              }
+              followUpQueuesRef.current.set(finalConvId, queue)
+              dispatch({
+                type: "UPSERT_PENDING_FOLLOWUP",
+                conversationId: finalConvId,
+                followUp: {
+                  followUpId: err.followUpId,
+                  userMessageId: queuedMessage.id,
+                  source: "user",
+                  queuedAt:
+                    typeof err.queuedAt === "number"
+                      ? err.queuedAt
+                      : queuedMessage.timestamp,
+                  status: "queued",
+                },
+              })
+
+              streamDoneRef.current = true
+              streamingRef.current = false
+              clientStreamMessageIdRef.current = null
+              abortControllerRef.current = null
+              const activeStream: ActiveChatStream = {
+                conversationId: finalConvId,
+                messageId: err.activeMessageId,
+                startedAt:
+                  typeof err.activeStartedAt === "number"
+                    ? err.activeStartedAt
+                    : Date.now(),
+              }
+              activeChatStreamsRef.current = {
+                ...activeChatStreamsRef.current,
+                [finalConvId]: activeStream,
+              }
+              thinkingStartRef.current = activeStream.startedAt
+              dispatch({
+                type: "CHAT_STREAM_ENDED",
+                conversationId: finalConvId,
+                messageId: assistantMsgId,
+              })
+              dispatch({
+                type: "SET_STREAMING",
+                isStreaming: true,
+                conversationId: finalConvId,
+                messageId: activeStream.messageId,
+                status: recoveryStreamingStatus(),
+              })
+              dispatch({ type: "CHAT_STREAM_STARTED", stream: activeStream })
+              void recoverInterruptedStream(
+                finalConvId,
+                activeStream.messageId
+              )
+              return
+            }
+            if (
+              response.status === 409 &&
               err?.code === "followup_already_claimed"
             ) {
               // The server-side sweep beat us to this follow-up — its wake
@@ -2229,12 +2459,27 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                 conversationId: finalConvId,
                 messageId: assistantMsgId,
               })
+              if (followUpClaim) {
+                dispatch({
+                  type: "REMOVE_PENDING_FOLLOWUP",
+                  conversationId: finalConvId,
+                  userMessageId: followUpClaim.userMessage.id,
+                })
+              }
               return
             }
             throw new ChatFetchError(
               err.error || `HTTP ${response.status}`,
               typeof err.chatMessage === "string" ? err.chatMessage : undefined
             )
+          }
+
+          if (followUpClaim) {
+            dispatch({
+              type: "REMOVE_PENDING_FOLLOWUP",
+              conversationId: finalConvId,
+              userMessageId: followUpClaim.userMessage.id,
+            })
           }
 
           const reader = response.body?.getReader()
@@ -3162,28 +3407,16 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           }
         }
         // Steering drain: the turn settled — run the next queued follow-up.
-        // Stop clears the queue first, so a user Stop never chains. Each
-        // drained turn re-enters this finally, draining one entry at a time.
-        const queue = followUpQueuesRef.current.get(finalConvId)
-        if (queue && queue.length > 0 && !streamingRef.current) {
-          const next = queue.shift()!
-          if (queue.length === 0) followUpQueuesRef.current.delete(finalConvId)
-          window.setTimeout(() => {
-            void sendMessageToConversationRef.current?.(
-              finalConvId,
-              next.userMessage.content,
-              undefined,
-              next.userMessage.attachments,
-              { internalFollowUp: next, activateConversation: false }
-            )
-          }, 0)
-        }
+        // The helper also checks server-observed streams, so an ownership handoff
+        // cannot accidentally start over (and abort) the turn still in progress.
+        drainNextFollowUp(finalConvId)
       })
       return finalConvId
     },
     [
       autoNameConversation,
       handleAssistantFinished,
+      drainNextFollowUp,
       markConversationRead,
       recoverInterruptedStream,
       recoveryStreamingStatus,

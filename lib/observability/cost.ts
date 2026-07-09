@@ -92,7 +92,12 @@ function computeTokenCost(rates: TokenRates, inputs: CostInputs): number {
     // counts tool roundtrips against input pricing.
     const inputPortion = (billableInput + toolUse) * inputRate
     const cachedPortion = cached * cachedRate
-    const outputPortion = (output + thinking) * outputRate
+    // OpenAI/Codex reasoning tokens are already a subset of output_tokens.
+    // Gemini reports thought tokens separately, so those still get added.
+    const billedOutput = inputs.provider === 'openai' || inputs.provider === 'codex'
+        ? output
+        : output + thinking
+    const outputPortion = billedOutput * outputRate
 
     return (inputPortion + cachedPortion + outputPortion) / 1_000_000
 }

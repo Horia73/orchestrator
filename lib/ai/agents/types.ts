@@ -242,10 +242,14 @@ export interface PromptContext {
   }
   /** Per-run capability ids treated as already activated without mutating the conversation store. */
   preactivatedCapabilities?: readonly string[]
+  /** Model context window in tokens, when known. Used for prompt budgeting. */
+  modelContextWindow?: number | null
+  /** Internal second-pass override chosen by the prompt budget planner. */
+  workspaceContextMaxChars?: number
   /**
-   * Inject MONITORS.md in full into <workspace_context_files>. The Smart
-   * Monitor wake gets it via its agent id; Microscript agent-wakes (and any
-   * other monitor-contract wake) request it explicitly through this flag.
+   * Inject the bounded MONITORS.md view into <workspace_context_files>. The
+   * Smart Monitor wake gets it via its agent id; Microscript agent-wakes (and
+   * any other monitor-contract wake) request it explicitly through this flag.
    */
   includeMonitorsFile?: boolean
   /** Any extra context the caller wants to inject */

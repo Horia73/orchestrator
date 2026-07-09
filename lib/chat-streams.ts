@@ -50,15 +50,16 @@ function consumePendingStop(key: string, messageId: string): boolean {
     return true
 }
 
-export function registerChatStream(conversationId: string, messageId: string, controller: AbortController) {
+export function registerChatStream(
+    conversationId: string,
+    messageId: string,
+    controller: AbortController,
+    options?: { announce?: boolean },
+): boolean {
     const key = streamKey(conversationId)
     const current = streams.get(key)
     if (current && !current.controller.signal.aborted) {
-        current.controller.abort()
-        emitChatEvent({
-            type: 'chat_stream_ended',
-            payload: { conversationId, messageId: current.messageId },
-        })
+        return false
     }
     const stream = {
         messageId,
@@ -66,10 +67,7 @@ export function registerChatStream(conversationId: string, messageId: string, co
         controller,
     }
     streams.set(key, stream)
-    emitChatEvent({
-        type: 'chat_stream_started',
-        payload: { conversationId, messageId, startedAt: stream.startedAt },
-    })
+    if (options?.announce !== false) announceChatStream(conversationId, messageId)
     if (consumePendingStop(key, messageId)) {
         controller.abort()
         streams.delete(key)
@@ -78,6 +76,16 @@ export function registerChatStream(conversationId: string, messageId: string, co
             payload: { conversationId, messageId },
         })
     }
+    return true
+}
+
+export function announceChatStream(conversationId: string, messageId: string): void {
+    const active = streams.get(streamKey(conversationId))
+    if (!active || active.messageId !== messageId) return
+    emitChatEvent({
+        type: 'chat_stream_started',
+        payload: { conversationId, messageId, startedAt: active.startedAt },
+    })
 }
 
 export function clearChatStream(conversationId: string, messageId?: string) {

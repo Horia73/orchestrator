@@ -4,7 +4,8 @@ import { randomUUID } from 'crypto'
 
 import { CLI_SPECS, getCliLoginArgs, type CliId } from './specs'
 import { resolveBin, augmentedEnv } from './resolve-bin'
-import { codexCliEnv } from './codex-env'
+import { clearCodexAuthFiles, codexCliEnv } from './codex-env'
+import { invalidateCliStatus } from './status'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 
 // ---------------------------------------------------------------------------
@@ -163,6 +164,24 @@ export function startSession(args: StartArgs): string {
     })
 
     pty.onExit(({ exitCode, signal }) => {
+        // A normal logout process exit (including a non-zero CLI result) still
+        // represents an explicit request to forget local auth. Codex runs in an
+        // isolated HOME, so also remove the source auth file that would otherwise
+        // be copied back into that HOME on the next status probe. Do not do this
+        // when the user cancelled the modal and we terminated the PTY by signal.
+        if (args.mode === 'logout' && signal === 0) {
+            if (args.cli === 'codex') {
+                try {
+                    clearCodexAuthFiles()
+                } catch (error) {
+                    push({
+                        type: 'error',
+                        message: error instanceof Error ? error.message : 'Failed to remove Codex credentials',
+                    })
+                }
+            }
+            invalidateCliStatus(args.cli)
+        }
         push({ type: 'exit', code: exitCode ?? null, signal: signal ?? null })
         finalize(session, exitCode ?? null)
     })

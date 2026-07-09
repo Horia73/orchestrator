@@ -38,8 +38,19 @@ import {
   resolveProviderToolSurface,
 } from "@/lib/ai/tools/registry"
 import { extractUploadAttachmentsFromContent } from "@/lib/ai/media-assets"
-import { clearChatStream, registerChatStream } from "@/lib/chat-streams"
-import { claimFollowUp } from "@/lib/chat-followups"
+import {
+  announceChatStream,
+  clearChatStream,
+  getActiveChatStream,
+  registerChatStream,
+} from "@/lib/chat-streams"
+import {
+  claimFollowUp,
+  enqueueFollowUp,
+  peekFollowUps,
+  requeueClaimedFollowUp,
+  type ChatFollowUp,
+} from "@/lib/chat-followups"
 import { clearTurnSteering, registerTurnSteering } from "@/lib/chat-steering"
 import { wrapSteeredMessage } from "@/lib/steered-message"
 import {
@@ -220,12 +231,111 @@ export async function POST(request: Request) {
         )
       }
 
+      const requestedFollowUpId =
+        typeof body.followUpId === "string" && body.followUpId
+          ? body.followUpId
+          : null
+      const queueBehindActiveStream = (active: {
+        messageId: string
+        startedAt: number
+      }): Response => {
+        if (requestedFollowUpId) {
+          const queued = peekFollowUps(conversationId).some(
+            (entry) => entry.id === requestedFollowUpId
+          )
+          if (!queued) {
+            return new Response(
+              JSON.stringify({
+                error: "Follow-up already claimed",
+                code: "followup_already_claimed",
+                activeMessageId: active.messageId,
+                activeStartedAt: active.startedAt,
+              }),
+              { status: 409, headers: { "Content-Type": "application/json" } }
+            )
+          }
+          return new Response(
+            JSON.stringify({
+              error: "The previous stream is still active; follow-up remains queued",
+              code: "followup_deferred",
+              queued: true,
+              followUpId: requestedFollowUpId,
+              activeMessageId: active.messageId,
+              activeStartedAt: active.startedAt,
+            }),
+            { status: 409, headers: { "Content-Type": "application/json" } }
+          )
+        }
+
+        const userMessage = [...requestMessages]
+          .reverse()
+          .find((message) => message.role === "user")
+        if (!userMessage) {
+          return new Response(
+            JSON.stringify({
+              error: "A stream is already active",
+              code: "stream_active",
+              activeMessageId: active.messageId,
+              activeStartedAt: active.startedAt,
+            }),
+            { status: 409, headers: { "Content-Type": "application/json" } }
+          )
+        }
+
+        const persistableMessage: Message = { ...userMessage }
+        delete persistableMessage.steerPending
+        addMessage(conversationId, persistableMessage)
+        const existing = peekFollowUps(conversationId).find(
+          (entry) => entry.userMessageId === userMessage.id
+        )
+        const queuedAt = existing?.queuedAt ?? Date.now()
+        if (!existing) {
+          enqueueFollowUp(conversationId, {
+            id: userMessage.id,
+            userMessageId: userMessage.id,
+            content: userMessage.content,
+            attachments: userMessage.attachments,
+            source: "user",
+            queuedAt,
+          })
+        }
+        return new Response(
+          JSON.stringify({
+            error: "A stream is already active; message queued as a follow-up",
+            code: "stream_active_queued",
+            queued: true,
+            followUpId: existing?.id ?? userMessage.id,
+            queuedAt,
+            activeMessageId: active.messageId,
+            activeStartedAt: active.startedAt,
+          }),
+          { status: 409, headers: { "Content-Type": "application/json" } }
+        )
+      }
+
+      const activeAtStart = getActiveChatStream(conversationId)
+      if (activeAtStart) {
+        if (activeAtStart.messageId === messageId) {
+          return new Response(
+            JSON.stringify({
+              error: "This stream is already active",
+              code: "stream_already_active",
+              activeMessageId: activeAtStart.messageId,
+              activeStartedAt: activeAtStart.startedAt,
+            }),
+            { status: 409, headers: { "Content-Type": "application/json" } }
+          )
+        }
+        return queueBehindActiveStream(activeAtStart)
+      }
+
       // Steering drain: this turn runs a queued follow-up. Claim it up front —
       // whoever loses the claim race (client drain vs server sweep) backs off
       // so the follow-up never runs twice.
+      let claimedFollowUp: ChatFollowUp | null = null
       let claimedFollowUpMessageId: string | null = null
-      if (typeof body.followUpId === "string" && body.followUpId) {
-        const claimed = claimFollowUp(conversationId, body.followUpId)
+      if (requestedFollowUpId) {
+        const claimed = claimFollowUp(conversationId, requestedFollowUpId)
         if (!claimed) {
           return new Response(
             JSON.stringify({
@@ -235,6 +345,7 @@ export async function POST(request: Request) {
             { status: 409, headers: { "Content-Type": "application/json" } }
           )
         }
+        claimedFollowUp = claimed
         claimedFollowUpMessageId = claimed.userMessageId
       }
 
@@ -249,6 +360,7 @@ export async function POST(request: Request) {
         existingConversation?.messages ?? [],
         requestMessages
       )
+      let restampedClaimedMessage: Message | null = null
       if (claimedFollowUpMessageId) {
         // The follow-up was typed while the PREVIOUS turn streamed, but that
         // turn's terminal persist stamps the assistant row with its completion
@@ -263,7 +375,7 @@ export async function POST(request: Request) {
           return restamped
         })
         if (restamped) {
-          addMessage(conversationId, restamped)
+          restampedClaimedMessage = restamped
           messagesForProvider.sort((a, b) => {
             const timeDelta = a.timestamp - b.timestamp
             return timeDelta !== 0 ? timeDelta : a.id.localeCompare(b.id)
@@ -478,6 +590,9 @@ export async function POST(request: Request) {
           requestedBuiltins,
           provider.capabilities
         )
+        const modelContextWindow =
+          registry[settings.provider]?.models[settings.model]?.contextWindow ??
+          null
         const systemPrompt = orchestrator.buildPrompt!({
           agentId: orchestrator.id,
           userName: config.userName,
@@ -491,6 +606,7 @@ export async function POST(request: Request) {
           declaredTools: getToolsForAgent(orchestrator.tools),
           delegationDepth: 0,
           maxDelegationDepth: MAX_AGENT_DEPTH,
+          modelContextWindow,
           pendingUpdate: pendingUpdate ?? undefined,
           extra: { appOrigin: requestOrigin },
         })
@@ -510,9 +626,7 @@ export async function POST(request: Request) {
           agentBuiltins: toolSurface.builtins,
           systemPrompt,
           prevSession,
-          modelContextWindow:
-            registry[settings.provider]?.models[settings.model]?.contextWindow ??
-            null,
+          modelContextWindow,
         }
       }
 
@@ -558,14 +672,56 @@ export async function POST(request: Request) {
         thinking: "",
         timestamp: Date.now(),
       }
-      addMessage(conversationId, assistantMsg)
+      const serverAbortController = new AbortController()
+      const registered = registerChatStream(
+        conversationId,
+        messageId,
+        serverAbortController,
+        { announce: false }
+      )
+      if (!registered) {
+        if (claimedFollowUp) {
+          requeueClaimedFollowUp(conversationId, claimedFollowUp)
+        }
+        const active = getActiveChatStream(conversationId)
+        if (active?.messageId === messageId) {
+          return new Response(
+            JSON.stringify({
+              error: "This stream is already active",
+              code: "stream_already_active",
+              activeMessageId: active.messageId,
+              activeStartedAt: active.startedAt,
+            }),
+            { status: 409, headers: { "Content-Type": "application/json" } }
+          )
+        }
+        return active
+          ? queueBehindActiveStream(active)
+          : new Response(
+              JSON.stringify({
+                error: "Another stream won the start race",
+                code: "stream_start_race",
+              }),
+              { status: 409, headers: { "Content-Type": "application/json" } }
+            )
+      }
+      try {
+        if (restampedClaimedMessage) {
+          addMessage(conversationId, restampedClaimedMessage)
+        }
+        addMessage(conversationId, assistantMsg)
+        announceChatStream(conversationId, messageId)
+      } catch (error) {
+        clearChatStream(conversationId, messageId)
+        if (claimedFollowUp) {
+          requeueClaimedFollowUp(conversationId, claimedFollowUp)
+        }
+        throw error
+      }
 
       // Wall-clock since the turn started — mirrors the durationMs persisted at
       // finalize so the live client can stamp "Worked for …" without a reload.
       const elapsedMs = () => Math.max(0, Date.now() - assistantMsg.timestamp)
-
-      const serverAbortController = new AbortController()
-      registerChatStream(conversationId, messageId, serverAbortController)
 
       // Live steer function for the CURRENT provider attempt — set through
       // StreamCallbacks.onSteeringAvailable while the provider's turn accepts

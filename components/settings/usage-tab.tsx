@@ -332,7 +332,7 @@ function UsageContent({ data }: { data: UsageReport }) {
                 <ChartCard title="Tokens per day" subtitle="Total tokens (input + output + thinking, excl. cached)">
                     <TokensChart daily={data.daily} />
                 </ChartCard>
-                <ChartCard title="Estimated cost per day" subtitle="USD, based on registry pricing">
+                <ChartCard title="API-equivalent cost per day" subtitle="Metered USD; subscription-covered usage is shown separately">
                     <CostChart daily={data.daily} />
                 </ChartCard>
             </div>
@@ -344,13 +344,14 @@ function UsageContent({ data }: { data: UsageReport }) {
             </div>
 
             <p className="rounded-xl border border-border/60 bg-muted/30 px-3 py-2 text-[11.5px] text-foreground/55">
-                Cost is estimated from registry pricing — for ground truth, check your provider&apos;s billing console.
+                API-equivalent cost estimates what the same usage would cost at metered API rates; subscription usage is still billed as $0 here.
                 {data.totals.uncostedRequests > 0 && (
                     <> {data.totals.uncostedRequests} request{data.totals.uncostedRequests === 1 ? "" : "s"} use models with unknown pricing and aren&apos;t included in the cost total.</>
                 )}
                 {data.totals.subscriptionRequests > 0 && (
-                    <> {data.totals.subscriptionRequests} request{data.totals.subscriptionRequests === 1 ? "" : "s"} use subscription-priced models (counted as $0{data.totals.subscriptionNotionalUsd > 0 ? <> — ≈ {formatUsd(data.totals.subscriptionNotionalUsd)} at metered API rates</> : null}).</>
+                    <> {data.totals.subscriptionRequests} request{data.totals.subscriptionRequests === 1 ? "" : "s"} use subscription-priced models (≈ {formatUsd(data.totals.subscriptionNotionalUsd)} covered).</>
                 )}
+                <> Claude Code uses the CLI&apos;s client-side estimate when available; Codex uses official API rates per provider call. Historical rows use less precise aggregate estimates.</>
             </p>
         </>
     )
@@ -366,6 +367,10 @@ function KpiCards({ totals, previous }: { totals: UsageTotals; previous: UsageTo
     // Headline excludes cache reads — cached is a near-free, run-inflating subset
     // of input (see usage-mapper mapAnthropic). Cached stays visible in the By model table.
     const freshTokens = Math.max(0, totals.totalTokens - totals.cachedTokens)
+    const apiEquivalentCost = totals.estimatedCostUsd + totals.subscriptionNotionalUsd
+    const previousApiEquivalentCost = previous
+        ? previous.estimatedCostUsd + previous.subscriptionNotionalUsd
+        : null
 
     return (
         <div className="grid min-w-0 grid-cols-1 gap-3 min-[420px]:grid-cols-2 md:grid-cols-4">
@@ -381,16 +386,16 @@ function KpiCards({ totals, previous }: { totals: UsageTotals; previous: UsageTo
                 delta={previous ? pctDelta(freshTokens, Math.max(0, previous.totalTokens - previous.cachedTokens)) : null}
             />
             <Kpi
-                label="Estimated cost"
-                value={formatUsd(totals.estimatedCostUsd)}
+                label="API-equivalent cost"
+                value={formatUsd(apiEquivalentCost)}
                 hint={
                     totals.subscriptionNotionalUsd > 0
-                        ? `+ ${formatUsd(totals.subscriptionNotionalUsd)} incl. via subscription`
+                        ? `${formatUsd(totals.subscriptionNotionalUsd)} covered by subscriptions`
                         : totals.cachedTokens > 0
                             ? `${formatTokensCompact(totals.cachedTokens)} cached`
                             : undefined
                 }
-                delta={previous ? pctDelta(totals.estimatedCostUsd, previous.estimatedCostUsd) : null}
+                delta={previousApiEquivalentCost !== null ? pctDelta(apiEquivalentCost, previousApiEquivalentCost) : null}
             />
             <Kpi
                 label="Error rate"
@@ -493,7 +498,11 @@ function TokensChart({ daily }: { daily: UsageReport["daily"] }) {
 }
 
 function CostChart({ daily }: { daily: UsageReport["daily"] }) {
-    const data = daily.map(d => ({ date: d.date, cost: Number(d.estimatedCostUsd.toFixed(6)) }))
+    const data = daily.map(d => ({
+        date: d.date,
+        billed: Number(d.estimatedCostUsd.toFixed(6)),
+        included: Number(d.subscriptionNotionalUsd.toFixed(6)),
+    }))
 
     return (
         <ResponsiveContainer width="100%" height="100%">
@@ -502,7 +511,8 @@ function CostChart({ daily }: { daily: UsageReport["daily"] }) {
                 <XAxis dataKey="date" tickFormatter={shortDate} fontSize={11} stroke="currentColor" className="text-foreground/45" />
                 <YAxis fontSize={11} stroke="currentColor" tickFormatter={v => formatUsd(v)} className="text-foreground/45" />
                 <Tooltip content={<ChartTooltip valueFormatter={v => formatUsd(v as number)} />} />
-                <Bar dataKey="cost" fill="#0ea5e9" name="Cost (USD)" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="billed" stackId="cost" fill="#0ea5e9" name="Metered API" />
+                <Bar dataKey="included" stackId="cost" fill="#10b981" name="Included equivalent" radius={[4, 4, 0, 0]} />
             </BarChart>
         </ResponsiveContainer>
     )
@@ -578,7 +588,7 @@ function ByModelTable({ rows }: { rows: UsageByModel[] }) {
                                 <td className="px-3 py-2.5 text-right tabular-nums text-foreground/70">{formatTokensCompact(r.thinkingTokens)}</td>
                                 <td className="px-3 py-2.5 text-right tabular-nums text-foreground/70">{formatTokensCompact(r.cachedTokens)}</td>
                                 <td className="px-3 py-2.5 text-right tabular-nums text-foreground/70">{r.avgThinkingMs > 0 ? `${(r.avgThinkingMs / 1000).toFixed(1)}s` : "—"}</td>
-                                <td className="px-3 py-2.5 text-right tabular-nums">
+                                <td className="px-3 py-2.5 text-right tabular-nums" title={costMethodLabel(r)}>
                                     {r.pricingState === "priced"
                                         ? formatUsd(r.estimatedCostUsd)
                                         : r.pricingState === "subscription"
@@ -621,7 +631,11 @@ function ByAgentTable({ rows }: { rows: UsageByAgent[] }) {
                                     <td className="px-3 py-2.5 text-right tabular-nums text-foreground/70">
                                         {formatTokensCompact(r.inputTokens + r.outputTokens + r.thinkingTokens)}
                                     </td>
-                                    <td className="px-3 py-2.5 text-right tabular-nums">{formatUsd(r.estimatedCostUsd)}</td>
+                                    <td className="px-3 py-2.5 text-right tabular-nums">
+                                        {r.subscriptionNotionalUsd > 0
+                                            ? <span className="text-foreground/60">≈ {formatUsd(r.estimatedCostUsd + r.subscriptionNotionalUsd)}</span>
+                                            : formatUsd(r.estimatedCostUsd)}
+                                    </td>
                                 </tr>
                             ))}
                         </tbody>
@@ -710,6 +724,20 @@ function formatUsd(n: number): string {
     if (Math.abs(n) < 0.01) return `$${n.toFixed(4)}`
     if (Math.abs(n) < 1) return `$${n.toFixed(3)}`
     return `$${n.toFixed(2)}`
+}
+
+function costMethodLabel(row: UsageByModel): string {
+    const method = row.costSource === "provider-estimate"
+        ? "Provider-reported client-side estimate"
+        : row.costSource === "api-pricing"
+            ? row.costAccuracy === "per-call"
+                ? "Official API pricing applied per provider call"
+                : "Official API pricing applied to aggregate historical tokens"
+            : row.costSource === "mixed"
+                ? "Mixed cost sources"
+                : "Registry pricing"
+    const dated = row.pricingAsOf ? ` · pricing as of ${row.pricingAsOf}` : ""
+    return `${method}${dated}`
 }
 
 function shortDate(iso: string): string {

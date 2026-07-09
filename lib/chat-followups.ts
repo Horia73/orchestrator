@@ -1,13 +1,14 @@
 import { emitChatEvent } from '@/lib/events'
 import { getActiveProfileId } from '@/lib/profiles/context'
+import type { ChatFollowUpSnapshot, ChatFollowUpSource } from '@/lib/chat-followup-types'
 
 /**
  * Follow-up queue — the server half of chat steering.
  *
  * While an agent turn is streaming, the user can keep sending messages. Each
- * one is persisted to the conversation immediately (so it renders in order)
- * and queued here. Delivery happens at the earliest safe boundary — the end
- * of the in-flight turn:
+ * one is persisted to the conversation immediately (so it survives refresh),
+ * represented in the client pending tray, and queued here. Delivery happens
+ * at the earliest safe boundary — the end of the in-flight turn:
  *
  *   • If the client that owns the stream is still connected, it drains the
  *     queue itself: on the `done` SSE event it POSTs /api/chat for the next
@@ -41,7 +42,7 @@ export interface ChatFollowUp {
      * notice (background job completion). System notices never render a
      * "queued" chip client-side.
      */
-    source: 'user' | 'background-job'
+    source: ChatFollowUpSource
     queuedAt: number
 }
 
@@ -71,12 +72,41 @@ export function enqueueFollowUp(conversationId: string, followUp: ChatFollowUp):
             followUpId: followUp.id,
             userMessageId: followUp.userMessageId,
             source: followUp.source,
+            queuedAt: followUp.queuedAt,
         },
     })
 }
 
 export function peekFollowUps(conversationId: string): ChatFollowUp[] {
     return [...(queues.get(queueKey(conversationId)) ?? [])]
+}
+
+export function peekFollowUpSnapshots(conversationId: string): ChatFollowUpSnapshot[] {
+    return peekFollowUps(conversationId).map(entry => ({
+        followUpId: entry.id,
+        userMessageId: entry.userMessageId,
+        source: entry.source,
+        queuedAt: entry.queuedAt,
+    }))
+}
+
+/** Put a claimed entry back at the head when a start loses an active-stream race. */
+export function requeueClaimedFollowUp(conversationId: string, followUp: ChatFollowUp): void {
+    const key = queueKey(conversationId)
+    const queue = queues.get(key) ?? []
+    if (queue.some(entry => entry.id === followUp.id)) return
+    queue.unshift(followUp)
+    queues.set(key, queue)
+    emitChatEvent({
+        type: 'chat_followup_queued',
+        payload: {
+            conversationId,
+            followUpId: followUp.id,
+            userMessageId: followUp.userMessageId,
+            source: followUp.source,
+            queuedAt: followUp.queuedAt,
+        },
+    })
 }
 
 /**

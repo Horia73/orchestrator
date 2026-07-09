@@ -12,6 +12,7 @@ const baseState: ChatState = {
   conversations: [],
   isLoading: false,
   activeChatStreams: {},
+  pendingFollowUps: {},
   conversationLoadState: {},
   conversationLoadErrors: {},
   conversationMessagePages: {},

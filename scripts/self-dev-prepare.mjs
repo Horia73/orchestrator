@@ -5,6 +5,7 @@ import os from 'os'
 import path from 'path'
 import { randomBytes, randomUUID } from 'crypto'
 import { spawnSync } from 'child_process'
+import { resolveProjectRunsRoot } from './project-run-paths.mjs'
 
 const appDir = process.cwd()
 const args = parseArgs(process.argv.slice(2))
@@ -22,7 +23,7 @@ const copyEnv = boolArg('copy-env')
 const jsonOutput = boolArg('json')
 const commandStdio = jsonOutput ? ['ignore', 'ignore', 'inherit'] : 'inherit'
 
-const stateRoot = path.join(appDir, '.orchestrator', 'project-runs')
+const stateRoot = resolveProjectRunsRoot(appDir)
 const runDir = path.join(stateRoot, runId)
 const repoDir = path.join(runDir, 'repo')
 const portStatePath = path.join(stateRoot, 'ports.json')
@@ -117,6 +118,7 @@ try {
     task,
     copyEnv,
     status: 'prepared',
+    pinned: false,
     coderPrompt,
   }
   fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf-8')

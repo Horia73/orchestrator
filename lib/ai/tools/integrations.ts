@@ -20,9 +20,9 @@ function gatedToolIdsFor(id: string): string[] {
 /**
  * Same-turn schema delivery: render the authoritative input_schema for each
  * gated tool a just-activated capability unlocks, so the model can call them
- * correctly in the SAME turn it activates — before the doctrine block (which
- * only loads from the next turn onward) is in context. Resolved from the live
- * tool registry, so it never goes stale relative to the actual tool contract.
+ * correctly in the SAME turn it activates. The activation result now carries
+ * doctrine too; future turns receive it in the normal system-prompt block.
+ * Schemas resolve from the live registry, so they cannot drift.
  */
 function activatedToolSchemasBlock(
     id: string,
@@ -38,6 +38,17 @@ function activatedToolSchemasBlock(
     }
     if (lines.length === 0) return ''
     return ` Call these via RunActivatedIntegrationTool as {tool_id, arguments}; the schemas below are authoritative — match required fields exactly, do not guess or search for them:\n${lines.join('\n')}`
+}
+
+/** Same-turn doctrine delivery. Future turns still receive the cached doctrine
+ * in the system prompt, but the activating turn must not need a no-op round trip
+ * before it can apply the capability's operating rules. */
+function activatedDoctrineBlock(id: string): string {
+    const doctrine = isSubsystemId(id)
+        ? getSubsystemManifest(id)?.doctrine
+        : getIntegrationManifest(id)?.doctrine
+    if (!doctrine) return ''
+    return `\n<activated_doctrine for="${id}">\n${doctrine}\n</activated_doctrine>`
 }
 
 // ---------------------------------------------------------------------------
@@ -163,7 +174,11 @@ export function createActivateIntegrationToolsExecutor(
                 continue
             }
             activatedNow.push(id)
-            report.push(describeActivatedIntegration(id) + activatedToolSchemasBlock(id, resolveTool))
+            report.push(
+                describeActivatedIntegration(id)
+                + activatedDoctrineBlock(id)
+                + activatedToolSchemasBlock(id, resolveTool)
+            )
             continue
         }
 
@@ -173,13 +188,13 @@ export function createActivateIntegrationToolsExecutor(
         // the schemas just become available; a missing key surfaces per-call.
         if (entry.activationOnly) {
             activatedNow.push(id)
-            report.push(`${describeActivatedIntegration(id)} If a listed tool schema is not directly visible in this same turn, call RunActivatedIntegrationTool with its tool_id and arguments.${activatedToolSchemasBlock(id, resolveTool)}`)
+            report.push(`${describeActivatedIntegration(id)}${activatedDoctrineBlock(id)} If a listed tool schema is not directly visible in this same turn, call RunActivatedIntegrationTool with its tool_id and arguments.${activatedToolSchemasBlock(id, resolveTool)}`)
             continue
         }
         const state = snapshot?.[entry.statusKind]?.state
         if (state === 'connected' || state === 'resumable') {
             activatedNow.push(id)
-            report.push(`${describeActivatedIntegration(id)} If a listed tool schema is not directly visible in this same turn, call RunActivatedIntegrationTool with its tool_id and arguments.${activatedToolSchemasBlock(id, resolveTool)}`)
+            report.push(`${describeActivatedIntegration(id)}${activatedDoctrineBlock(id)} If a listed tool schema is not directly visible in this same turn, call RunActivatedIntegrationTool with its tool_id and arguments.${activatedToolSchemasBlock(id, resolveTool)}`)
         } else {
             skipped.push(id)
             const stateText =

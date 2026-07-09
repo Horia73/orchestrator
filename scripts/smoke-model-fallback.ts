@@ -41,6 +41,13 @@ check(
   )
 )
 check(
+  "revoked refresh tokens fall through to a configured model",
+  shouldTryModelFallback(
+    "Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.",
+    { afterToolCall: true }
+  )
+)
+check(
   "model fallback retries same candidate three times before fallback",
   MAX_MODEL_RETRIES_BEFORE_FALLBACK === 3
 )

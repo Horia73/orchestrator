@@ -215,3 +215,17 @@ export function hasAssistantProgress(
     message.contentSegments.some((segment) => segment.content.length > 0)
   return hasReasoning || hasContent || hasSegments
 }
+
+export function findActiveInProgressAssistantMessage(
+  messages: Message[],
+  activeStreamingMessageId: string | null
+): Message | null {
+  if (!activeStreamingMessageId) return null
+  const message = messages.find(
+    (candidate) => candidate.id === activeStreamingMessageId
+  )
+  if (!isAssistantMessageInProgress(message) || !hasAssistantProgress(message)) {
+    return null
+  }
+  return message
+}

@@ -319,6 +319,12 @@ check(
     schedMsg.includes('schedule_task') && schedMsg.includes('input_schema') && /"required":\[[^\]]*"when"/.test(schedMsg),
     schedMsg.slice(0, 300)
 )
+check(
+    'Activating "scheduling" returns its doctrine for same-turn use',
+    schedMsg.includes('<activated_doctrine for="scheduling">')
+        && schedMsg.includes('<scheduling_capability>'),
+    schedMsg.slice(0, 300)
+)
 
 // --- RunActivatedIntegrationTool resolves subsystem + activationOnly tools --
 // Regression guard: gated subsystem tools and activationOnly integration tools

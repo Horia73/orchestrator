@@ -36,9 +36,26 @@ function joinPrompt(withBootProtocol: boolean): string {
     ].filter(Boolean).join('\n\n')
 }
 
+// Smart Monitor gets its concrete operating/action policy in every wake prompt
+// (lib/monitoring/smart-monitor.ts). Shipping the chat agent's commerce,
+// document, coding, artifact, onboarding, and worked-example policy as well is
+// both redundant and costly. Keep the shared core that a custom watch can
+// legitimately need: memory, integration activation, delegation, and output.
+const SMART_MONITOR_PROMPT = [
+    ORCHESTRATOR_CORE,
+    ORCHESTRATOR_MEMORY,
+    ORCHESTRATOR_INTEGRATIONS,
+    ORCHESTRATOR_DELEGATION,
+    ORCHESTRATOR_OUTPUT_CONTRACT,
+].filter(Boolean).join('\n\n')
+
 const PROMPT_WITH_BOOT = joinPrompt(true)
 const PROMPT_WITHOUT_BOOT = joinPrompt(false)
 
-export function buildOrchestratorStaticPrompt(opts: { bootActive: boolean }): string {
+export function buildOrchestratorStaticPrompt(opts: {
+    bootActive: boolean
+    mode?: 'orchestrator' | 'smart-monitor'
+}): string {
+    if (opts.mode === 'smart-monitor') return SMART_MONITOR_PROMPT
     return opts.bootActive ? PROMPT_WITH_BOOT : PROMPT_WITHOUT_BOOT
 }

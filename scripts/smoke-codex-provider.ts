@@ -1,6 +1,10 @@
 import assert from "node:assert/strict"
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
 import { isTransientCodexAppServerError, mapEffortForCodex } from "@/lib/ai/providers/codex"
+import { clearCodexAuthFiles } from "@/lib/cli/codex-env"
 import { codexModelsToLiveEntries, type CodexListedModel } from "@/lib/cli/codex-model-probe"
 
 assert.equal(
@@ -62,5 +66,22 @@ assert.deepEqual(liveModels["gpt-5.6-sol"].thinkingLevels, ["low", "max", "ultra
 assert.equal(liveModels["gpt-5.6-sol"].defaultThinkingLevel, "low")
 assert.deepEqual(liveModels["gpt-5.6-sol"].pricing, { kind: "subscription" })
 assert.deepEqual(liveModels["gpt-5.6-sol"].capabilities, ["text", "function_calling"])
+
+const authFixtureRoot = mkdtempSync(join(tmpdir(), "orchestrator-codex-logout-"))
+try {
+  const runtimeAuth = join(authFixtureRoot, "runtime", ".codex", "auth.json")
+  const sourceAuth = join(authFixtureRoot, "source", ".codex", "auth.json")
+  mkdirSync(join(runtimeAuth, ".."), { recursive: true })
+  mkdirSync(join(sourceAuth, ".."), { recursive: true })
+  writeFileSync(runtimeAuth, '{"tokens":"runtime"}')
+  writeFileSync(sourceAuth, '{"tokens":"source"}')
+
+  clearCodexAuthFiles([runtimeAuth, sourceAuth])
+
+  assert.equal(existsSync(runtimeAuth), false, "Codex logout must remove the isolated runtime credentials")
+  assert.equal(existsSync(sourceAuth), false, "Codex logout must remove the source credentials that seed the runtime")
+} finally {
+  rmSync(authFixtureRoot, { recursive: true, force: true })
+}
 
 console.log("smoke-codex-provider: ok")

@@ -18,9 +18,13 @@ import { operationalIntegrationFor } from '@/lib/integrations/manifest'
 import { subsystemForGatedTool } from '@/lib/integrations/subsystem-manifest'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 import type { TokenUsageBreakdown } from '@/lib/types'
+import { attachBillingMetadata } from '@/lib/observability/billing-metadata'
+import type { BillingUsageEntry } from '@/lib/observability/schema'
+import { estimateCodexApiEquivalentCall } from '@/lib/observability/api-equivalent'
 import { latestUserPromptWithPortableHistory } from './history'
 import {
     codexContextUsageSnapshot,
+    codexUsageForBillingUpdate,
     codexUsageForCurrentTurn,
     codexWebArgs,
     contentItemsToText,
@@ -177,6 +181,9 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
         let finalUsage: unknown
         let finalDurationMs: number | undefined
         let turnUsageBaseline: TokenUsageBreakdown | null = null
+        let billingPreviousTotal: TokenUsageBreakdown | null = null
+        let activeBillingModel = model
+        const billingByModel = new Map<string, BillingUsageEntry>()
         let providerError: string | null = null
         const diagnostics: string[] = []
 
@@ -354,7 +361,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
             }
             callbacks.onDone({
                 sessionId: activeThreadId ? encodeAppServerSessionId(activeThreadId) : undefined,
-                usage: finalUsage,
+                usage: attachBillingMetadata(finalUsage, [...billingByModel.values()]),
                 thinkingDuration: finalDurationMs !== undefined
                     ? finalDurationMs / 1000
                     : (thinkingTotalMs > 0 ? thinkingTotalMs / 1000 : undefined),
@@ -535,6 +542,16 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                         ? (!activeTurnId || eventTurnId === activeTurnId)
                         : Boolean(activeTurnId)
                     if (belongsToCurrentTurn) {
+                        const billing = codexUsageForBillingUpdate(params?.tokenUsage, billingPreviousTotal)
+                        billingPreviousTotal = billing.total ?? billingPreviousTotal
+                        if (billing.usage) {
+                            recordCodexBillingUsage(
+                                billingByModel,
+                                activeBillingModel,
+                                billing.usage,
+                                billing.contextInputTokens
+                            )
+                        }
                         // Codex reports `total` as a cumulative thread counter on
                         // resumed stateful threads. Request logs need the current
                         // turn only, so derive a per-turn delta from total - first
@@ -544,6 +561,13 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                         finalUsage = nextUsage.usage ?? finalUsage
                     }
                     fireContextUsage(params)
+                    return
+                }
+                case 'model/rerouted': {
+                    const eventTurnId = typeof params?.turnId === 'string' ? params.turnId : undefined
+                    if ((!eventTurnId || !activeTurnId || eventTurnId === activeTurnId) && typeof params?.toModel === 'string') {
+                        activeBillingModel = params.toModel
+                    }
                     return
                 }
                 case 'thread/compacted':
@@ -799,6 +823,9 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                     throw new Error('codex app-server did not return a thread id')
                 }
                 activeThreadId = thread.id
+                if (typeof threadResult.model === 'string' && threadResult.model.trim()) {
+                    activeBillingModel = threadResult.model.trim()
+                }
 
                 const turnParams: AnyObj = {
                     threadId: activeThreadId,
@@ -918,6 +945,51 @@ function encodeAppServerSessionId(threadId: string): string {
 function decodeAppServerSessionId(sessionId: string | undefined): string | undefined {
     if (!sessionId?.startsWith(APP_SERVER_SESSION_PREFIX)) return undefined
     return sessionId.slice(APP_SERVER_SESSION_PREFIX.length) || undefined
+}
+
+function recordCodexBillingUsage(
+    byModel: Map<string, BillingUsageEntry>,
+    model: string,
+    usage: TokenUsageBreakdown,
+    contextInputTokens: number | null
+): void {
+    const input = usage.inputTokens ?? 0
+    const output = usage.outputTokens ?? 0
+    const cached = usage.cachedInputTokens ?? 0
+    const thinking = usage.reasoningOutputTokens ?? 0
+    const total = usage.totalTokens ?? input + output
+    if (input === 0 && output === 0 && cached === 0 && total === 0) return
+
+    const cleanModel = model.trim() || 'default'
+    const estimate = estimateCodexApiEquivalentCall(
+        cleanModel,
+        { inputTokens: input, outputTokens: output, cachedTokens: cached },
+        contextInputTokens ?? input
+    )
+    const entry = byModel.get(cleanModel) ?? {
+        provider: 'codex',
+        model: cleanModel,
+        requests: 1,
+        inputTokens: 0,
+        outputTokens: 0,
+        thinkingTokens: 0,
+        cachedTokens: 0,
+        toolUseTokens: 0,
+        totalTokens: 0,
+    }
+    entry.inputTokens += input
+    entry.outputTokens += output
+    entry.thinkingTokens += thinking
+    entry.cachedTokens += cached
+    entry.totalTokens += total
+    if (estimate) {
+        entry.apiEquivalentCostUsd = (entry.apiEquivalentCostUsd ?? 0) + estimate.usd
+        entry.costSource = estimate.costSource
+        entry.costAccuracy = estimate.costAccuracy
+        entry.pricingSource = estimate.pricingSource
+        entry.pricingAsOf = estimate.pricingAsOf
+    }
+    byModel.set(cleanModel, entry)
 }
 
 export function mapEffortForCodex(level: string | undefined): string | null {

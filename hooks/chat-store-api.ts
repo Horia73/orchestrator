@@ -1,6 +1,7 @@
 "use client"
 
 import type { Attachment, Conversation, Message } from "@/lib/types"
+import type { ChatFollowUpSnapshot } from "@/lib/chat-followup-types"
 import type {
   ActiveChatStream,
   MessagePageResponse,
@@ -145,9 +146,14 @@ export async function fetchConversationMessageDetails(
   return data.message
 }
 
-export async function fetchActiveChatStream(
+export interface ChatRuntimeState {
+  stream: ActiveChatStream | null
+  followUps: ChatFollowUpSnapshot[]
+}
+
+export async function fetchChatRuntimeState(
   conversationId: string
-): Promise<ActiveChatStream | null> {
+): Promise<ChatRuntimeState | null> {
   try {
     const res = await fetch(
       `/api/chat/active?conversationId=${encodeURIComponent(conversationId)}`,
@@ -157,13 +163,27 @@ export async function fetchActiveChatStream(
     )
     if (!res.ok) return null
     const data = await res.json()
-    if (!data.active) return null
     return {
-      conversationId,
-      messageId:
-        typeof data.messageId === "string" ? data.messageId : "unknown",
-      startedAt:
-        typeof data.startedAt === "number" ? data.startedAt : Date.now(),
+      stream: data.active
+        ? {
+            conversationId,
+            messageId:
+              typeof data.messageId === "string" ? data.messageId : "unknown",
+            startedAt:
+              typeof data.startedAt === "number" ? data.startedAt : Date.now(),
+          }
+        : null,
+      followUps: Array.isArray(data.followUps)
+        ? data.followUps.filter(
+            (entry: unknown): entry is ChatFollowUpSnapshot =>
+              Boolean(entry) &&
+              typeof entry === "object" &&
+              typeof (entry as ChatFollowUpSnapshot).followUpId === "string" &&
+              typeof (entry as ChatFollowUpSnapshot).userMessageId === "string" &&
+              (entry as ChatFollowUpSnapshot).source === "user" &&
+              typeof (entry as ChatFollowUpSnapshot).queuedAt === "number"
+          )
+        : [],
     }
   } catch {
     return null

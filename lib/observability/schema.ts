@@ -33,6 +33,12 @@ export interface BillingUsageEntry {
     cachedTokens: number
     toolUseTokens: number
     totalTokens: number
+    /** Metered API equivalent for subscription-covered usage (real billed cost stays $0). */
+    apiEquivalentCostUsd?: number
+    costSource?: 'provider-estimate' | 'api-pricing'
+    costAccuracy?: 'provider' | 'per-call' | 'aggregate'
+    pricingSource?: string
+    pricingAsOf?: string
 }
 
 export interface RequestLogRow {
@@ -173,6 +179,7 @@ export interface UsageDaily {
     thinkingTokens: number
     cachedTokens: number
     estimatedCostUsd: number
+    subscriptionNotionalUsd: number
 }
 
 export interface UsageByModel {
@@ -195,6 +202,10 @@ export interface UsageByModel {
     avgThinkingMs: number
     lastUsedAt: number
     pricingState: 'priced' | 'subscription' | 'unknown'
+    costSource: 'provider-estimate' | 'api-pricing' | 'mixed' | null
+    costAccuracy: 'provider' | 'per-call' | 'aggregate' | 'mixed' | null
+    pricingSource: string | null
+    pricingAsOf: string | null
 }
 
 export interface UsageByAgent {
@@ -205,6 +216,7 @@ export interface UsageByAgent {
     outputTokens: number
     thinkingTokens: number
     estimatedCostUsd: number
+    subscriptionNotionalUsd: number
 }
 
 export interface UsageByTool {

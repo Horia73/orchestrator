@@ -267,7 +267,35 @@ export function codexUsageForCurrentTurn(
     }
 }
 
-function tokenUsageBreakdown(value: unknown): TokenUsageBreakdown | null {
+/** Incremental provider-call usage for API-equivalent cost accounting. */
+export function codexUsageForBillingUpdate(
+    rawTokenUsage: unknown,
+    previousTotal: TokenUsageBreakdown | null
+): {
+    usage: TokenUsageBreakdown | null
+    contextInputTokens: number | null
+    total: TokenUsageBreakdown | null
+} {
+    const tokenUsage = toRecord(rawTokenUsage)
+    const last = tokenUsageBreakdown(tokenUsage.last)
+    const total = tokenUsageBreakdown(tokenUsage.total)
+
+    if (total && last) {
+        return {
+            usage: previousTotal ? codexUsageDelta(total, previousTotal, last) : last,
+            contextInputTokens: last.inputTokens ?? null,
+            total,
+        }
+    }
+
+    return {
+        usage: last,
+        contextInputTokens: last?.inputTokens ?? null,
+        total: previousTotal,
+    }
+}
+
+export function tokenUsageBreakdown(value: unknown): TokenUsageBreakdown | null {
     const raw = toRecord(value)
     const totalTokens = numberOrNull(raw.totalTokens)
     const inputTokens = numberOrNull(raw.inputTokens)

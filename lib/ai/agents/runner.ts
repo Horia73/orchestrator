@@ -410,6 +410,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
             includeMonitorsFile: parentCtx.injectMonitorsFile,
             delegationDepth: subDepth,
             maxDelegationDepth: MAX_AGENT_DEPTH,
+            modelContextWindow: selectedModel?.contextWindow ?? null,
             extra: parentCtx.appOrigin ? { appOrigin: parentCtx.appOrigin } : undefined,
         })
         : undefined

@@ -112,6 +112,7 @@ export function initializeDatabaseSchema(db: SqliteExecutor): void {
           tools TEXT,
           createdAt INTEGER
       );
+      CREATE INDEX IF NOT EXISTS idx_request_log_input_created ON request_log_input(createdAt);
 
       CREATE TABLE IF NOT EXISTS schema_migrations (
           id TEXT PRIMARY KEY,
@@ -266,6 +267,7 @@ export function initializeDatabaseSchema(db: SqliteExecutor): void {
       );
       CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_task ON scheduled_task_runs(taskId, startedAt DESC);
       CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_task_started_id ON scheduled_task_runs(taskId, startedAt DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_started ON scheduled_task_runs(startedAt DESC);
 
       CREATE TABLE IF NOT EXISTS push_subscriptions (
           id TEXT PRIMARY KEY,

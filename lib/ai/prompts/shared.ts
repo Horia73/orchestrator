@@ -17,6 +17,16 @@ import { getAgentThread, listAgentThreadsForContext, type AgentThread } from '@/
 import { buildRuntimeAccessContext } from '@/lib/runtime-access'
 import { BROWSER_AGENT_CAPABILITY_HINT } from '@/lib/ai/agents/browser-agent-capabilities'
 import { dateStampInTimezone, formatDateTimeInTimezone, systemTimezone } from '@/lib/timezone'
+import {
+    compactMemoryFileForPrompt,
+    compactRecentDailyMemory,
+    MAX_MONITORS_CONTEXT_CHARS,
+    MAX_PLAYBOOKS_CONTEXT_CHARS,
+    MAX_RECENT_DAILY_CONTEXT_CHARS,
+    MAX_USER_CONTEXT_CHARS,
+    RECENT_DAILY_CONTEXT_DAYS,
+    type RecentDailyMemorySource,
+} from '@/lib/memory/recent-context'
 
 /** First sentence of a tool description, normalized and length-capped — used
  *  for the compact gated-capability tool menus in <integrations>/<subsystems>. */
@@ -509,7 +519,11 @@ export function buildRuntimeContext(ctx: PromptContext): string {
         // ctx.pendingUpdate is set and instructs at-most-once-per-conversation.
         isOrchestrator ? buildPendingUpdateBlock(ctx) : '',
         buildIntegrationRunbooksContext(),
-        buildWorkspaceContextFiles(ctx.agentId, ctx.includeMonitorsFile === true),
+        buildWorkspaceContextFiles(
+            ctx.agentId,
+            ctx.includeMonitorsFile === true,
+            ctx.workspaceContextMaxChars
+        ),
     ].filter(Boolean).join('\n\n')
 }
 
@@ -636,14 +650,30 @@ const CONTEXT_FILE_IDS = new Set([
     'integration-index',
 ])
 
-// Generous ceilings: the hot durable tier (USER/MEMORY/PLAYBOOKS + recent daily
-// memory) is meant to fit fully. These are a backstop, not the primary control —
-// overflow is NOT silently lost, it stays reachable via semantic recall (see
-// recall.ts `inContextSources`, which only excludes what actually fit here).
-// MEMORY_ARCHIVE and (for the plain orchestrator) MONITORS are intentionally
-// never injected and live entirely in the recall-only cold tier. Keeping the hot
-// tier lean is the reflection pass's job, not the clipper's. The nightly
-// reflection treats 50k as "approaching the limit" and 60k as the hard file cap.
+// Canonical state must win over the rolling ledger. In particular, a noisy
+// day must never push MONITORS.md out of a Smart Monitor wake or erase the
+// playbook/integration indexes needed to act. MEMORY_DAY is added separately,
+// last, through a bounded extractive view.
+const CONTEXT_FILE_PRIORITY = new Map([
+    ['user', 0],
+    ['boot', 1],
+    ['memory', 2],
+    ['monitors', 3],
+    ['integration-index', 4],
+    ['playbooks', 5],
+])
+
+const CONTEXT_COMPACT_VIEWS = new Map<string, { budget: number; label: string }>([
+    ['user', { budget: MAX_USER_CONTEXT_CHARS, label: 'user-memory' }],
+    ['monitors', { budget: MAX_MONITORS_CONTEXT_CHARS, label: 'monitor-memory' }],
+    ['playbooks', { budget: MAX_PLAYBOOKS_CONTEXT_CHARS, label: 'playbooks' }],
+])
+
+// Durable-file ceilings remain a safety backstop. Recent daily memory has its
+// own much smaller prompt budget: raw MEMORY_DAY stays complete on disk and in
+// semantic recall, while compactRecentDailyMemory builds an extractive prompt
+// view in which every entry is represented. MEMORY_ARCHIVE and (for ordinary
+// chat) MONITORS remain recall-only cold context.
 export const MAX_CONTEXT_FILE_CHARS = 60_000
 export const MAX_CONTEXT_TOTAL_CHARS = 200_000
 
@@ -677,9 +707,13 @@ function readWorkspaceFile(relPath: string): string | null {
     }
 }
 
-function buildWorkspaceContextFiles(agentId: string | undefined, includeMonitors = false): string {
+function buildWorkspaceContextFiles(
+    agentId: string | undefined,
+    includeMonitors = false,
+    maxTotalChars = MAX_CONTEXT_TOTAL_CHARS
+): string {
     const blocks: string[] = []
-    let remaining = MAX_CONTEXT_TOTAL_CHARS
+    let remaining = Math.max(0, Math.min(MAX_CONTEXT_TOTAL_CHARS, maxTotalChars))
 
     // BOOT.md and ONBOARDING.md are the user-facing onboarding script —
     // only the orchestrator class runs onboarding. Other sub-agents
@@ -707,34 +741,25 @@ function buildWorkspaceContextFiles(agentId: string | undefined, includeMonitors
         return remaining > 0
     }
 
-    for (const file of WORKSPACE_FILE_DEFINITIONS) {
-        if (!CONTEXT_FILE_IDS.has(file.id)) continue
+    const orderedDefinitions = WORKSPACE_FILE_DEFINITIONS
+        .filter((file) => CONTEXT_FILE_IDS.has(file.id) && file.id !== 'memory-day')
+        .sort((a, b) =>
+            (CONTEXT_FILE_PRIORITY.get(a.id) ?? Number.MAX_SAFE_INTEGER)
+            - (CONTEXT_FILE_PRIORITY.get(b.id) ?? Number.MAX_SAFE_INTEGER)
+        )
+
+    for (const file of orderedDefinitions) {
         // PLAYBOOKS.md is captured/replayed by the orchestrator class; other
         // sub-agents (researcher, coder, …) never replay procedures, so keep it
         // out of their prompts alongside the onboarding script.
         if (!isOrchestrator && (file.id === 'boot' || file.id === 'onboarding' || file.id === 'playbooks')) continue
-        // MONITORS.md is documentation/preference memory that monitor-contract
-        // wakes need in full: the Smart Monitor wake (by agent id) and any run
-        // whose caller set includeMonitors (Microscript agent-wakes). The plain
-        // orchestrator (and the other orchestrator-class aliases like the inbox
-        // agent / conversation namer) read it on demand or via semantic recall
-        // instead of paying its full size in context every turn.
+        // MONITORS.md is documentation/preference memory needed by monitor-
+        // contract wakes: the Smart Monitor wake (by agent id) and any run whose
+        // caller set includeMonitors (Microscript agent-wakes). A large file gets
+        // an all-entry compact view; the wake's runtime watch records carry the
+        // exact active contracts. Plain chat reads it on demand or via recall.
         if (file.id === 'monitors' && agentId !== 'smart-monitor-agent' && !includeMonitors) continue
         if (remaining <= 0) break
-
-        if (file.id === 'memory-day') {
-            // Rolling daily memory: today + the previous 2 configured-local days, oldest
-            // first so the agent reads the progression up to now.
-            for (let back = 2; back >= 0; back--) {
-                if (remaining <= 0) break
-                const stamp = dateStampInTimezone(Date.now() - back * 86_400_000, getConfig().timezone)
-                const relPath = `MEMORY_DAY/${stamp}.md`
-                const content = readWorkspaceFile(relPath)
-                if (content === null) continue
-                if (!pushBlock(relPath, 'memory-day', content)) break
-            }
-            continue
-        }
 
         const content = readWorkspaceFile(file.relativePath)
         if (content === null) continue
@@ -746,16 +771,50 @@ function buildWorkspaceContextFiles(agentId: string | undefined, includeMonitors
         // exempt — its "template" is the active onboarding script itself.
         if (file.id !== 'boot' && isUntouchedScaffold(file, trimmed, scaffoldHashes)) continue
 
-        if (!pushBlock(file.relativePath, file.id, content)) break
+        let promptContent = content
+        let contextId = file.id
+        const compactView = CONTEXT_COMPACT_VIEWS.get(file.id)
+        if (compactView && trimmed.length > compactView.budget) {
+            const compact = compactMemoryFileForPrompt(
+                { relativePath: file.relativePath, content },
+                compactView.budget,
+                compactView.label
+            )
+            if (compact) {
+                promptContent = compact.content
+                contextId = `${file.id}-compact`
+            }
+        }
+
+        if (!pushBlock(file.relativePath, contextId, promptContent)) break
+    }
+
+    // Recent working memory is valuable, but the raw ledger can grow by tens
+    // of thousands of characters in an active day. Load it only after the
+    // canonical state above, using a deterministic compact view. Capture stays
+    // generous: no raw note is deleted or rewritten and every parsed entry is
+    // represented. Recent raw files remain semantic-recall eligible as well.
+    if (remaining > 0) {
+        const recentSources: RecentDailyMemorySource[] = []
+        for (let back = RECENT_DAILY_CONTEXT_DAYS - 1; back >= 0; back--) {
+            const stamp = dateStampInTimezone(Date.now() - back * 86_400_000, getConfig().timezone)
+            const relPath = `MEMORY_DAY/${stamp}.md`
+            const content = readWorkspaceFile(relPath)
+            if (content !== null) recentSources.push({ relativePath: relPath, content })
+        }
+        const dailyBudget = Math.min(MAX_RECENT_DAILY_CONTEXT_CHARS, remaining)
+        for (const block of compactRecentDailyMemory(recentSources, dailyBudget)) {
+            if (!pushBlock(block.relativePath, 'memory-day-compact', block.content)) break
+        }
     }
 
     if (blocks.length === 0) return ''
 
     return [
         '<workspace_context_files>',
-        'These user-managed context files are loaded LIVE from the workspace on every turn — they are current state, not a stale snapshot. Treat them as durable user/project context. Do not spend a tool call re-reading one just to confirm what is already shown here; only read from disk when a block is marked [truncated] or you have specific reason to think it changed mid-turn. To change durable state you must write the file with tools (see <safety_core>) — an in-context edit alone does not persist. Higher-priority runtime instructions and the current user message still win on conflict.',
+        'These user-managed context files are loaded LIVE from the workspace on every turn — they are current state, not a stale snapshot. Treat them as durable user/project context. Do not spend a tool call re-reading a full block just to confirm what is already shown here. A block marked compact is an orientation view, not the complete file: read/search its raw path when omitted detail matters; also read from disk when a block is [truncated] or likely changed mid-turn. To change durable state you must write the file with tools (see <safety_core>) — an in-context edit alone does not persist. Higher-priority runtime instructions and the current user message still win on conflict.',
         'Use BOOT.md only while it exists. Use ONBOARDING.md to resume long onboarding across conversations. If onboarding is completed or skipped, consolidate useful durable information into USER.md, MEMORY.md, MONITORS.md, and config.json when app-level display names changed; mark ONBOARDING.md complete/skipped; then remove BOOT.md.',
-        "Daily working memory lives at MEMORY_DAY/<configured-local-date>.md (the date is in the <current_time> block's `today`). Append meaningful actions, design discussions, external/physical actions, and open loops to today's file. Use MEMORY.md only for durable facts worth carrying forward. AGENT_NEEDS.md is the operational backlog for missing capabilities/tool/runtime gaps; prefer ReportAgentNeed over manual edits. MONITORS.md documents recurring monitor specs, watchIds, cadence/check timing, check prompts, notify rules, and silence rules; an active monitor still requires an actual runtime watch/task.",
+        "Daily working memory lives at MEMORY_DAY/<configured-local-date>.md (the date is in the <current_time> block's `today`). Recent day blocks may be compact extractive views: every saved entry is represented, but spans marked as omitted remain in the untouched raw file and semantic recall. Read/search raw memory when exact detail matters. Keep saving useful facts and workflow state generously, but encode each entry densely instead of narrating the run. Use MEMORY.md only for durable facts worth carrying forward. AGENT_NEEDS.md is the operational backlog for missing capabilities/tool/runtime gaps; prefer ReportAgentNeed over manual edits. MONITORS.md documents recurring monitor specs, watchIds, cadence/check timing, check prompts, notify rules, and silence rules; an active monitor still requires an actual runtime watch/task.",
         '',
         ...blocks,
         '</workspace_context_files>',

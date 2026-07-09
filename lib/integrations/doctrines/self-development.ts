@@ -37,7 +37,7 @@ Then give the user the preview URLs from \`npm run self-dev:run -- preview --run
 
 The preview readiness check requires HTTP 200 on the selected health path; use \`--health-path /maps\`, \`--health-path /api/config\`, or another relevant target when the task depends on a specific surface. If the snapshot lacks config for a new or not-yet-deployed feature, seed only the preview snapshot with \`npm run self-dev:run -- seed --run-id <id> --profile location-intelligence\` or an explicit \`--config-json\` / \`--config-patch\`.
 
-Use \`npm run self-dev:run -- status --run-id <id>\` when you want a compact view of the prepared worktree. Use \`restart\`, \`logs\`, \`seed\`, and \`stop\` only for the managed preview lifecycle. Other \`self-dev:run\` subcommands are generic executors for explicit decisions you have already made: commit, rebase, push, update, cleanup.
+Use \`npm run self-dev:run -- status --run-id <id>\` when you want a compact view of the prepared worktree. Use \`restart\`, \`logs\`, \`seed\`, and \`stop\` only for the managed preview lifecycle. Other \`self-dev:run\` subcommands are generic executors for explicit decisions you have already made: commit, rebase, push, update, pin/unpin, cleanup. Pin a run that must remain available long-term. Unpinned runs become automatic-retention candidates only after they have been pushed, stayed git-clean and inactive, and aged past the configured project-run window; prepared, dirty, active, and committed-but-unpushed runs are never auto-cleaned, and the branch is preserved when an eligible worktree is removed.
 
 When calling \`delegate_to\` for coder, pass the returned worktree path as \`cwd\` so the CLI process starts inside the isolated worktree.
 </project_workspace_policy>

@@ -28,6 +28,7 @@ import {
   artifactPanelConversationWidthKey,
   clampArtifactPanelWidth,
   collectAgentRuns,
+  findActiveInProgressAssistantMessage,
   getElementContentHeight,
   hasAssistantProgress,
   isAssistantMessageInProgress,
@@ -39,6 +40,7 @@ import {
 } from "@/components/chat/chat-view-helpers"
 import { ChatInput } from "@/components/chat-input"
 import { ChatConnectionPill } from "@/components/chat-connection-pill"
+import { PendingFollowUps } from "@/components/chat/pending-follow-ups"
 import { TodoBar } from "@/components/todo-bar"
 import { MessageBubble, StreamingBubble } from "@/components/message-bubble"
 import { FilePreviewModal } from "@/components/file-preview-modal"
@@ -262,6 +264,40 @@ export function ChatView() {
     (conversation) => conversation.id === state.activeConversationId
   )
   const conversationId = activeConversation?.id ?? null
+  const pendingFollowUps = React.useMemo(
+    () => (conversationId ? state.pendingFollowUps[conversationId] ?? [] : []),
+    [conversationId, state.pendingFollowUps]
+  )
+  const pendingFollowUpUserIds = React.useMemo(
+    () => new Set(pendingFollowUps.map((entry) => entry.userMessageId)),
+    [pendingFollowUps]
+  )
+  const transcriptMessages = React.useMemo(
+    () =>
+      (activeConversation?.messages ?? []).filter(
+        (message) => !pendingFollowUpUserIds.has(message.id)
+      ),
+    [activeConversation?.messages, pendingFollowUpUserIds]
+  )
+  const pendingFollowUpItems = React.useMemo(
+    () =>
+      pendingFollowUps.flatMap((entry) => {
+        const message = activeConversation?.messages.find(
+          (candidate) => candidate.id === entry.userMessageId
+        )
+        return message
+          ? [
+              {
+                id: entry.followUpId,
+                content: message.content,
+                attachmentCount: message.attachments?.length ?? 0,
+                status: entry.status,
+              },
+            ]
+          : []
+      }),
+    [activeConversation?.messages, pendingFollowUps]
+  )
   const isStreamingThisConversation = Boolean(
     conversationId &&
     state.isStreaming &&
@@ -289,7 +325,7 @@ export function ChatView() {
   const isReconnecting = useServerConnection(
     isStreamingThisConversation || deviceOffline
   )
-  const messageCount = activeConversation?.messages.length ?? 0
+  const messageCount = transcriptMessages.length
   const messagePage = conversationId
     ? state.conversationMessagePages[conversationId]
     : undefined
@@ -301,12 +337,13 @@ export function ChatView() {
   const hasOlderMessages = Boolean(messagePage?.hasMore)
   const isLoadingOlderMessages = Boolean(messagePage?.isLoadingOlder)
   const latestAssistantMessageId = React.useMemo(() => {
-    const messages = activeConversation?.messages ?? []
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "assistant") return messages[i].id
+    for (let i = transcriptMessages.length - 1; i >= 0; i--) {
+      if (transcriptMessages[i].role === "assistant") {
+        return transcriptMessages[i].id
+      }
     }
     return null
-  }, [activeConversation?.messages])
+  }, [transcriptMessages])
   const activeStreamingMessageId =
     isStreamingThisConversation && conversationId
       ? (state.streamingMessageId ??
@@ -337,13 +374,11 @@ export function ChatView() {
     ]
   )
   const activeInProgressAssistantMessage = React.useMemo(() => {
-    const messages = activeConversation?.messages ?? []
-    const lastMessage = messages[messages.length - 1]
-    if (!isAssistantMessageInProgress(lastMessage)) {
-      return null
-    }
-    return hasAssistantProgress(lastMessage) ? lastMessage : null
-  }, [activeConversation?.messages])
+    return findActiveInProgressAssistantMessage(
+      transcriptMessages,
+      activeStreamingMessageId
+    )
+  }, [activeStreamingMessageId, transcriptMessages])
   const hasInProgressAssistantProgress = Boolean(
     activeInProgressAssistantMessage
   )
@@ -375,7 +410,7 @@ export function ChatView() {
 
   const agentRuns = React.useMemo(() => {
     const runs: AgentCallReasoningEntry[] = []
-    for (const message of activeConversation?.messages ?? []) {
+    for (const message of transcriptMessages) {
       runs.push(...collectAgentRuns(message.reasoning))
     }
     if (isStreamingThisConversation) {
@@ -385,7 +420,7 @@ export function ChatView() {
     for (const run of runs) byId.set(run.runId, run)
     return Array.from(byId.values())
   }, [
-    activeConversation?.messages,
+    transcriptMessages,
     isStreamingThisConversation,
     state.streamingReasoning,
   ])
@@ -1192,7 +1227,7 @@ export function ChatView() {
 
   const prepareTailSpacerForSubmittedMessage = React.useCallback(
     (userMessageId: string) => {
-      const messages = activeConversation?.messages ?? []
+      const messages = transcriptMessages
       const userIndex = messages.findIndex(
         (message) => message.id === userMessageId && message.role === "user"
       )
@@ -1233,7 +1268,7 @@ export function ChatView() {
       return true
     },
     [
-      activeConversation?.messages,
+      transcriptMessages,
       getCommittedTailSpacer,
       getTailResponseMinHeight,
       persistTailSpacerState,
@@ -1478,7 +1513,7 @@ export function ChatView() {
     )
       return
     if (shouldUseStreamingBubbleForActiveAssistant) return
-    const messages = activeConversation?.messages ?? []
+    const messages = transcriptMessages
     const lastMsg = messages[messages.length - 1]
     const previousMsg = messages[messages.length - 2]
     if (
@@ -1512,7 +1547,7 @@ export function ChatView() {
       scheduleMessageTopAnchor(previousMsg.id)
     }
   }, [
-    activeConversation?.messages,
+    transcriptMessages,
     conversationId,
     getCommittedTailSpacer,
     isMessageNearTopAnchor,
@@ -1527,7 +1562,7 @@ export function ChatView() {
     if (!conversationId || !isStreamingThisConversation) return
     if (minHeightMsgId !== null && !shouldUseStreamingBubbleForActiveAssistant)
       return
-    const messages = activeConversation?.messages ?? []
+    const messages = transcriptMessages
     const lastMsg = messages[messages.length - 1]
     const previousMsg = messages[messages.length - 2]
     const tailUserMessage = shouldUseStreamingBubbleForActiveAssistant
@@ -1565,7 +1600,7 @@ export function ChatView() {
       scheduleMessageTopAnchor(tailUserMessage.id)
     }
   }, [
-    activeConversation?.messages,
+    transcriptMessages,
     conversationId,
     getTailResponseMinHeight,
     isMessageNearTopAnchor,
@@ -1588,7 +1623,7 @@ export function ChatView() {
       minHeightMsgId !== null
     )
       return
-    const messages = activeConversation?.messages ?? []
+    const messages = transcriptMessages
     const lastMsg = messages[messages.length - 1]
     const previousMsg = messages[messages.length - 2]
     if (lastMsg?.role === "assistant" && previousMsg?.role === "user") {
@@ -1618,7 +1653,7 @@ export function ChatView() {
       }
     }
   }, [
-    activeConversation?.messages,
+    transcriptMessages,
     conversationId,
     getCommittedTailSpacer,
     isMessageNearTopAnchor,
@@ -1631,7 +1666,7 @@ export function ChatView() {
   React.useLayoutEffect(() => {
     if (!conversationId || isStreamingThisConversation || showStreamingBubble)
       return
-    const messages = activeConversation?.messages ?? []
+    const messages = transcriptMessages
     const lastMsg = messages[messages.length - 1]
     const previousMsg = messages[messages.length - 2]
 
@@ -1675,7 +1710,7 @@ export function ChatView() {
       }
     }
   }, [
-    activeConversation?.messages,
+    transcriptMessages,
     conversationId,
     getCommittedTailSpacer,
     isMessageNearTopAnchor,
@@ -1703,7 +1738,7 @@ export function ChatView() {
       minHeightMsgId !== latestAssistantMessageId
     )
       return
-    const messages = activeConversation?.messages ?? []
+    const messages = transcriptMessages
     const lastMsg = messages[messages.length - 1]
     const previousMsg = messages[messages.length - 2]
     if (
@@ -1840,7 +1875,7 @@ export function ChatView() {
       }
     }
   }, [
-    activeConversation?.messages,
+    transcriptMessages,
     conversationId,
     getTailResponseMinHeight,
     isStreamingThisConversation,
@@ -1905,7 +1940,7 @@ export function ChatView() {
     // message-level anchor can't fix this: the message top never moves, only the
     // content between it and the answer.
     if (fin && fin.conversationId === conversationId) {
-      const lastMsg = (activeConversation?.messages ?? []).at(-1)
+      const lastMsg = transcriptMessages.at(-1)
       const wrapper =
         lastMsg?.role === "assistant" &&
         lastMsg.id === latestAssistantIdRef.current
@@ -1985,7 +2020,7 @@ export function ChatView() {
       ignoreSyncRef.current = false
     }
   }, [
-    activeConversation?.messages,
+    transcriptMessages,
     conversationId,
     isStreamingThisConversation,
     restoreScrollAnchor,
@@ -2428,7 +2463,7 @@ export function ChatView() {
         }
 
         if (!consumeSubmittedMessageAnchor()) {
-          const messages = activeConversation?.messages || []
+          const messages = transcriptMessages
           const lastMsg = messages[messages.length - 1]
           const previousMsg = messages[messages.length - 2]
 
@@ -2580,7 +2615,7 @@ export function ChatView() {
     syncScrollState,
     setProgrammaticScrollbarSuppressed,
     setScrollButtonVisible,
-    activeConversation?.messages,
+    transcriptMessages,
   ])
 
   // ── Generated artifact side-panel state ────────────────────────────────
@@ -3206,7 +3241,7 @@ export function ChatView() {
                         </div>
                       )}
 
-                      {activeConversation.messages.map((message, index) => {
+                      {transcriptMessages.map((message, index) => {
                         if (
                           shouldUseStreamingBubbleForActiveAssistant &&
                           message.id === activeInProgressAssistantMessage?.id
@@ -3225,7 +3260,7 @@ export function ChatView() {
                             )}
                             style={
                               message.id === minHeightMsgId &&
-                              index === activeConversation.messages.length - 1
+                              index === transcriptMessages.length - 1
                                 ? { paddingBottom: minHeight }
                                 : undefined
                             }
@@ -3311,12 +3346,13 @@ export function ChatView() {
           >
             <div className="pointer-events-auto mx-auto w-full max-w-[780px]">
               <TodoBar
-                messages={activeConversation.messages}
+                messages={transcriptMessages}
                 streamingReasoning={
                   isStreamingThisConversation ? state.streamingReasoning : []
                 }
                 hideCompleted={!isStreamingThisConversation}
               />
+              <PendingFollowUps items={pendingFollowUpItems} />
               <ChatInput variant="chat" />
             </div>
           </div>

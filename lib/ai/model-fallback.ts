@@ -47,6 +47,10 @@ export function shouldTryModelFallback(
     message.includes("invalid_request") ||
     message.includes("bad request") ||
     message.includes("expired") ||
+    message.includes("access token could not be refreshed") ||
+    message.includes("refresh token was revoked") ||
+    message.includes("refresh token has been revoked") ||
+    message.includes("please log out and sign in again") ||
     message.includes("429") ||
     message.includes("503") ||
     message.includes("401")

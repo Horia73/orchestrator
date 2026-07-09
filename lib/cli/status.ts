@@ -40,6 +40,8 @@ let cachedStatuses: { at: number; data: Record<CliId, CliStatus> } | null = null
 let inflight: Promise<Record<CliId, CliStatus>> | null = null
 /** Last conclusively-healthy status per CLI, retained across flaky probes. */
 const lastGood: Partial<Record<CliId, { at: number; status: CliStatus }>> = {}
+/** Invalidates probes that started before an explicit login-state change. */
+let statusRevision = 0
 
 /**
  * Result of a single status probe, tagged with whether we actually learned the
@@ -190,13 +192,15 @@ function authFileExists(id: CliId): boolean {
  * is authoritative (and refreshes last-good when healthy). An inconclusive one
  * prefers, in order: recent last-good → on-disk credentials → the raw negative.
  */
-function resolveStatus(id: CliId, probe: ProbeResult): CliStatus {
+function resolveStatus(id: CliId, probe: ProbeResult, allowLastGood = true): CliStatus {
     if (probe.conclusive) {
-        if (probe.status.loggedIn && !probe.status.needsReconnect) {
+        if (allowLastGood && probe.status.loggedIn && !probe.status.needsReconnect) {
             lastGood[id] = { at: Date.now(), status: probe.status }
         }
         return probe.status
     }
+
+    if (!allowLastGood) return probe.status
 
     const prev = lastGood[id]
     if (prev && Date.now() - prev.at < LAST_GOOD_MAX_AGE_MS) {
@@ -316,6 +320,7 @@ function describeExpiry(expiredAgoMs: number): string {
 
 /** Probe every CLI once, enrich + resolve, and refresh the shared cache. */
 async function probeAllCliStatuses(): Promise<Record<CliId, CliStatus>> {
+    const revision = statusRevision
     const entries = await Promise.all(
         CLI_IDS.map(async id => {
             const probe = await runStatus(id)
@@ -323,15 +328,39 @@ async function probeAllCliStatuses(): Promise<Record<CliId, CliStatus>> {
                 conclusive: probe.conclusive,
                 status: enrichWithCredentialMetadata(id, probe.status),
             }
-            return [id, resolveStatus(id, enriched)] as const
+            return [id, resolveStatus(id, enriched, revision === statusRevision)] as const
         })
     )
     const result = {} as Record<CliId, CliStatus>
     for (const [id, status] of entries) {
         result[id] = status
     }
-    cachedStatuses = { at: Date.now(), data: result }
+    if (revision === statusRevision) {
+        cachedStatuses = { at: Date.now(), data: result }
+    }
     return result
+}
+
+/**
+ * Forget cached authentication truth after an explicit login-state change.
+ * In-flight probes from before the change are revision-gated so they cannot
+ * restore a stale "logged in" snapshot after logout.
+ */
+export function invalidateCliStatus(id: CliId): void {
+    statusRevision++
+    delete lastGood[id]
+    cachedStatuses = null
+    inflight = null
+}
+
+function startInflightStatusProbe(): Promise<Record<CliId, CliStatus>> {
+    const tracked = probeAllCliStatuses().finally(() => {
+        // An explicit login-state invalidation can let a newer probe start
+        // while this one is still finishing. Only clear our own slot.
+        if (inflight === tracked) inflight = null
+    })
+    inflight = tracked
+    return tracked
 }
 
 /** Status snapshot for all configured CLIs. Used by /api/cli/status. */
@@ -361,12 +390,11 @@ export async function getAllCliStatuses(options?: {
 
     if (options?.staleWhileRevalidate && cachedStatuses) {
         if (!inflight) {
-            inflight = probeAllCliStatuses().finally(() => { inflight = null })
+            startInflightStatusProbe()
         }
         return cachedStatuses.data
     }
 
     if (inflight) return inflight
-    inflight = probeAllCliStatuses().finally(() => { inflight = null })
-    return inflight
+    return startInflightStatusProbe()
 }

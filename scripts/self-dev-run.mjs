@@ -5,16 +5,17 @@ import os from 'os'
 import path from 'path'
 import { randomBytes } from 'crypto'
 import { spawn, spawnSync } from 'child_process'
+import { resolveProjectRunsRoot } from './project-run-paths.mjs'
 
 const projectDir = process.cwd()
-const stateRoot = path.join(projectDir, '.orchestrator', 'project-runs')
+const stateRoot = resolveProjectRunsRoot(projectDir)
 const portStatePath = path.join(stateRoot, 'ports.json')
 const argv = process.argv.slice(2)
 const command = argv[0]
 const args = parseArgs(argv.slice(1))
 const jsonOutput = boolArg('json')
 
-const commands = new Set(['status', 'start', 'stop', 'restart', 'preview', 'logs', 'seed', 'publish-static', 'commit', 'rebase', 'push', 'update', 'cleanup'])
+const commands = new Set(['status', 'start', 'stop', 'restart', 'preview', 'logs', 'seed', 'publish-static', 'commit', 'rebase', 'push', 'update', 'pin', 'unpin', 'cleanup'])
 const PREVIEW_TOKEN_BYTES = 24
 const PREVIEW_START_TIMEOUT_MS = 90_000
 const PREVIEW_POLL_MS = 750
@@ -57,6 +58,10 @@ async function main() {
       return pushRun(context)
     case 'update':
       return updateRun(context)
+    case 'pin':
+      return pinRun(context, true)
+    case 'unpin':
+      return pinRun(context, false)
     case 'cleanup':
       return cleanupRun(context)
     default:
@@ -69,6 +74,7 @@ function printStatus(context) {
   output(info, [
     `Run: ${info.runId}`,
     `State: ${info.status}`,
+    `Pinned: ${info.pinned ? 'yes' : 'no'}`,
     `Repo: ${info.repoDir}`,
     `Branch: ${info.branch || '(unknown)'}`,
     `HEAD: ${info.head || '(unknown)'}`,
@@ -532,6 +538,10 @@ async function cleanupRun(context) {
   const linkedWorktree = isLinkedWorktree(repoDir, worktreeControlDir)
   let deletedBranch = false
 
+  if ((context.state.pinned === true || fs.existsSync(path.join(context.runDir, '.orchestrator-keep'))) && !force) {
+    fail('Run is pinned. Unpin it first, or use --force only after deciding it can be discarded.')
+  }
+
   await stopPreview(context, { quiet: true })
 
   if (fs.existsSync(repoDir)) {
@@ -575,6 +585,26 @@ async function cleanupRun(context) {
       releasedPort: context.state.port ?? null,
     },
     `Cleaned run ${context.state.runId}.`,
+  )
+}
+
+function pinRun(context, pinned) {
+  const now = new Date().toISOString()
+  const note = stringArg('note')
+  updateRunState(context, pinned
+    ? {
+        pinned: true,
+        pinnedAt: now,
+        pinNote: note || context.state.pinNote || null,
+      }
+    : {
+        pinned: false,
+        unpinnedAt: now,
+        pinNote: null,
+      })
+  output(
+    { runId: context.state.runId, pinned, pinNote: context.state.pinNote ?? null },
+    `${pinned ? 'Pinned' : 'Unpinned'} run ${context.state.runId}.`,
   )
 }
 
@@ -652,6 +682,7 @@ function collectStatus(context) {
   return {
     runId: context.state.runId,
     status: context.state.status ?? 'unknown',
+    pinned: context.state.pinned === true,
     statePath: context.statePath,
     repoDir,
     exists,
@@ -1760,6 +1791,8 @@ function usage(exitCode) {
     `  ${prefix} rebase --run-id <id> [--base origin/master]`,
     `  ${prefix} push --run-id <id> --target-branch master`,
     `  ${prefix} update --run-id <id> --branch master [--url http://127.0.0.1:3000/api/update/apply]`,
+    `  ${prefix} pin --run-id <id> [--note "keep reason"]`,
+    `  ${prefix} unpin --run-id <id>`,
     `  ${prefix} cleanup --run-id <id> [--delete-branch] [--force] [--remove-state]`,
   ].join('\n')
   if (exitCode === 0) {

@@ -12,6 +12,11 @@ import {
 } from './store'
 import { getActiveProfileId, runWithProfileContext } from '@/lib/profiles/context'
 import { listProfiles } from '@/lib/profiles/store'
+import {
+    pruneStoredDetails,
+    storageRetentionChanged,
+} from '@/lib/storage/retention'
+import { runFilesystemRetentionProcess } from '@/lib/storage/filesystem-retention-runner'
 
 // ---------------------------------------------------------------------------
 // The scheduler tick. This is the ONLY long-lived background loop in the app.
@@ -30,6 +35,7 @@ const MISSED_GRACE_MS = 5 * 60_000
 // How often the tick sweeps terminal one-shots past their retention window. The
 // prune itself is cheap; throttling just avoids needless writes/events.
 const PRUNE_INTERVAL_MS = 30 * 60_000
+const STORAGE_RETENTION_INTERVAL_MS = 24 * 60 * 60_000
 
 interface SchedulerState {
     started: boolean
@@ -37,6 +43,8 @@ interface SchedulerState {
     ticking: boolean
     inFlight: Set<string>
     lastPruneAt: number
+    lastStorageRetentionAt: number
+    filesystemRetentionRunning: boolean
 }
 
 const g = globalThis as unknown as { __orchestratorScheduler?: SchedulerState }
@@ -46,9 +54,13 @@ const state: SchedulerState = g.__orchestratorScheduler ?? {
     ticking: false,
     inFlight: new Set<string>(),
     lastPruneAt: 0,
+    lastStorageRetentionAt: 0,
+    filesystemRetentionRunning: false,
 }
 // Survive an HMR reload that carried over an older state shape without the field.
 if (typeof state.lastPruneAt !== 'number') state.lastPruneAt = 0
+if (typeof state.lastStorageRetentionAt !== 'number') state.lastStorageRetentionAt = 0
+if (typeof state.filesystemRetentionRunning !== 'boolean') state.filesystemRetentionRunning = false
 g.__orchestratorScheduler = state
 
 function log(msg: string): void {
@@ -135,6 +147,47 @@ async function tick(): Promise<void> {
                 } catch (err) {
                     log(`prune failed for ${profile.id}: ${err instanceof Error ? err.message : String(err)}`)
                 }
+            }
+        }
+
+        // Heavy exact-input/reasoning payloads are useful for recent debugging,
+        // but duplicating them forever dominates the DB. Compact them once a
+        // day per profile while retaining metrics, summaries, and messages.
+        if (now - state.lastStorageRetentionAt >= STORAGE_RETENTION_INTERVAL_MS) {
+            state.lastStorageRetentionAt = now
+            for (const profile of listProfiles()) {
+                try {
+                    runWithProfileContext(
+                        { profileId: profile.id, role: profile.role },
+                        () => {
+                            const pruned = pruneStoredDetails(now)
+                            if (storageRetentionChanged(pruned)) {
+                                log(`storage retention for ${profile.id}: ${JSON.stringify(pruned)}`)
+                            }
+                        }
+                    )
+                } catch (err) {
+                    log(`storage retention failed for ${profile.id}: ${err instanceof Error ? err.message : String(err)}`)
+                }
+            }
+
+            // Project worktrees and workspace/tmp can contain multi-gigabyte
+            // trees. Run their conservative cleanup in a locked child process
+            // so filesystem traversal never stalls chats or scheduler ticks.
+            if (!state.filesystemRetentionRunning) {
+                state.filesystemRetentionRunning = true
+                void runFilesystemRetentionProcess()
+                    .then(result => {
+                        const detail = result.output ? `: ${result.output.replace(/\s+/g, ' ').trim()}` : ''
+                        if (result.ok) log(`filesystem retention complete${detail}`)
+                        else log(`filesystem retention failed (exit ${result.exitCode ?? 'spawn'})${detail}`)
+                    })
+                    .catch(error => {
+                        log(`filesystem retention failed: ${error instanceof Error ? error.message : String(error)}`)
+                    })
+                    .finally(() => {
+                        state.filesystemRetentionRunning = false
+                    })
             }
         }
     } catch (err) {

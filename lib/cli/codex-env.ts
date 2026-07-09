@@ -32,6 +32,19 @@ export function codexRuntimeAuthPath(): string {
     return path.join(codexRuntimeCodexHome(), 'auth.json')
 }
 
+export function codexAuthPaths(): string[] {
+    return [...new Set([
+        codexRuntimeAuthPath(),
+        path.join(os.homedir(), '.codex', 'auth.json'),
+    ])]
+}
+
+const CODEX_MAINTENANCE_LOCK_STALE_MS = 2 * 60 * 60_000
+
+export function codexRuntimeMaintenanceLockPath(codexHome = codexRuntimeCodexHome()): string {
+    return path.join(codexHome, '.orchestrator-maintenance.lock')
+}
+
 function runtimeConfigPath(): string {
     return path.join(codexRuntimeCodexHome(), 'config.toml')
 }
@@ -51,12 +64,69 @@ const SANITIZED_CONFIG = [
 ].join('\n')
 
 export function codexCliEnv(extra?: Record<string, string | undefined>): NodeJS.ProcessEnv {
+    if (codexRuntimeMaintenanceActive()) {
+        throw new Error('Codex runtime maintenance is in progress; retry shortly.')
+    }
+    return buildCodexCliEnv(extra)
+}
+
+/** Maintenance owns the exclusive runtime lock, so it must bypass the normal
+ * launch guard when it starts Codex app-server for official thread/delete. */
+export function codexMaintenanceCliEnv(extra?: Record<string, string | undefined>): NodeJS.ProcessEnv {
+    return buildCodexCliEnv(extra)
+}
+
+function buildCodexCliEnv(extra?: Record<string, string | undefined>): NodeJS.ProcessEnv {
     const runtimeHome = prepareCodexRuntimeHome()
     return {
         ...augmentedEnv(extra),
         HOME: runtimeHome,
         CODEX_HOME: path.join(runtimeHome, '.codex'),
     }
+}
+
+export function codexRuntimeMaintenanceActive(
+    now = Date.now(),
+    codexHome = codexRuntimeCodexHome()
+): boolean {
+    const lockPath = codexRuntimeMaintenanceLockPath(codexHome)
+    try {
+        const age = now - fs.statSync(lockPath).mtimeMs
+        if (age <= CODEX_MAINTENANCE_LOCK_STALE_MS) return true
+        fs.rmSync(lockPath, { force: true })
+        return false
+    } catch {
+        return false
+    }
+}
+
+export function acquireCodexRuntimeMaintenanceLock(
+    now = Date.now(),
+    codexHome = codexRuntimeCodexHome()
+): (() => void) | null {
+    fs.mkdirSync(codexHome, { recursive: true })
+    const lockPath = codexRuntimeMaintenanceLockPath(codexHome)
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+            const fd = fs.openSync(lockPath, 'wx', 0o600)
+            try {
+                fs.writeFileSync(fd, `${JSON.stringify({ pid: process.pid, startedAt: new Date(now).toISOString() })}\n`)
+            } finally {
+                fs.closeSync(fd)
+            }
+            return () => {
+                try {
+                    fs.rmSync(lockPath, { force: true })
+                } catch {
+                    // The stale-lock path is fail-safe; the next run can recover.
+                }
+            }
+        } catch (error) {
+            if (!isAlreadyExists(error)) throw error
+            if (codexRuntimeMaintenanceActive(now, codexHome)) return null
+        }
+    }
+    return null
 }
 
 export function prepareCodexRuntimeHome(): string {
@@ -79,14 +149,37 @@ export function prepareCodexRuntimeHome(): string {
  * positive signal to override an inconclusive probe.
  */
 export function codexAuthFileExists(): boolean {
-    const candidates = [codexRuntimeAuthPath(), path.join(os.homedir(), '.codex', 'auth.json')]
-    return candidates.some(candidate => {
+    return codexAuthPaths().some(candidate => {
         try {
             return fs.statSync(candidate).size > 0
         } catch {
             return false
         }
     })
+}
+
+/**
+ * Remove every Codex credential copy managed or imported by Orchestrator.
+ *
+ * Codex runs with an isolated HOME, but that runtime is initially seeded from
+ * the user's real ~/.codex/auth.json. Running `codex logout` only inside the
+ * isolated HOME removes the runtime copy; the next status check would otherwise
+ * import the source copy again and make the account appear logged in. Logout is
+ * therefore complete only after both files are gone.
+ */
+export function clearCodexAuthFiles(paths: string[] = codexAuthPaths()): void {
+    const failures: string[] = []
+    for (const authPath of new Set(paths)) {
+        try {
+            fs.rmSync(authPath, { force: true })
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            failures.push(`${authPath}: ${message}`)
+        }
+    }
+    if (failures.length > 0) {
+        throw new Error(`Failed to remove Codex credentials: ${failures.join('; ')}`)
+    }
 }
 
 function writeSanitizedConfig(): void {
@@ -117,4 +210,8 @@ function syncAuthFile(): void {
     } catch {
         // Best effort. Device auth through Orchestrator writes directly into the runtime home.
     }
+}
+
+function isAlreadyExists(error: unknown): boolean {
+    return error !== null && typeof error === 'object' && 'code' in error && error.code === 'EEXIST'
 }

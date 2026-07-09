@@ -8,6 +8,7 @@ import type {
   SteeredMessageReasoningEntry,
   ToolStreamDelta,
 } from "@/lib/types"
+import type { ChatFollowUpSnapshot } from "@/lib/chat-followup-types"
 import {
   appendBoundedToolDelta,
   sanitizeReasoningForPersistence,
@@ -30,6 +31,7 @@ export interface ChatState {
   conversations: Conversation[]
   isLoading: boolean
   activeChatStreams: Record<string, ActiveChatStream>
+  pendingFollowUps: Record<string, PendingChatFollowUp[]>
   conversationLoadState: Record<string, ConversationLoadState>
   conversationLoadErrors: Record<string, string | undefined>
   conversationMessagePages: Record<string, ConversationMessagePageState>
@@ -52,11 +54,18 @@ export interface ChatState {
   streamingMessageId: string | null
 }
 
+export type PendingFollowUpStatus = "submitting" | "queued" | "claimed"
+
+export interface PendingChatFollowUp extends ChatFollowUpSnapshot {
+  status: PendingFollowUpStatus
+}
+
 export function createInitialChatState(isLoading = true): ChatState {
   return {
     conversations: [],
     isLoading,
     activeChatStreams: {},
+    pendingFollowUps: {},
     conversationLoadState: {},
     conversationLoadErrors: {},
     conversationMessagePages: {},
@@ -207,6 +216,31 @@ export type ChatAction =
       entry: SteeredMessageReasoningEntry
     }
   | {
+      type: "UPSERT_PENDING_FOLLOWUP"
+      conversationId: string
+      followUp: PendingChatFollowUp
+    }
+  | {
+      type: "SYNC_PENDING_FOLLOWUPS"
+      conversationId: string
+      followUps: ChatFollowUpSnapshot[]
+    }
+  | {
+      type: "SET_PENDING_FOLLOWUP_STATUS"
+      conversationId: string
+      userMessageId: string
+      status: PendingFollowUpStatus
+    }
+  | {
+      type: "REMOVE_PENDING_FOLLOWUP"
+      conversationId: string
+      userMessageId: string
+    }
+  | {
+      type: "SETTLE_FIRST_CLAIMED_FOLLOWUP"
+      conversationId: string
+    }
+  | {
       /** Stop pressed: queued steering messages become plain history — drop
        *  their pending-steering render state. */
       type: "CLEAR_STEER_PENDING"
@@ -286,6 +320,56 @@ function inferStreamingMode(
   if (typeof lastContentPhase !== "number") return "reasoning"
 
   return lastContentPhase >= lastReasoningPhase ? "content" : "reasoning"
+}
+
+function upsertPendingFollowUp(
+  pendingFollowUps: ChatState["pendingFollowUps"],
+  conversationId: string,
+  followUp: PendingChatFollowUp
+): ChatState["pendingFollowUps"] {
+  const queue = pendingFollowUps[conversationId] ?? []
+  const existingIndex = queue.findIndex(
+    (entry) => entry.userMessageId === followUp.userMessageId
+  )
+  const nextQueue = [...queue]
+  if (existingIndex >= 0) nextQueue[existingIndex] = followUp
+  else nextQueue.push(followUp)
+  nextQueue.sort((a, b) => a.queuedAt - b.queuedAt)
+  return { ...pendingFollowUps, [conversationId]: nextQueue }
+}
+
+function removePendingFollowUp(
+  pendingFollowUps: ChatState["pendingFollowUps"],
+  conversationId: string,
+  userMessageId: string
+): ChatState["pendingFollowUps"] {
+  const queue = pendingFollowUps[conversationId]
+  if (!queue?.some((entry) => entry.userMessageId === userMessageId)) {
+    return pendingFollowUps
+  }
+  const nextQueue = queue.filter(
+    (entry) => entry.userMessageId !== userMessageId
+  )
+  const next = { ...pendingFollowUps }
+  if (nextQueue.length > 0) next[conversationId] = nextQueue
+  else delete next[conversationId]
+  return next
+}
+
+function settleFirstClaimedFollowUp(
+  pendingFollowUps: ChatState["pendingFollowUps"],
+  conversationId: string
+): ChatState["pendingFollowUps"] {
+  const claimed = pendingFollowUps[conversationId]?.find(
+    (entry) => entry.status === "claimed"
+  )
+  return claimed
+    ? removePendingFollowUp(
+        pendingFollowUps,
+        conversationId,
+        claimed.userMessageId
+      )
+    : pendingFollowUps
 }
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
@@ -605,6 +689,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return {
         ...state,
         conversations,
+        pendingFollowUps: Object.fromEntries(
+          Object.entries(state.pendingFollowUps).filter(([id]) => id !== action.id)
+        ),
         conversationLoadState: Object.fromEntries(
           Object.entries(state.conversationLoadState).filter(
             ([id]) => id !== action.id
@@ -1131,9 +1218,85 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         streamingMode: "reasoning",
         streamingStatus: null,
       }
-    case "CLEAR_STEER_PENDING":
+    case "UPSERT_PENDING_FOLLOWUP":
       return {
         ...state,
+        pendingFollowUps: upsertPendingFollowUp(
+          state.pendingFollowUps,
+          action.conversationId,
+          action.followUp
+        ),
+      }
+    case "SYNC_PENDING_FOLLOWUPS": {
+      const transient = (state.pendingFollowUps[action.conversationId] ?? []).filter(
+        (entry) => entry.status === "submitting" || entry.status === "claimed"
+      )
+      const byUserMessageId = new Map<string, PendingChatFollowUp>()
+      for (const entry of transient) byUserMessageId.set(entry.userMessageId, entry)
+      for (const entry of action.followUps) {
+        if (entry.source !== "user") continue
+        if (byUserMessageId.get(entry.userMessageId)?.status === "claimed") {
+          continue
+        }
+        byUserMessageId.set(entry.userMessageId, {
+          ...entry,
+          status: "queued",
+        })
+      }
+      const nextQueue = [...byUserMessageId.values()].sort(
+        (a, b) => a.queuedAt - b.queuedAt
+      )
+      const pendingFollowUps = { ...state.pendingFollowUps }
+      if (nextQueue.length > 0) pendingFollowUps[action.conversationId] = nextQueue
+      else delete pendingFollowUps[action.conversationId]
+      return { ...state, pendingFollowUps }
+    }
+    case "SET_PENDING_FOLLOWUP_STATUS": {
+      const queue = state.pendingFollowUps[action.conversationId]
+      if (!queue) return state
+      let changed = false
+      const nextQueue = queue.map((entry) => {
+        if (
+          entry.userMessageId !== action.userMessageId ||
+          entry.status === action.status
+        ) {
+          return entry
+        }
+        changed = true
+        return { ...entry, status: action.status }
+      })
+      if (!changed) return state
+      return {
+        ...state,
+        pendingFollowUps: {
+          ...state.pendingFollowUps,
+          [action.conversationId]: nextQueue,
+        },
+      }
+    }
+    case "REMOVE_PENDING_FOLLOWUP":
+      return {
+        ...state,
+        pendingFollowUps: removePendingFollowUp(
+          state.pendingFollowUps,
+          action.conversationId,
+          action.userMessageId
+        ),
+      }
+    case "SETTLE_FIRST_CLAIMED_FOLLOWUP":
+      return {
+        ...state,
+        pendingFollowUps: settleFirstClaimedFollowUp(
+          state.pendingFollowUps,
+          action.conversationId
+        ),
+      }
+    case "CLEAR_STEER_PENDING": {
+      const pendingFollowUps = { ...state.pendingFollowUps }
+      delete pendingFollowUps[action.conversationId]
+      return {
+        ...state,
+        pendingFollowUps,
         conversations: state.conversations.map((conv) =>
           conv.id === action.conversationId &&
           conv.messages.some((m) => m.steerPending)
@@ -1146,6 +1309,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             : conv
         ),
       }
+    }
     case "UPDATE_CONTEXT_USAGE":
       return {
         ...state,
@@ -1222,6 +1386,16 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const page = state.conversationMessagePages[action.conversationId]
       const nextState = {
         ...state,
+        pendingFollowUps:
+          action.message.status === "ok" ||
+          action.message.status === "error" ||
+          action.message.status === "aborted" ||
+          typeof action.message.thinkingDuration === "number"
+            ? settleFirstClaimedFollowUp(
+                state.pendingFollowUps,
+                action.conversationId
+              )
+            : state.pendingFollowUps,
         conversations: sortConversationsByActivity(
           state.conversations.map((conv) =>
             conv.id === action.conversationId

@@ -1,4 +1,5 @@
 import type { BillingUsageEntry, ModalityBreakdown, ModalityTokens } from './schema'
+import { readBillingMetadata } from './billing-metadata'
 
 // ---------------------------------------------------------------------------
 // Provider-agnostic usage shape persisted in `request_logs`.
@@ -38,23 +39,34 @@ const EMPTY: NormalizedUsage = {
  */
 export function normalizeUsage(provider: string, raw: unknown): NormalizedUsage {
     if (!raw || typeof raw !== 'object') return EMPTY
+    const record = raw as Record<string, unknown>
+    let normalized: NormalizedUsage
     switch (provider) {
         case 'google':
-            return mapGemini(raw as Record<string, unknown>)
+            normalized = mapGemini(record)
+            break
         case 'anthropic':
         case 'claude-code':
-            return mapAnthropic(raw as Record<string, unknown>)
+            normalized = mapAnthropic(record)
+            break
         case 'openai':
-            return mapOpenAI(raw as Record<string, unknown>)
+            normalized = mapOpenAI(record)
+            break
         case 'openrouter':
-            return mapOpenRouter(raw as Record<string, unknown>)
+            normalized = mapOpenRouter(record)
+            break
         case 'codex':
-            return mapCodex(raw as Record<string, unknown>)
+            normalized = mapCodex(record)
+            break
         case 'browser':
-            return mapBrowser(raw as Record<string, unknown>)
+            normalized = mapBrowser(record)
+            break
         default:
-            return mapGeneric(raw as Record<string, unknown>)
+            normalized = mapGeneric(record)
+            break
     }
+    const billingBreakdown = readBillingMetadata(raw)
+    return billingBreakdown ? { ...normalized, billingBreakdown } : normalized
 }
 
 interface OpenRouterUsage {

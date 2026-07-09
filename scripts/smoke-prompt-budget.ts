@@ -39,6 +39,7 @@ process.env.ORCHESTRATOR_STATE_DIR = stateDir
 // the `ask_user` guidance block adds a lean ~0.9k on top. Restores real
 // headroom so the guard catches the NEXT creep instead of staying tripped.
 const MAX_PROMPT_CHARS = 170_000
+const MAX_PROMPT_PLUS_TOOL_SCHEMA_CHARS = 225_000
 
 let failures = 0
 function check(label: string, cond: unknown, detail?: unknown) {
@@ -55,6 +56,13 @@ async function main() {
     const { executeActivateIntegrationTools } = await import('@/lib/ai/tools/integrations')
     const { runWithProfileContext } = await import('@/lib/profiles/context')
     const { createProfile } = await import('@/lib/profiles/store')
+    const { getAgent } = await import('@/lib/ai/agents/registry')
+
+    const availableAgents = (orchestrator.canCallAgents ?? [])
+        .flatMap(agentId => {
+            const agent = getAgent(agentId)
+            return agent ? [agent] : []
+        })
 
     const ctx = (over: Record<string, unknown> = {}) => ({
         agentId: orchestrator.id,
@@ -62,7 +70,7 @@ async function main() {
         assistantName: 'Test',
         availableTools: [] as never[],
         availableBuiltins: orchestrator.builtins ?? [],
-        availableAgents: [] as never[],
+        availableAgents,
         conversationId: `budget-${randomUUID()}`,
         declaredToolIds: orchestrator.tools,
         declaredTools: getToolsForAgent(orchestrator.tools),
@@ -85,6 +93,16 @@ async function main() {
         `zero-activation prompt within budget (${prompt.length.toLocaleString()} <= ${MAX_PROMPT_CHARS.toLocaleString()} chars)`,
         prompt.length <= MAX_PROMPT_CHARS,
         prompt.length
+    )
+    const toolSchemaChars = JSON.stringify(exposed.map(tool => ({
+        name: tool.name,
+        description: tool.description,
+        input_schema: tool.input_schema,
+    }))).length
+    check(
+        `system + real tier-1 tool schemas within budget (${(prompt.length + toolSchemaChars).toLocaleString()} <= ${MAX_PROMPT_PLUS_TOOL_SCHEMA_CHARS.toLocaleString()} chars)`,
+        prompt.length + toolSchemaChars <= MAX_PROMPT_PLUS_TOOL_SCHEMA_CHARS,
+        { promptChars: prompt.length, toolSchemaChars }
     )
 
     // --- runtime_tools dedup (native-schema providers get no prose menu) ----

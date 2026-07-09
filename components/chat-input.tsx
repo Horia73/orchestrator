@@ -162,8 +162,8 @@ export function ChatInput({
     const isStreamingActiveConversation = Boolean(
         isStreaming && activeConversationId && streamingConversationId === activeConversationId
     )
-    // Steering: sending while this conversation streams queues a follow-up
-    // that runs as the next turn — the input stays live during a run.
+    // Steering: sending while this conversation streams stays available. The
+    // server injects it live when supported or queues it as the next turn.
     const canSend = hasContent && !hasPendingAttachments && !hasFailedAttachments
     const isCompact = isChat && density === "compact"
     const maxHeight = isCompact ? 92 : isChat ? 160 : 200

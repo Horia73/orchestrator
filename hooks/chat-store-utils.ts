@@ -15,6 +15,24 @@ export interface ActiveChatStream {
   startedAt: number
 }
 
+export function shouldSendAsSteering(args: {
+  targetConversationId: string | null
+  hasInternalFollowUp: boolean
+  ownsStream: boolean
+  ownedConversationId: string | null
+  isStreaming: boolean
+  streamingConversationId: string | null
+  activeChatStreams: Record<string, ActiveChatStream>
+}): boolean {
+  if (args.hasInternalFollowUp || !args.targetConversationId) return false
+  const target = args.targetConversationId
+  return Boolean(
+    (args.ownsStream && args.ownedConversationId === target) ||
+      (args.isStreaming && args.streamingConversationId === target) ||
+      args.activeChatStreams[target]
+  )
+}
+
 export type StreamingStatus = "connecting" | "recovering" | "offline" | null
 
 export function updateAgentEntry(

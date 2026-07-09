@@ -1,4 +1,5 @@
 import { getActiveChatStream, listActiveChatStreams } from '@/lib/chat-streams'
+import { peekFollowUpSnapshots } from '@/lib/chat-followups'
 import { runWithRequestProfile } from "@/lib/profiles/server"
 
 export async function GET(request: Request) {
@@ -25,12 +26,16 @@ export async function GET(request: Request) {
         }
 
         const active = getActiveChatStream(conversationId)
+        const followUps = peekFollowUpSnapshots(conversationId).filter(
+            entry => entry.source === 'user',
+        )
 
         return new Response(
             JSON.stringify({
                 active: !!active,
                 messageId: active?.messageId,
                 startedAt: active?.startedAt,
+                followUps,
             }),
             {
                 headers: {

@@ -1699,17 +1699,6 @@ function MessageBubbleComponent({
         // that turn's assistant bubble at their injection point — the
         // standalone bubble would duplicate them, so it stays hidden.
         if (parseSteeredMessage(message.content) !== null) return null
-        // Pending steering: sent while the turn still streams, delivery not
-        // settled yet — a muted italic bubble at the bottom of the transcript.
-        if (message.steerPending) {
-            return (
-                <div className="flex flex-col items-end gap-2 select-text">
-                    <div className="max-w-[85%] select-text whitespace-pre-wrap break-words rounded-[10px] bg-[#f0ede6]/60 px-4 py-2.5 text-[16px] italic text-muted-foreground dark:bg-muted/60">
-                        {message.content}
-                    </div>
-                </div>
-            )
-        }
         // Background-job completion notices are server-authored user-role
         // messages (the wake prompt); render them as a muted system card,
         // not as something the user typed.
