@@ -21,7 +21,7 @@ type EnumModelFeature = Extract<ModelFeature, { type: "enum" }>
 const AUDIO_CONTEXT_AGENT_ID = "audio_context_agent"
 const AUDIO_TRANSCRIPT_AGENT_ID = "audio_transcript_agent"
 
-const KNOWN_THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const
+const KNOWN_THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const
 
 const THINKING_LABELS: Record<string, string> = {
   none: "Off",
@@ -31,6 +31,7 @@ const THINKING_LABELS: Record<string, string> = {
   high: "High",
   xhigh: "XHigh",
   max: "Max",
+  ultra: "Ultra",
 }
 
 const NON_SELECTABLE_THINKING_LEVELS = new Set(["off", "auto", "enabled", "disabled", "reasoning", "thinking"])

@@ -920,15 +920,16 @@ function decodeAppServerSessionId(sessionId: string | undefined): string | undef
     return sessionId.slice(APP_SERVER_SESSION_PREFIX.length) || undefined
 }
 
-function mapEffortForCodex(level: string | undefined): string | null {
+export function mapEffortForCodex(level: string | undefined): string | null {
     switch (level) {
         case 'minimal': return 'low'
         case 'low':
         case 'medium':
         case 'high':
         case 'xhigh':
+        case 'max':
+        case 'ultra':
             return level
-        case 'max': return 'xhigh'
         default:
             return level ?? null
     }

@@ -35,7 +35,7 @@ interface SingleModelResearchTargetInput {
 }
 
 const STABLE_ID_RULE = '^[a-zA-Z][a-zA-Z0-9_-]*$'
-const KNOWN_THINKING_EXAMPLES = 'minimal, low, medium, high, xhigh, max'
+const KNOWN_THINKING_EXAMPLES = 'minimal, low, medium, high, xhigh, max, ultra'
 const KNOWN_CAPABILITY_EXAMPLES = 'text, image, audio, video, pdf, google_search, code_execution, url_context, function_calling, mcp, file_search, computer_use'
 const KNOWN_KIND_EXAMPLES = 'text, image, video, speech, music'
 

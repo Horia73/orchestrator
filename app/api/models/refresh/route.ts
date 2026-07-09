@@ -10,6 +10,7 @@ import {
 import { readLiveRegistry, writeLiveRegistry } from '@/lib/models/store'
 import { fetchGoogleModels, fetchLMStudioModels, fetchOpenRouterModels } from '@/lib/models/fetcher'
 import { probeClaudeCodeModels, type ClaudeResolvedModel } from '@/lib/cli/model-probe'
+import { codexModelsToLiveEntries, probeCodexModels } from '@/lib/cli/codex-model-probe'
 import type { LiveModelEntry } from '@/lib/models/schema'
 import { runWithAdminCookieProfile } from "@/lib/profiles/server"
 import { LM_STUDIO_API_KEY_ENV } from '@/lib/lm-studio'
@@ -18,9 +19,9 @@ import { LM_STUDIO_API_KEY_ENV } from '@/lib/lm-studio'
  * POST /api/models/refresh
  *
  * Pulls the live model list from each provider whose API key is configured,
- * and re-syncs the Claude Code entries from the CLI (see below). The response
- * includes per-provider status so the UI can show which fetches succeeded vs
- * which were skipped (no key) vs which failed.
+ * and re-syncs the Claude Code and Codex entries from their installed CLIs.
+ * The response includes per-provider status so the UI can show which fetches
+ * succeeded vs which were skipped (no key) vs which failed.
  */
 interface ProviderRefreshResult {
     fetched: number
@@ -137,14 +138,34 @@ export async function POST() {
             }
         }
 
+        // ---------- Codex (CLI) ----------
+        // app-server exposes the same account-aware model/list surface used by
+        // first-party Codex clients. Replace the previous successful live
+        // snapshot only after a non-empty probe; a stale/missing CLI must not
+        // make models already shown in the picker disappear.
+        try {
+            const probed = await probeCodexModels()
+            const liveModels = codexModelsToLiveEntries(probed)
+            const fetched = Object.keys(liveModels).length
+            if (fetched > 0) {
+                live.providers.codex = { fetchedAt: Date.now(), models: liveModels }
+                results.codex = { fetched }
+            } else {
+                results.codex = { fetched: 0 }
+            }
+        } catch (err) {
+            results.codex = {
+                fetched: 0,
+                error: err instanceof Error ? err.message : 'Codex model probe failed.',
+            }
+        }
+
         // ---------- Claude Code (CLI) ----------
         // No model-list API — discover the CLI's documented `--model` aliases
         // (plus every claude-code entry already in the registry), resolve each
         // to the concrete model id the CLI reports, then relabel existing
         // entries and add live entries for new families (see
-        // syncClaudeCodeModels). Codex still has no list surface — purge any
-        // stale live entries a former probe experiment wrote.
-        if (live.providers.codex) delete live.providers.codex
+        // syncClaudeCodeModels).
         try {
             const knownAliases = Object.keys(getEffectiveRegistry()['claude-code']?.models ?? {})
             const probed = await probeClaudeCodeModels(knownAliases)
@@ -163,10 +184,8 @@ export async function POST() {
             }
         }
 
-        // ---------- Codex, Anthropic & OpenAI ----------
-        // Codex uses explicit model ids (no "latest" alias, no list command), and
-        // the Anthropic/OpenAI API fetchers aren't implemented yet.
-        results.codex = { fetched: 0, skipped: 'not_implemented' }
+        // ---------- Anthropic & OpenAI ----------
+        // The direct Anthropic/OpenAI API fetchers aren't implemented yet.
         results.anthropic = { fetched: 0, skipped: 'not_implemented' }
         results.openai = { fetched: 0, skipped: 'not_implemented' }
 
