@@ -15,6 +15,7 @@ import {
   is3DModelFile,
   isCodeOrTextFile,
   isDocxFile,
+  isMarkdownFile,
   isPresentationFile,
   isSpreadsheetFile,
   isSvgFile,
@@ -577,6 +578,7 @@ function workspacePreviewKind(filename: string, mimeType: string): Attachment["t
   if (is3DModelFile(att)) return "other"
   if (mimeType.startsWith("image/")) return "image"
   if (mimeType.startsWith("video/")) return "video"
+  if (isMarkdownFile(att)) return "document"
   if (isCodeOrTextFile(att)) return "document"
   return null
 }

@@ -10,11 +10,12 @@ import { DocxViewer } from "@/components/office/docx-viewer"
 import { PptxViewer } from "@/components/office/pptx-viewer"
 import { SvgViewer } from "@/components/office/svg-viewer"
 import { CodeViewer } from "@/components/code-viewer"
+import { MarkdownViewer } from "@/components/markdown-viewer"
 import { HtmlFileViewer } from "@/components/html-file-viewer"
 import { ViewerErrorBoundary } from "@/components/office/viewer-error-boundary"
 import { CadFileViewer } from "@/components/cad/cad-file-viewer"
 import { ImageAnnotationEditor } from "@/components/image-annotation-editor"
-import { isDocxFile, isSvgFile, isSpreadsheetFile, isPresentationFile, isCodeOrTextFile, is3DModelFile, isHtmlFile } from "@/lib/preview-kinds"
+import { isDocxFile, isSvgFile, isSpreadsheetFile, isPresentationFile, isCodeOrTextFile, is3DModelFile, isHtmlFile, isMarkdownFile } from "@/lib/preview-kinds"
 import type { Attachment } from "@/lib/types"
 
 interface FilePreviewModalProps {
@@ -182,6 +183,9 @@ export function FilePreviewModal({
     }
     if (is3DModelFile(active)) {
         return framed(<CadFileViewer url={url} filename={active.filename} onClose={onClose} />)
+    }
+    if (isMarkdownFile(active)) {
+        return framed(<MarkdownViewer url={url} filename={active.filename} onClose={onClose} />)
     }
     if (isCodeOrTextFile(active)) {
         return framed(<CodeViewer url={url} filename={active.filename} onClose={onClose} />)

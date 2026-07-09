@@ -22,6 +22,16 @@ export function isSvgFile(att: Pick<Attachment, "filename" | "mimeType">): boole
     return ext(att.filename) === "svg" || att.mimeType === "image/svg+xml"
 }
 
+/** Markdown renders GitHub-style (typeset prose) in the dedicated MarkdownViewer,
+ *  with a toggle back to the raw source. `.mdx` deliberately stays in the code
+ *  viewer — its JSX is code, not something react-markdown would render usefully. */
+export function isMarkdownFile(att: Pick<Attachment, "filename" | "mimeType">): boolean {
+    const e = ext(att.filename)
+    if (e === "md" || e === "markdown") return true
+    const m = att.mimeType.toLowerCase()
+    return m === "text/markdown" || m === "text/x-markdown"
+}
+
 /** Excel / tabular. Matched by extension + MIME (NOT the stored Attachment.type)
  *  so files uploaded before office types existed still route correctly. */
 export function isSpreadsheetFile(att: Pick<Attachment, "filename" | "mimeType">): boolean {
@@ -90,6 +100,9 @@ export function isCodeOrTextFile(att: Pick<Attachment, "filename" | "mimeType">)
     // Office OOXML containers are ZIPs whose MIME contains "xml" (openXMLformats)
     // — exclude them so they never fall into the code viewer as raw ZIP bytes.
     if (isDocxFile(att) || isSpreadsheetFile(att) || isPresentationFile(att) || isHtmlFile(att)) return false
+    // Markdown gets the rendered MarkdownViewer (it exposes its own source toggle),
+    // so keep it out of the plain code viewer even though `md` is a known grammar.
+    if (isMarkdownFile(att)) return false
     const mime = att.mimeType.toLowerCase()
     if (mime.startsWith("text/")) return true
     if (mime.includes("json") || mime.includes("xml")) return true
@@ -105,6 +118,7 @@ export function isInAppPreviewable(att: Pick<Attachment, "filename" | "mimeType"
         isDocxFile(att) ||
         isHtmlFile(att) ||
         isSvgFile(att) ||
+        isMarkdownFile(att) ||
         is3DModelFile(att) ||
         isCodeOrTextFile(att)
     )
