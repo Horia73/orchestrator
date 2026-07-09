@@ -38,6 +38,12 @@ import { InboxComposer } from "./inbox-composer"
 
 type FolderFilter = "inbox" | "unread" | "read" | "scheduled"
 
+// The inbox list is unbounded server-side. To keep the DOM light with a large
+// history, only this many filtered rows are mounted at once; scrolling near the
+// bottom reveals another page (no "load more" button — matches the chat
+// older-message autoload). Search/filter/counts still run over the full set.
+const LIST_PAGE_SIZE = 60
+
 function activityTime(item: InboxListItem): number {
   return item.lastMessageAt ?? item.updatedAt ?? item.createdAt
 }
@@ -635,6 +641,9 @@ function InboxViewInner() {
   const [busyActionId, setBusyActionId] = React.useState<string | null>(null)
   const [query, setQuery] = React.useState("")
   const [folderFilter, setFolderFilter] = React.useState<FolderFilter>("inbox")
+  const [visibleCount, setVisibleCount] = React.useState(LIST_PAGE_SIZE)
+  const listScrollRef = React.useRef<HTMLDivElement | null>(null)
+  const loadMoreRef = React.useRef<HTMLDivElement | null>(null)
   const [expandedMessageIds, setExpandedMessageIds] = React.useState<
     Set<string>
   >(new Set())
@@ -694,16 +703,50 @@ function InboxViewInner() {
     })
   }, [folderFilter, query, sortedItems])
 
+  // Only mount the first `visibleCount` filtered rows; the rest reveal on scroll.
+  const visibleItems = React.useMemo(
+    () => filteredItems.slice(0, visibleCount),
+    [filteredItems, visibleCount]
+  )
+  const hasMore = visibleItems.length < filteredItems.length
+
   const groupedItems = React.useMemo(() => {
     const groups: Array<{ label: string; items: InboxListItem[] }> = []
-    for (const item of filteredItems) {
+    for (const item of visibleItems) {
       const label = groupLabel(activityTime(item))
       const group = groups.find((entry) => entry.label === label)
       if (group) group.items.push(item)
       else groups.push({ label, items: [item] })
     }
     return groups
-  }, [filteredItems])
+  }, [visibleItems])
+
+  // Restart the window whenever the visible set changes shape (new search or
+  // folder), so a fresh filter always begins at the top with one page mounted.
+  React.useEffect(() => {
+    setVisibleCount(LIST_PAGE_SIZE)
+    listScrollRef.current?.scrollTo({ top: 0 })
+  }, [query, folderFilter])
+
+  // Reveal the next page as the sentinel nears the bottom of the scroll area.
+  React.useEffect(() => {
+    if (!hasMore) return
+    const sentinel = loadMoreRef.current
+    const root = listScrollRef.current
+    if (!sentinel || !root) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setVisibleCount((current) =>
+            Math.min(current + LIST_PAGE_SIZE, filteredItems.length)
+          )
+        }
+      },
+      { root, rootMargin: "600px 0px" }
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [hasMore, filteredItems.length, visibleCount])
 
   const selectedItem = React.useMemo(
     () => items.find((item) => item.id === selectedId) ?? null,
@@ -894,6 +937,7 @@ function InboxViewInner() {
             )}
 
             <div
+              ref={listScrollRef}
               className="min-h-0 flex-1 overflow-y-auto bg-background"
               style={{
                 WebkitOverflowScrolling: "touch",
@@ -922,6 +966,15 @@ function InboxViewInner() {
                       </div>
                     </section>
                   ))}
+                  {hasMore && (
+                    <div
+                      ref={loadMoreRef}
+                      className="flex items-center justify-center py-4 text-[12px] text-foreground/45"
+                    >
+                      <Loader2 className="mr-2 size-3.5 animate-spin" />
+                      Loading more
+                    </div>
+                  )}
                 </div>
               )}
             </div>

@@ -1084,7 +1084,15 @@ export interface InboxListItem {
   messageCount: number
 }
 
-export function listInboxConversations(limit = 200): InboxListItem[] {
+// No default cap: the inbox returns every `origin='inbox'` conversation so the
+// UI can search/filter/count across the full history. The result set is only
+// the inbox subset (indexed by idx_conversations_origin), the preview/count
+// subqueries ride idx_messages_conversation_timestamp, and the client windows
+// the render, so an unbounded list stays cheap. Pass an explicit `limit` only
+// when a caller genuinely wants a truncated slice.
+export function listInboxConversations(limit?: number): InboxListItem[] {
+  const hasLimit =
+    typeof limit === "number" && Number.isFinite(limit) && limit > 0
   const rows = db
     .prepare(
       `
@@ -1096,10 +1104,10 @@ export function listInboxConversations(limit = 200): InboxListItem[] {
         ORDER BY COALESCE(c.lastMessageAt, c.updatedAt, c.createdAt) DESC,
                  c.updatedAt DESC,
                  c.createdAt DESC
-        LIMIT ?
+        ${hasLimit ? "LIMIT ?" : ""}
     `
     )
-    .all(limit) as Array<{
+    .all(...(hasLimit ? [Math.floor(limit as number)] : [])) as Array<{
     id: string
     title: string
     createdAt: number
