@@ -75,6 +75,17 @@ interface StartArgs {
 export function startSession(args: StartArgs): string {
     const spec = CLI_SPECS[args.cli]
 
+    // Codex logout is a local credential deletion and must not depend on the
+    // terminal staying mounted until the subprocess exits. The old ordering
+    // let closing the instant logout modal SIGTERM the PTY before onExit could
+    // clear auth, leaving Settings stuck on a false "Logged in" state. Remove
+    // both the runtime and seed copies before spawning the informational CLI
+    // command; the onExit cleanup below remains an idempotent safety net.
+    if (args.cli === 'codex' && args.mode === 'logout') {
+        clearCodexAuthFiles()
+        invalidateCliStatus(args.cli)
+    }
+
     let cliArgs: string[]
     let binName = spec.bin
     switch (args.mode) {

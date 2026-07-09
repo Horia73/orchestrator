@@ -23,8 +23,14 @@ import { join } from 'path'
 import { spawn as ptySpawn } from 'node-pty'
 
 import { resolveBin, augmentedEnv } from './resolve-bin'
-import { codexCliEnv, codexRuntimeAuthPath, prepareCodexRuntimeHome } from './codex-env'
-import { getAllCliStatuses } from './status'
+import {
+    clearCodexAuthFiles,
+    codexAuthRejectedByBoth,
+    codexCliEnv,
+    codexRuntimeAuthPath,
+    prepareCodexRuntimeHome,
+} from './codex-env'
+import { getAllCliStatuses, invalidateCliStatus } from './status'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { normalizeTimezone, systemTimezone } from '@/lib/timezone'
 
@@ -1247,9 +1253,31 @@ async function getCodexQuota(): Promise<CliQuotaSnapshot> {
         } else {
             const appServerError = appServer.error ? `Codex app-server: ${appServer.error}` : null
             const fallbackError = fallback.error ? `Fallback usage endpoint: ${fallback.error}` : null
+            const rejectedByBoth = codexAuthRejectedByBoth(appServer.error, fallback.error)
+            if (rejectedByBoth) {
+                // `codex login status` only checks that auth material exists;
+                // it can still print "Logged in" for an expired access token
+                // whose refresh token was revoked. Once both app-server (the
+                // model surface) and the usage endpoint reject the credentials,
+                // keeping them only blocks provider fallback and lies to the
+                // Models UI. Forget the dead copies and invalidate cached truth.
+                try {
+                    clearCodexAuthFiles()
+                } catch {
+                    // Preserve the original diagnostics below. A later explicit
+                    // logout will surface a concrete filesystem error.
+                }
+                invalidateCliStatus('codex')
+            }
             snapshot = {
                 ...fallback,
-                error: [appServerError, fallbackError].filter(Boolean).join(' '),
+                error: [
+                    appServerError,
+                    fallbackError,
+                    rejectedByBoth
+                        ? 'Stored Codex credentials were invalidated; sign in again. Configured model fallback is now eligible.'
+                        : null,
+                ].filter(Boolean).join(' '),
             }
         }
     }

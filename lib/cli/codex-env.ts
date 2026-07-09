@@ -193,6 +193,32 @@ export function clearCodexAuthFiles(paths: string[] = codexAuthPaths()): void {
     }
 }
 
+/**
+ * Return true only when both independent Codex account surfaces rejected the
+ * same saved credentials. A single quota endpoint can fail for reasons that do
+ * not affect model access, so callers must not log the user out on one signal.
+ */
+export function codexAuthRejectedByBoth(
+    appServerError: string | null | undefined,
+    usageEndpointError: string | null | undefined
+): boolean {
+    return isCodexAuthRejection(appServerError) && isCodexAuthRejection(usageEndpointError)
+}
+
+function isCodexAuthRejection(error: string | null | undefined): boolean {
+    const message = (error ?? '').toLowerCase()
+    if (!message) return false
+    return (
+        message.includes('401 unauthorized') ||
+        message.includes('403 forbidden') ||
+        message.includes('token_expired') ||
+        message.includes('authentication token is expired') ||
+        message.includes('refresh token was revoked') ||
+        message.includes('refresh token has been revoked') ||
+        message.includes('rejected auth after an automatic refresh')
+    )
+}
+
 function writeSanitizedConfig(): void {
     try {
         const configPath = runtimeConfigPath()

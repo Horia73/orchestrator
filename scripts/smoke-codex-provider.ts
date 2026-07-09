@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { isTransientCodexAppServerError, mapEffortForCodex } from "@/lib/ai/providers/codex"
-import { clearCodexAuthFiles } from "@/lib/cli/codex-env"
+import { clearCodexAuthFiles, codexAuthRejectedByBoth } from "@/lib/cli/codex-env"
 import { codexModelsToLiveEntries, type CodexListedModel } from "@/lib/cli/codex-model-probe"
 
 assert.equal(
@@ -30,6 +30,23 @@ assert.equal(
 
 assert.equal(mapEffortForCodex("max"), "max", "Codex max effort must not be downgraded")
 assert.equal(mapEffortForCodex("ultra"), "ultra", "New Codex effort ids should pass through")
+
+assert.equal(
+  codexAuthRejectedByBoth(
+    'GET https://chatgpt.com/backend-api/wham/usage failed: 401 Unauthorized; code: "token_expired"',
+    "Codex quota endpoint rejected auth after an automatic refresh."
+  ),
+  true,
+  "Dual Codex auth rejection should invalidate dead credentials"
+)
+assert.equal(
+  codexAuthRejectedByBoth(
+    "Timed out waiting for Codex app-server rate limits.",
+    "Codex quota endpoint rejected auth after an automatic refresh."
+  ),
+  false,
+  "One endpoint failure must not invalidate credentials when model auth was inconclusive"
+)
 
 const listedModels: CodexListedModel[] = [
   {
