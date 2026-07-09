@@ -35,6 +35,7 @@
 
 import { evaluateRule, findAdapterEvaluatedKind } from '../monitor/rules'
 import { getSourceAdapter } from '../monitor/sources'
+import type { MatchedCandidate } from '../monitor/sources/types'
 import {
     completeWatchFollowUp,
     incrementSuppressPatternMatch,
@@ -43,7 +44,7 @@ import {
     setWatchCheckpoint,
     setWatchState,
 } from '../monitor/store'
-import type { MonitorWatch } from '../monitor/schema'
+import type { MonitorWatch, SuppressPattern } from '../monitor/schema'
 import {
     buildSmartMonitorAgentPrompt,
     type DetectedChange,
@@ -133,6 +134,18 @@ interface PendingRecheckStats {
     stale: number
     errors: number
     skipped: number
+}
+
+interface SuppressArchiveStats {
+    archived: number
+    errors: number
+}
+
+type GmailArchiveTargetType = 'message' | 'thread'
+
+interface GmailArchiveTarget {
+    targetType: GmailArchiveTargetType
+    id: string
 }
 
 function isFiniteNumber(v: unknown): v is number {
@@ -235,6 +248,10 @@ function emptyRecheckStats(): PendingRecheckStats {
     return { checked: 0, stale: 0, errors: 0, skipped: 0 }
 }
 
+function emptySuppressArchiveStats(): SuppressArchiveStats {
+    return { archived: 0, errors: 0 }
+}
+
 function formatRecheckStats(stats: PendingRecheckStats): string {
     if (stats.checked === 0 && stats.skipped === 0) return ''
     const parts = [`${stats.checked} rechecked`]
@@ -242,6 +259,11 @@ function formatRecheckStats(stats: PendingRecheckStats): string {
     if (stats.errors > 0) parts.push(`${stats.errors} inconclusive`)
     if (stats.skipped > 0) parts.push(`${stats.skipped} skipped`)
     return `; pre-wake recheck: ${parts.join(', ')}`
+}
+
+function formatSuppressArchiveStats(stats: SuppressArchiveStats, suppressedCount: number): string {
+    if (suppressedCount === 0 && stats.archived === 0 && stats.errors === 0) return ''
+    return `; suppress auto-archive: ${stats.archived} archived, ${stats.errors} error(s)`
 }
 
 async function revalidatePendingBeforeWake(args: {
@@ -328,6 +350,116 @@ function safeEvaluate(rule: Parameters<typeof evaluateRule>[0], candidate: Param
     }
 }
 
+function hasAllowedGmailArchive(watch: MonitorWatch): boolean {
+    return watch.allowedActions.some((action) => action.kind === 'gmail_archive')
+}
+
+function stringArray(value: unknown): string[] {
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
+function cleanId(value: unknown): string | null {
+    if (typeof value !== 'string') return null
+    const trimmed = value.trim()
+    return trimmed.length > 0 ? trimmed : null
+}
+
+function resolveSuppressedGmailArchiveTarget(match: MatchedCandidate): GmailArchiveTarget | null {
+    const candidate = match.candidate
+    if (candidate.source !== 'gmail') return null
+
+    const details = match.details ?? {}
+    const threadId = cleanId(candidate.threadId) ?? cleanId(details.threadId)
+    if (threadId) return { targetType: 'thread', id: threadId }
+
+    const messageId = cleanId(candidate.id) ?? cleanId(details.messageId) ?? cleanId(match.externalId)
+    return messageId ? { targetType: 'message', id: messageId } : null
+}
+
+function suppressedGmailAppearsInInbox(match: MatchedCandidate): boolean {
+    const candidate = match.candidate
+    if (candidate.source !== 'gmail') return false
+    const detailLabels = stringArray(match.details?.labels)
+    const labels = candidate.labels.length > 0 ? candidate.labels : detailLabels
+    return labels.includes('INBOX')
+}
+
+function recordActionEventSafe(
+    watchId: string,
+    payload: Record<string, unknown>,
+    now: number,
+): void {
+    try {
+        recordWatchEvent(watchId, 'action', payload, now)
+    } catch {
+        /* best-effort audit */
+    }
+}
+
+async function archiveSuppressedGmailCandidate(args: {
+    watch: MonitorWatch
+    match: MatchedCandidate
+    pattern: SuppressPattern
+    now: number
+}): Promise<'archived' | 'failed' | 'skipped'> {
+    const { watch, match, pattern, now } = args
+    if (watch.source !== 'gmail' || match.candidate.source !== 'gmail') return 'skipped'
+    if (!hasAllowedGmailArchive(watch)) return 'skipped'
+    if (!suppressedGmailAppearsInInbox(match)) return 'skipped'
+
+    const target = resolveSuppressedGmailArchiveTarget(match)
+    const basePayload = {
+        actionKind: 'gmail_archive',
+        source: 'gmail',
+        summary: match.summary,
+        suppressPatternId: pattern.id,
+        suppressPatternReason: pattern.reason,
+    }
+    if (!target) {
+        recordActionEventSafe(watch.id, {
+            ...basePayload,
+            status: 'failed',
+            error: 'Suppressed Gmail candidate had no message or thread id to archive.',
+        }, now)
+        return 'failed'
+    }
+
+    try {
+        const { gmailArchive } = await import('@/lib/integrations/gmail')
+        await gmailArchive(target.targetType, target.id)
+        recordActionEventSafe(watch.id, {
+            ...basePayload,
+            status: 'succeeded',
+            targetType: target.targetType,
+            targetId: target.id,
+        }, now)
+        return 'archived'
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        recordActionEventSafe(watch.id, {
+            ...basePayload,
+            status: 'failed',
+            targetType: target.targetType,
+            targetId: target.id,
+            error: message,
+        }, now)
+        try {
+            recordWatchEvent(watch.id, 'error', {
+                message: `Gmail auto-archive failed: ${message}`,
+                phase: 'cheap_pass_suppress_archive',
+                actionKind: 'gmail_archive',
+                targetType: target.targetType,
+                targetId: target.id,
+                suppressPatternId: pattern.id,
+                summary: match.summary,
+            }, now)
+        } catch {
+            /* best-effort audit */
+        }
+        return 'failed'
+    }
+}
+
 /** A custom (model-owned) watch is "due" when its per-watch cadence has elapsed
  *  since it last fired. These have no connector predicate, so cadence is the
  *  only gate available for them. */
@@ -381,6 +513,7 @@ export async function runSmartMonitorCheapPass(args: {
     let unavailableCount = 0
     let errorCount = 0
     let suppressedCount = 0
+    const suppressArchiveStats = emptySuppressArchiveStats()
 
     for (const watch of watches) {
         try {
@@ -492,6 +625,14 @@ export async function runSmartMonitorCheapPass(args: {
                         patternReason: suppressedBy.reason,
                         summary: m.summary,
                     }, now)
+                    const archiveResult = await archiveSuppressedGmailCandidate({
+                        watch,
+                        match: m,
+                        pattern: suppressedBy,
+                        now,
+                    })
+                    if (archiveResult === 'archived') suppressArchiveStats.archived++
+                    else if (archiveResult === 'failed') suppressArchiveStats.errors++
                     continue
                 }
                 watchMatches++
@@ -568,7 +709,7 @@ export async function runSmartMonitorCheapPass(args: {
             : 'nothing new'
         return {
             noteworthy: false,
-            summary: `Smart monitor cheap pass: ${checkedCount} checked, ${fresh.length} new, ${suppressedCount} suppressed, ${unavailableCount} unavailable, ${errorCount} error(s)${formatRecheckStats(recheckStats)} — ${heldNote}; agent stays asleep.`,
+            summary: `Smart monitor cheap pass: ${checkedCount} checked, ${fresh.length} new, ${suppressedCount} suppressed, ${unavailableCount} unavailable, ${errorCount} error(s)${formatSuppressArchiveStats(suppressArchiveStats, suppressedCount)}${formatRecheckStats(recheckStats)} — ${heldNote}; agent stays asleep.`,
             nextState: composeState(prior, gate),
             gate,
         }
@@ -609,8 +750,8 @@ export async function runSmartMonitorCheapPass(args: {
 
     const summary =
         wakeReason === 'ceiling'
-            ? `Smart monitor safety wake (${Math.round(gate.maxWakeGapMs / HOUR)}h ceiling): ${gate.pending.length} buffered item(s) across ${contributing.size} watch(es)${formatRecheckStats(recheckStats)}.`
-            : `Smart monitor wake: ${gate.pending.length} new item(s) across ${contributing.size} watch(es)${formatRecheckStats(recheckStats)}.`
+            ? `Smart monitor safety wake (${Math.round(gate.maxWakeGapMs / HOUR)}h ceiling): ${gate.pending.length} buffered item(s) across ${contributing.size} watch(es)${formatSuppressArchiveStats(suppressArchiveStats, suppressedCount)}${formatRecheckStats(recheckStats)}.`
+            : `Smart monitor wake: ${gate.pending.length} new item(s) across ${contributing.size} watch(es)${formatSuppressArchiveStats(suppressArchiveStats, suppressedCount)}${formatRecheckStats(recheckStats)}.`
 
     return {
         noteworthy: true,
