@@ -10,9 +10,9 @@ export interface FilesystemRetentionProcessResult {
 const MAX_CAPTURE_CHARS = 24_000
 
 /**
- * Run filesystem cleanup outside the Next.js process. Walking/removing old
- * dependency trees can be I/O-heavy; a child keeps the scheduler and chat
- * event loop responsive while the maintenance command uses its own lock.
+ * Run storage cleanup outside the Next.js process. Walking/removing old
+ * dependency trees and maintaining CLI runtime databases can be I/O-heavy; a
+ * child keeps scheduler/chat responsive while each maintenance class locks.
  */
 export function runFilesystemRetentionProcess(): Promise<FilesystemRetentionProcessResult> {
     const projectDir = process.cwd()

@@ -282,3 +282,6 @@ if (failures > 0) {
 
 fs.rmSync(stateDir, { recursive: true, force: true })
 console.log('\nWhatsApp provider smoke checks passed.')
+// Baileys imports may leave defensive reconnect/timer handles alive even
+// though this isolated smoke harness never starts a real socket.
+process.exit(0)

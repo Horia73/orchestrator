@@ -63,9 +63,12 @@ import {
 } from "./embeddings"
 import { searchLibraryByVector } from "./library"
 import {
+  anyGenerationChunksMatch,
   ftsSearch,
+  generationChunksMatch,
   generationFresh,
   getContentHash,
+  getMemoryMetaInt,
   getStatus,
   getThreshold,
   listContentSources,
@@ -73,6 +76,7 @@ import {
   markContentChanged,
   pruneSource,
   setThreshold,
+  setMemoryMetaInt,
   writeGeneration,
   type IndexChunkInput,
   type MemoryStatus,
@@ -276,7 +280,7 @@ const RECALL_ASSET_MIMES = new Set(["image/png", "image/jpeg", "application/pdf"
 
 const RECALL_TIMEOUT_MS = 1500
 const MIN_QUERY_CHARS = 8
-const MIN_CHUNK_CHARS = 24
+const MIN_CONVERSATION_CHUNK_CHARS = 24
 // Defensive cap so a pathological huge paragraph can never hit the embedding
 // model's per-item token limit (gemini-embedding-2: 8192 tokens, SILENTLY
 // truncated above it). ~4000 chars ≈ ~1000 tokens — comfortably under, and
@@ -284,6 +288,8 @@ const MIN_CHUNK_CHARS = 24
 const MAX_CHUNK_CHARS = 4000
 const MAX_HIT_CHARS = 320
 const SYNC_DEBOUNCE_MS = 15_000
+const CHUNKING_VERSION = 2
+const CHUNKING_VERSION_META_KEY = "chunkingVersion"
 
 // Durable files the prompt builder already injects every turn (lib/ai/prompts/
 // shared.ts). The silent pass excludes them so it only surfaces *new* signal.
@@ -679,10 +685,6 @@ function titleFor(source: string, heading: string): string {
   return displayMemoryTitle(source, `${source} › ${heading}`)
 }
 
-function capChunk(text: string): string {
-  return text.length > MAX_CHUNK_CHARS ? text.slice(0, MAX_CHUNK_CHARS).trimEnd() : text
-}
-
 export interface Chunk {
   chunkIndex: number
   title: string
@@ -696,13 +698,21 @@ export function chunkMarkdown(source: string, content: string): Chunk[] {
   const raw: Array<{ title: string; text: string }> = []
   let para: string[] = []
 
+  const pushEntry = (text: string): void => {
+    if (!text || isTemplateNoise(text)) return
+    for (const part of splitPlainTextForChunks(text)) {
+      // Raw memory is the source of truth, but the derived semantic index must
+      // represent every non-template entry too. In particular, do not drop
+      // short identifiers/preferences or truncate the tail of a long capsule.
+      if (part) raw.push({ title: titleFor(source, heading), text: part })
+    }
+  }
+
   const flushPara = (): void => {
     if (para.length === 0) return
     const text = para.join(" ").replace(/\s+/g, " ").trim()
     para = []
-    if (text.length >= MIN_CHUNK_CHARS && !isTemplateNoise(text)) {
-      raw.push({ title: titleFor(source, heading), text: capChunk(text) })
-    }
+    pushEntry(text)
   }
 
   for (const rawLine of lines) {
@@ -721,9 +731,7 @@ export function chunkMarkdown(source: string, content: string): Chunk[] {
     if (bulletMatch) {
       flushPara()
       const text = bulletMatch[2].replace(/\s+/g, " ").trim()
-      if (text.length >= MIN_CHUNK_CHARS && !isTemplateNoise(text)) {
-        raw.push({ title: titleFor(source, heading), text: capChunk(text) })
-      }
+      pushEntry(text)
       continue
     }
     para.push(t)
@@ -742,9 +750,12 @@ function conversationMeta(content: string, label: string): string {
   return line ? line.slice(prefix.length).trim() : ""
 }
 
-function splitPlainTextForChunks(text: string): string[] {
+function splitPlainTextForChunks(
+  text: string,
+  maxChars = MAX_CHUNK_CHARS
+): string[] {
   const normalized = text.replace(/\r\n/g, "\n").trim()
-  if (!normalized) return []
+  if (!normalized || maxChars <= 0) return []
 
   const parts: string[] = []
   const blocks = normalized
@@ -753,14 +764,31 @@ function splitPlainTextForChunks(text: string): string[] {
     .filter(Boolean)
 
   for (const block of blocks.length ? blocks : [normalized.replace(/\s+/g, " ").trim()]) {
-    if (block.length <= MAX_CHUNK_CHARS) {
+    if (block.length <= maxChars) {
       parts.push(block)
       continue
     }
-    for (let offset = 0; offset < block.length; offset += MAX_CHUNK_CHARS) {
-      const part = block.slice(offset, offset + MAX_CHUNK_CHARS).trim()
+
+    // Balance the pieces first (4010 chars becomes roughly 2005+2005, not a
+    // 4000-char chunk plus a tiny tail), then prefer a nearby word boundary.
+    let remaining = block
+    let piecesLeft = Math.ceil(block.length / maxChars)
+    while (remaining.length > maxChars && piecesLeft > 1) {
+      const target = Math.min(maxChars, Math.ceil(remaining.length / piecesLeft))
+      const lowerBound = Math.floor(target * 0.65)
+      const before = remaining.lastIndexOf(" ", target)
+      const after = remaining.indexOf(" ", target)
+      const cut = before >= lowerBound
+        ? before
+        : after > 0 && after <= maxChars
+          ? after
+          : target
+      const part = remaining.slice(0, cut).trim()
       if (part) parts.push(part)
+      remaining = remaining.slice(cut).trim()
+      piecesLeft -= 1
     }
+    if (remaining) parts.push(remaining)
   }
   return parts
 }
@@ -821,21 +849,26 @@ export function chunkConversationContent(source: string, content: string): Chunk
         ? `${flatUser.slice(0, EXCHANGE_ANCHOR_CHARS).trimEnd()}…`
         : flatUser
     for (const part of splitPlainTextForChunks(userText)) {
-      texts.push(capChunk(`${head}: User: ${part}`))
+      const prefix = `${head}: User: `
+      for (const fitted of splitPlainTextForChunks(part, MAX_CHUNK_CHARS - prefix.length)) {
+        texts.push(`${prefix}${fitted}`)
+      }
     }
-    for (const part of splitPlainTextForChunks(assistantText)) {
-      texts.push(
-        capChunk(
-          anchor
-            ? `${head}: User: ${anchor} › Assistant: ${part}`
-            : `${head}: Assistant: ${part}`
-        )
-      )
+    const assistantPrefix = anchor
+      ? `${head}: User: ${anchor} › Assistant: `
+      : `${head}: Assistant: `
+    for (const part of splitPlainTextForChunks(
+      assistantText,
+      MAX_CHUNK_CHARS - assistantPrefix.length
+    )) {
+      texts.push(`${assistantPrefix}${part}`)
     }
   }
 
   return texts
-    .filter((text) => text.length >= MIN_CHUNK_CHARS && !isTemplateNoise(text))
+    .filter(
+      (text) => text.length >= MIN_CONVERSATION_CHUNK_CHARS && !isTemplateNoise(text)
+    )
     .map((text, index) => ({ chunkIndex: index, title: chunkTitle, text }))
 }
 
@@ -870,6 +903,8 @@ async function doSync(): Promise<{
 
   const sources = listMemorySourceSnapshots()
   const sourceSet = new Set(sources.map((entry) => entry.source))
+  const needsChunkingMigration =
+    getMemoryMetaInt(CHUNKING_VERSION_META_KEY) < CHUNKING_VERSION
 
   // Drop sources whose backing file/message disappeared (every generation +
   // content + FTS).
@@ -886,7 +921,9 @@ async function doSync(): Promise<{
     // 1. Content change: rebuild the model-independent content marker + FTS and
     //    wipe every stale embedding generation for this source.
     let chunks: Chunk[] | null = null
-    if (getContentHash(source) !== hash) {
+    let deferredChunkMigration = false
+    const contentChanged = getContentHash(source) !== hash
+    if (contentChanged) {
       chunks = chunkMemorySource(source, content)
       markContentChanged(source, hash, chunks)
     }
@@ -894,11 +931,33 @@ async function doSync(): Promise<{
     // 2. Ensure the ACTIVE generation is embedded for the current content. If a
     //    fresh generation already exists (e.g. we switched back to a model used
     //    before, content unchanged), this is a no-op — free, no API call.
-    if (generationFresh(source, getEmbeddingModel(), getEmbeddingDim(), hash)) continue
+    if (generationFresh(source, getEmbeddingModel(), getEmbeddingDim(), hash)) {
+      if (!needsChunkingMigration) continue
+      chunks = chunkMemorySource(source, content)
+      if (
+        generationChunksMatch(
+          source,
+          getEmbeddingModel(),
+          getEmbeddingDim(),
+          chunks
+        )
+      ) {
+        continue
+      }
+      // Same raw content, improved chunk representation. Keep the currently
+      // useful (if incomplete) vectors until the replacement embed succeeds;
+      // a transient provider outage must not turn a targeted migration into a
+      // recall outage.
+      deferredChunkMigration = true
+    } else if (needsChunkingMigration && !contentChanged) {
+      chunks = chunkMemorySource(source, content)
+      deferredChunkMigration = !anyGenerationChunksMatch(source, chunks)
+    }
 
     if (!chunks) chunks = chunkMemorySource(source, content)
     if (chunks.length === 0) {
       // Record an empty generation so we don't retry an empty file every sync.
+      if (deferredChunkMigration) markContentChanged(source, hash, chunks)
       writeGeneration(source, getEmbeddingModel(), getEmbeddingDim(), hash, [])
       indexed += 1
       continue
@@ -920,10 +979,14 @@ async function doSync(): Promise<{
       if (!c || !v) continue
       rows.push({ chunkIndex: c.chunkIndex, title: c.title, text: c.text, embedding: v })
     }
+    if (deferredChunkMigration) markContentChanged(source, hash, chunks)
     writeGeneration(source, getEmbeddingModel(), getEmbeddingDim(), hash, rows)
     indexed += 1
   }
 
+  if (needsChunkingMigration && failed === 0) {
+    setMemoryMetaInt(CHUNKING_VERSION_META_KEY, CHUNKING_VERSION)
+  }
   return { indexed, removed, failed }
 }
 
@@ -1290,6 +1353,15 @@ export async function searchMemory(
   query: string,
   opts: SearchOptions = {}
 ): Promise<MemoryHit[]> {
+  const qVec = await embedQuery(query)
+  return searchMemoryWithVector(query, qVec, opts)
+}
+
+async function searchMemoryWithVector(
+  query: string,
+  qVec: Float32Array | null,
+  opts: SearchOptions = {}
+): Promise<MemoryHit[]> {
   const topK = opts.topK ?? RECALL_TOP_K
   const threshold = opts.threshold ?? getRecallThreshold()
   const exclude = opts.excludeSources ?? new Set<string>()
@@ -1301,7 +1373,6 @@ export async function searchMemory(
   const seenIds = new Set<string>()
   const vectorById = new Map<string, Float32Array>()
 
-  const qVec = await embedQuery(query)
   if (qVec) {
     const rows = loadVectorRows(getEmbeddingModel(), getEmbeddingDim())
     for (const r of rows) {
@@ -1834,6 +1905,36 @@ export interface RecallSearchPreview {
   topK: number
 }
 
+/** Read-only evaluation pair: unfiltered semantic ranking plus the exact
+ * automatic text-recall pipeline. Does not sync or mutate the index. */
+export async function evaluateRecallSearch(
+  query: string,
+  rawLimit: number
+): Promise<RecallSearchPreview> {
+  const threshold = getRecallThreshold()
+  const qVec = await embedQuery(query)
+  const [rawHits, automaticHits] = await Promise.all([
+    searchMemoryWithVector(query, qVec, {
+      topK: rawLimit,
+      threshold: 0,
+      mode: "semantic",
+      dedup: false,
+    }),
+    searchMemoryWithVector(query, qVec, {
+      topK: RECALL_TOP_K,
+      threshold,
+      excludeSources: inContextSources(),
+      mode: "semantic",
+      coverageGate: true,
+      excludeAssistantTurns: true,
+      topGap: RECALL_TOP_GAP,
+      agePenalty: true,
+      versionClusters: true,
+    }),
+  ])
+  return { rawHits, automaticHits, threshold, topK: RECALL_TOP_K }
+}
+
 /**
  * Settings calibration view: show both the raw score distribution and the exact
  * automatic text-recall result. The latter applies the full production filter
@@ -1851,14 +1952,15 @@ export async function previewRecallSearch(
     /* search whatever is already indexed */
   }
   const threshold = getRecallThreshold()
+  const qVec = await embedQuery(query)
   const [rawHits, automaticHits] = await Promise.all([
-    searchMemory(query, {
+    searchMemoryWithVector(query, qVec, {
       topK: rawLimit,
       threshold: 0,
       mode: "hybrid",
       dedup: false,
     }),
-    searchMemory(query, {
+    searchMemoryWithVector(query, qVec, {
       topK: RECALL_TOP_K,
       threshold,
       excludeSources: inContextSources(),

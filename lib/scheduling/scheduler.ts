@@ -171,19 +171,19 @@ async function tick(): Promise<void> {
                 }
             }
 
-            // Project worktrees and workspace/tmp can contain multi-gigabyte
-            // trees. Run their conservative cleanup in a locked child process
-            // so filesystem traversal never stalls chats or scheduler ticks.
+            // Project worktrees, workspace/tmp, and CLI runtime stores can be
+            // multi-gigabyte. Run conservative storage maintenance in a locked
+            // child so traversal/compaction never stalls chats or scheduler ticks.
             if (!state.filesystemRetentionRunning) {
                 state.filesystemRetentionRunning = true
                 void runFilesystemRetentionProcess()
                     .then(result => {
                         const detail = result.output ? `: ${result.output.replace(/\s+/g, ' ').trim()}` : ''
-                        if (result.ok) log(`filesystem retention complete${detail}`)
-                        else log(`filesystem retention failed (exit ${result.exitCode ?? 'spawn'})${detail}`)
+                        if (result.ok) log(`storage maintenance complete${detail}`)
+                        else log(`storage maintenance failed (exit ${result.exitCode ?? 'spawn'})${detail}`)
                     })
                     .catch(error => {
-                        log(`filesystem retention failed: ${error instanceof Error ? error.message : String(error)}`)
+                        log(`storage maintenance failed: ${error instanceof Error ? error.message : String(error)}`)
                     })
                     .finally(() => {
                         state.filesystemRetentionRunning = false

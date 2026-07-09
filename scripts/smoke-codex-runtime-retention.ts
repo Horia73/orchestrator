@@ -32,8 +32,11 @@ try {
     addThread('recent-orphan', recentSeconds)
     addThread('protected-parent', oldSeconds)
     addThread('referenced-child', oldSeconds)
+    const safeParent = addThread('safe-parent', oldSeconds)
+    const safeChild = addThread('safe-child', oldSeconds)
     addMissingThread('missing-rollout', oldSeconds)
     addEdge('protected-parent', 'referenced-child')
+    addEdge('safe-parent', 'safe-child')
     addReference('appserver:referenced')
     addReference('appserver:referenced-child', 'agent_threads')
 
@@ -45,7 +48,7 @@ try {
         retentionDays: 30,
     })
     assert.deepEqual(audit.errors, [])
-    assert.equal(audit.totalThreads, 7)
+    assert.equal(audit.totalThreads, 9)
     assert.equal(audit.referencedThreads, 2)
     assert.equal(audit.recentThreads, 1)
     assert.equal(audit.missingRollouts, 1)
@@ -53,8 +56,14 @@ try {
     assert.deepEqual(new Set(audit.candidates.map(candidate => candidate.id)), new Set([
         'old-orphan',
         'compressed-orphan',
+        'safe-parent',
+        'safe-child',
     ]))
-    assert.equal(audit.candidateBytes, oldOrphan.bytes + compressedOrphan.bytes)
+    assert.equal(
+        audit.candidateBytes,
+        oldOrphan.bytes + compressedOrphan.bytes + safeParent.bytes + safeChild.bytes
+    )
+    assert.equal(audit.candidates.find(candidate => candidate.id === 'safe-parent')?.descendantCount, 1)
     assert.ok(audit.candidates.find(candidate => candidate.id === 'compressed-orphan')?.rolloutPath.endsWith('.zst'))
 
     const requestedDeletes: string[] = []
@@ -74,9 +83,16 @@ try {
         },
     })
     assert.equal(applied.skippedReason, null)
-    assert.equal(applied.deletedThreads, 2)
-    assert.equal(applied.reclaimedSessionBytes, oldOrphan.bytes + compressedOrphan.bytes)
-    assert.deepEqual(new Set(requestedDeletes), new Set(['old-orphan', 'compressed-orphan']))
+    assert.equal(applied.deletedThreads, 3)
+    assert.equal(
+        applied.reclaimedSessionBytes,
+        oldOrphan.bytes + compressedOrphan.bytes + safeChild.bytes
+    )
+    assert.deepEqual(
+        new Set(requestedDeletes),
+        new Set(['old-orphan', 'compressed-orphan', 'safe-child'])
+    )
+    assert.ok(!requestedDeletes.includes('safe-parent'), 'parents are deferred until descendants are gone')
     assert.ok(!requestedDeletes.includes('referenced'))
     assert.ok(!requestedDeletes.includes('referenced-child'))
     assert.ok(!requestedDeletes.includes('protected-parent'))

@@ -7,6 +7,7 @@ import { ORCHESTRATOR_STATE_DIR } from '@/lib/runtime-paths'
 import {
     getCodexSessionDeleteLimit,
     maintainCodexRuntime,
+    selectCodexDeleteCandidates,
 } from '@/lib/storage/codex-runtime-retention'
 import {
     getFilesystemRetentionPolicy,
@@ -131,10 +132,7 @@ if (json) {
         }
     }
     if (codexRuntime) {
-        const selected = codexRuntime.audit.candidates.slice(
-            0,
-            codexDeleteLimit
-        )
+        const selected = selectCodexDeleteCandidates(codexRuntime.audit, codexDeleteLimit)
         const bytes = apply
             ? codexRuntime.reclaimedSessionBytes
             : selected.reduce((sum, candidate) => sum + candidate.bytes, 0)
@@ -154,6 +152,9 @@ if (json) {
                 console.log(`  ${result.id}: error (${result.error ?? 'unknown delete failure'})`)
             }
             for (const error of codexRuntime.audit.errors) console.log(`  audit error: ${error}`)
+            if (codexRuntime.logsVacuumError) {
+                console.log(`  Codex log compaction error: ${codexRuntime.logsVacuumError}`)
+            }
         }
     }
     const errors = projectRuns.items.filter(item => item.action === 'error').length
@@ -163,6 +164,7 @@ if (json) {
         )
         + (codexRuntime?.audit.errors.length ?? 0)
         + (codexRuntime?.deleteResults.filter(result => !result.ok).length ?? 0)
+        + (codexRuntime?.logsVacuumError ? 1 : 0)
     if (errors > 0) console.log(`Maintenance errors: ${errors}`)
     if (!apply) console.log('Dry-run only. Re-run with --apply to perform eligible cleanup.')
 }

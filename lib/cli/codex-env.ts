@@ -72,8 +72,19 @@ export function codexCliEnv(extra?: Record<string, string | undefined>): NodeJS.
 
 /** Maintenance owns the exclusive runtime lock, so it must bypass the normal
  * launch guard when it starts Codex app-server for official thread/delete. */
-export function codexMaintenanceCliEnv(extra?: Record<string, string | undefined>): NodeJS.ProcessEnv {
-    return buildCodexCliEnv(extra)
+export function codexMaintenanceCliEnv(
+    extra?: Record<string, string | undefined>,
+    codexHome = codexRuntimeCodexHome()
+): NodeJS.ProcessEnv {
+    if (path.resolve(codexHome) === path.resolve(codexRuntimeCodexHome())) {
+        return buildCodexCliEnv(extra)
+    }
+    fs.mkdirSync(codexHome, { recursive: true })
+    return {
+        ...augmentedEnv(extra),
+        HOME: path.dirname(codexHome),
+        CODEX_HOME: codexHome,
+    }
 }
 
 function buildCodexCliEnv(extra?: Record<string, string | undefined>): NodeJS.ProcessEnv {

@@ -27,6 +27,7 @@ export interface CodexSessionCandidate {
     updatedAt: number
     archived: boolean
     depth: number
+    descendantCount: number
 }
 
 export interface CodexLogDatabaseStats {
@@ -67,6 +68,7 @@ export interface CodexRuntimeMaintenanceResult {
     reclaimedSessionBytes: number
     deleteResults: CodexThreadDeleteResult[]
     logsVacuumed: boolean
+    logsVacuumError: string | null
     reclaimedLogBytes: number
     logsAfter: CodexLogDatabaseStats
 }
@@ -203,6 +205,7 @@ export function auditCodexRuntime(options: MaintainCodexRuntimeOptions = {}): Co
                 updatedAt,
                 archived: thread.archived === 1,
                 depth: threadDepth(thread.id, parent),
+                descendantCount: 0,
             })
         }
 
@@ -212,6 +215,7 @@ export function auditCodexRuntime(options: MaintainCodexRuntimeOptions = {}): Co
         let protectedParents = 0
         const candidates = [...baseCandidates.values()].filter(candidate => {
             const descendants = collectDescendants(candidate.id, children)
+            candidate.descendantCount = descendants.length
             const safe = descendants.every(id => baseCandidates.has(id))
             if (!safe) protectedParents += 1
             return safe
@@ -251,6 +255,7 @@ export async function maintainCodexRuntime(
         reclaimedSessionBytes: 0,
         deleteResults: [],
         logsVacuumed: false,
+        logsVacuumError: null,
         reclaimedLogBytes: 0,
         logsAfter: audit.logs,
     }
@@ -263,7 +268,7 @@ export async function maintainCodexRuntime(
     const releaseLock = acquireCodexRuntimeMaintenanceLock(Date.now(), audit.codexHome)
     if (!releaseLock) return { ...base, skippedReason: 'maintenance-lock-held' }
     try {
-        if (!options.skipProcessCheck && activeCodexAppServerProcesses().length > 0) {
+        if (!options.skipProcessCheck && activeCodexAppServerProcesses(audit.codexHome).length > 0) {
             return { ...base, skippedReason: 'codex-app-server-active' }
         }
 
@@ -275,10 +280,21 @@ export async function maintainCodexRuntime(
         if (audit.errors.length > 0) return { ...base, skippedReason: 'audit-failed' }
 
         const limit = options.deleteLimit ?? getCodexSessionDeleteLimit()
-        const selected = audit.candidates.slice(0, Math.max(0, limit))
+        const selected = selectCodexDeleteCandidates(audit, limit)
         if (selected.length > 0) {
-            const deleteThreads = options.deleteThreads ?? deleteCodexThreadsViaAppServer
-            const deleteResults = await deleteThreads(selected.map(candidate => candidate.id))
+            const deleteThreads = options.deleteThreads
+                ?? (ids => deleteCodexThreadsViaAppServer(ids, audit.codexHome))
+            let deleteResults: CodexThreadDeleteResult[]
+            try {
+                deleteResults = await deleteThreads(selected.map(candidate => candidate.id))
+            } catch (error) {
+                const detail = error instanceof Error ? error.message : String(error)
+                deleteResults = selected.map(candidate => ({
+                    id: candidate.id,
+                    ok: false,
+                    error: detail,
+                }))
+            }
             base.deleteResults = deleteResults
             const successful = new Set(deleteResults.filter(result => result.ok).map(result => result.id))
             base.deletedThreads = successful.size
@@ -290,12 +306,15 @@ export async function maintainCodexRuntime(
         const shouldVacuum = options.vacuumLogs !== false
         if (shouldVacuum) {
             const before = inspectCodexLogs(audit.codexHome)
-            const vacuumed = vacuumCodexLogs({
-                stats: before,
-                minBytes: options.logVacuumMinBytes ?? DEFAULT_LOG_VACUUM_MIN_BYTES,
-                minRatio: options.logVacuumMinRatio ?? DEFAULT_LOG_VACUUM_MIN_RATIO,
-            })
-            base.logsVacuumed = vacuumed
+            try {
+                base.logsVacuumed = vacuumCodexLogs({
+                    stats: before,
+                    minBytes: options.logVacuumMinBytes ?? DEFAULT_LOG_VACUUM_MIN_BYTES,
+                    minRatio: options.logVacuumMinRatio ?? DEFAULT_LOG_VACUUM_MIN_RATIO,
+                })
+            } catch (error) {
+                base.logsVacuumError = error instanceof Error ? error.message : String(error)
+            }
             base.logsAfter = inspectCodexLogs(audit.codexHome)
             base.reclaimedLogBytes = Math.max(0, before.fileBytes - base.logsAfter.fileBytes)
         }
@@ -375,7 +394,22 @@ function vacuumCodexLogs(input: {
     }
 }
 
-export function activeCodexAppServerProcesses(): number[] {
+export function selectCodexDeleteCandidates(
+    audit: CodexRuntimeAudit,
+    limit = getCodexSessionDeleteLimit()
+): CodexSessionCandidate[] {
+    // Deleting a Codex parent recursively deletes its descendants. Only direct
+    // leaves are removed in a pass, so the configured limit is a real upper
+    // bound on deleted threads rather than merely on API calls. Their now-leaf
+    // parents can be collected by a later daily pass.
+    return audit.candidates
+        .filter(candidate => candidate.descendantCount === 0)
+        .slice(0, Math.max(0, limit))
+}
+
+export function activeCodexAppServerProcesses(
+    codexHome = codexRuntimeCodexHome()
+): number[] {
     if (process.platform === 'linux' && fs.existsSync('/proc')) {
         const pids: number[] = []
         for (const name of fs.readdirSync('/proc')) {
@@ -384,7 +418,9 @@ export function activeCodexAppServerProcesses(): number[] {
             if (pid === process.pid) continue
             try {
                 const command = fs.readFileSync(`/proc/${name}/cmdline`, 'utf-8').replaceAll('\0', ' ')
-                if (/\bcodex\b/.test(command) && /\bapp-server\b/.test(command)) pids.push(pid)
+                if (!/\bcodex\b/.test(command) || !/\bapp-server\b/.test(command)) continue
+                if (processUsesDifferentCodexHome(`/proc/${name}/environ`, codexHome)) continue
+                pids.push(pid)
             } catch {
                 // Process exited between directory listing and cmdline read.
             }
@@ -392,7 +428,7 @@ export function activeCodexAppServerProcesses(): number[] {
         return pids
     }
 
-    const ps = spawnSync('ps', ['-axo', 'pid=,command='], {
+    const ps = spawnSync('ps', ['eww', '-axo', 'pid=,command='], {
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore'],
     })
@@ -400,12 +436,16 @@ export function activeCodexAppServerProcesses(): number[] {
     return ps.stdout.split(/\r?\n/).flatMap(line => {
         const match = /^\s*(\d+)\s+(.+)$/.exec(line)
         if (!match || !/\bcodex\b/.test(match[2]) || !/\bapp-server\b/.test(match[2])) return []
+        if (commandUsesDifferentCodexHome(match[2], codexHome)) return []
         const pid = Number(match[1])
         return pid === process.pid ? [] : [pid]
     })
 }
 
-async function deleteCodexThreadsViaAppServer(ids: string[]): Promise<CodexThreadDeleteResult[]> {
+async function deleteCodexThreadsViaAppServer(
+    ids: string[],
+    codexHome: string
+): Promise<CodexThreadDeleteResult[]> {
     if (ids.length === 0) return []
     const bin = resolveBin('codex')
     if (bin === 'codex') {
@@ -421,7 +461,7 @@ async function deleteCodexThreadsViaAppServer(ids: string[]): Promise<CodexThrea
         '-c', 'features.skills=false',
     ], {
         cwd: process.cwd(),
-        env: codexMaintenanceCliEnv({ DISABLE_TELEMETRY: '1' }),
+        env: codexMaintenanceCliEnv({ DISABLE_TELEMETRY: '1' }, codexHome),
         stdio: ['pipe', 'pipe', 'pipe'],
     })
 
@@ -651,4 +691,31 @@ function envInteger(name: string, fallback: number, min: number, max: number): n
     const value = Number(raw)
     if (!Number.isFinite(value)) return fallback
     return Math.max(min, Math.min(max, Math.floor(value)))
+}
+
+function processUsesDifferentCodexHome(environPath: string, expectedCodexHome: string): boolean {
+    try {
+        const env = Object.fromEntries(
+            fs.readFileSync(environPath, 'utf-8')
+                .split('\0')
+                .filter(Boolean)
+                .map(entry => {
+                    const equals = entry.indexOf('=')
+                    return equals < 0 ? [entry, ''] : [entry.slice(0, equals), entry.slice(equals + 1)]
+                })
+        )
+        const actual = env.CODEX_HOME || (env.HOME ? path.join(env.HOME, '.codex') : '')
+        return Boolean(actual) && path.resolve(actual) !== path.resolve(expectedCodexHome)
+    } catch {
+        // If another user's process cannot be inspected, preserve safety by
+        // treating it as potentially attached to this runtime.
+        return false
+    }
+}
+
+function commandUsesDifferentCodexHome(command: string, expectedCodexHome: string): boolean {
+    const explicit = /(?:^|\s)CODEX_HOME=([^\s]+)/.exec(command)?.[1]
+    const home = /(?:^|\s)HOME=([^\s]+)/.exec(command)?.[1]
+    const actual = explicit || (home ? path.join(home, '.codex') : '')
+    return Boolean(actual) && path.resolve(actual) !== path.resolve(expectedCodexHome)
 }

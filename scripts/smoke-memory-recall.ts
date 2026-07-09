@@ -5,7 +5,7 @@
  * chdir into a throwaway state dir and strip any embedding key from the env so
  * the embeddings backend is "unavailable", then exercise:
  *  - chunkMarkdown: bullet/paragraph splitting, heading titles, template-noise
- *    and short-line filtering, and the defensive max-chunk-size cap.
+ *    filtering, short-fact preservation, and lossless defensive chunk sizing.
  *  - store (multi-generation): content marker + FTS, embedding generations keyed
  *    by (source, model, dim), Float32 round-trip, generation isolation in search,
  *    FREE switch-back (old generation retained), prune-on-content-change, status.
@@ -63,12 +63,12 @@ async function main(): Promise<void> {
     "",
     "## Project Aurora",
     "- Decided to use Postgres for the analytics store for window functions.",
-    "- short", // too short -> skipped
+    "- ceai verde", // short saved fact must remain recall-indexable
     "",
     "A longer freeform paragraph about the migration plan and its tradeoffs.",
   ].join("\n")
   const chunks = recall.chunkMarkdown("MEMORY.md", md)
-  check("chunkMarkdown yields 2 signal chunks", chunks.length === 2, chunks)
+  check("chunkMarkdown yields all 3 signal chunks", chunks.length === 3, chunks)
   check(
     "bullet chunk captured with heading title",
     chunks[0]?.text.includes("Postgres") &&
@@ -79,14 +79,21 @@ async function main(): Promise<void> {
     "template noise filtered out",
     chunks.every((c) => !c.text.toLowerCase().includes("permanent memory belongs here"))
   )
+  check(
+    "short saved memory entry remains indexed",
+    chunks.some((c) => c.text === "ceai verde"),
+    chunks
+  )
 
   // defensive max-chunk cap
   const huge = ["# H", "", "x".repeat(20000)].join("\n")
   const hugeChunks = recall.chunkMarkdown("BIG.md", huge)
   check(
-    "huge chunk is capped to a safe size",
-    hugeChunks.length === 1 && hugeChunks[0].text.length <= 4000,
-    hugeChunks[0]?.text.length
+    "huge entry is fully represented in safe-size chunks",
+    hugeChunks.length > 1 &&
+      hugeChunks.every((chunk) => chunk.text.length <= 4000) &&
+      hugeChunks.map((chunk) => chunk.text).join("").length === 20000,
+    hugeChunks.map((chunk) => chunk.text.length)
   )
 
   // --- conversation sources: EXCHANGE granularity ---------------------------
@@ -164,7 +171,7 @@ async function main(): Promise<void> {
   const longAnswer = Array.from(
     { length: 4 },
     (_, i) => `Paragraph ${i} about panel layout. ${"detail ".repeat(250)}`
-  ).join("\n\n")
+  ).join("\n\n") + " FINAL_TAIL_SENTINEL"
   const longChunks = recall.chunkConversationContent(
     "conversation:conv_memory_smoke:msg_long",
     [
@@ -187,6 +194,11 @@ async function main(): Promise<void> {
     "every fragment of a long answer carries the user-question anchor",
     longChunks.every((c) => c.text.includes("final plan for the solar install")),
     longChunks.map((c) => c.text.slice(0, 80))
+  )
+  check(
+    "long exchange tail is not truncated from the semantic index",
+    longChunks.some((c) => c.text.includes("FINAL_TAIL_SENTINEL")),
+    longChunks.map((c) => c.text.slice(-80))
   )
 
   // --- hot/cold tier: inContextSources exclusion + indexing ----------------
@@ -269,6 +281,26 @@ async function main(): Promise<void> {
   // FREE switch-back: both generations fresh for current content
   check("generation A is fresh for h1", store.generationFresh(src, "model-a", dim, "h1"))
   check("generation B is fresh for h1", store.generationFresh(src, "model-b", dim, "h1"))
+  check(
+    "targeted chunk migration reuses an identical generation",
+    store.generationChunksMatch(src, "model-a", dim, contentChunks)
+  )
+  check(
+    "targeted chunk migration can reuse any cached model generation",
+    store.anyGenerationChunksMatch(src, contentChunks)
+  )
+  check(
+    "targeted chunk migration detects changed boundaries/text",
+    !store.generationChunksMatch(src, "model-a", dim, [
+      ...contentChunks,
+      { chunkIndex: 2, title: "tail", text: "previously truncated tail" },
+    ])
+  )
+  store.setMemoryMetaInt("smokeChunkingVersion", 2)
+  check(
+    "integer memory metadata round-trips",
+    store.getMemoryMetaInt("smokeChunkingVersion") === 2
+  )
   check("a never-used model is NOT fresh", store.generationFresh(src, "model-z", dim, "h1") === false)
 
   const status1 = store.getStatus("model-a", dim)

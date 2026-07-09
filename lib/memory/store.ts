@@ -318,6 +318,54 @@ export function generationFresh(
   return row?.contentHash === contentHash
 }
 
+/**
+ * True when the active generation contains exactly the chunks the current
+ * chunker would produce. Used by targeted chunker migrations so sources whose
+ * boundaries/text did not change keep their existing vectors for free.
+ */
+export function generationChunksMatch(
+  source: string,
+  model: string,
+  dim: number,
+  chunks: ContentChunk[]
+): boolean {
+  const rows = db
+    .prepare(
+      `SELECT chunkIndex, title, text
+       FROM memory_chunks
+       WHERE source = ? AND model = ? AND dim = ?
+       ORDER BY chunkIndex`
+    )
+    .all(source, model, dim) as ContentChunk[]
+  if (rows.length !== chunks.length) return false
+  return rows.every((row, index) => {
+    const expected = chunks[index]
+    return Boolean(
+      expected &&
+      row.chunkIndex === expected.chunkIndex &&
+      row.title === expected.title &&
+      row.text === expected.text
+    )
+  })
+}
+
+export function anyGenerationChunksMatch(
+  source: string,
+  chunks: ContentChunk[]
+): boolean {
+  const generations = db
+    .prepare(
+      `SELECT model, dim
+       FROM memory_generations
+       WHERE source = ?
+       ORDER BY indexedAt DESC`
+    )
+    .all(source) as Array<{ model: string; dim: number }>
+  return generations.some(generation =>
+    generationChunksMatch(source, generation.model, generation.dim, chunks)
+  )
+}
+
 /** Write (replace) the embedding generation for one (source, model, dim). */
 export function writeGeneration(
   source: string,
@@ -496,6 +544,21 @@ export function getThresholds(): Record<string, number> {
   } catch {
     return {}
   }
+}
+
+export function getMemoryMetaInt(key: string): number {
+  const row = db
+    .prepare(`SELECT value FROM memory_meta WHERE key = ?`)
+    .get(key) as { value: string } | undefined
+  const value = Number(row?.value)
+  return Number.isFinite(value) ? Math.floor(value) : 0
+}
+
+export function setMemoryMetaInt(key: string, value: number): void {
+  db.prepare(
+    `INSERT INTO memory_meta (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+  ).run(key, String(Math.floor(value)))
 }
 
 export function getThreshold(key: string): number | null {

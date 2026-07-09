@@ -338,7 +338,10 @@ function assertNoProviderNativeSkillLeaks() {
   const forbidden = [
     /\bClaude\b/,
     /\bclaude\.ai\b/i,
-    /\bAnthropic\b/,
+    // Provider names can be legitimate factual/legal research or license
+    // provenance. Reject provider-native operational surfaces, not the bare
+    // company name in content that a skill is meant to analyze.
+    /\bAnthropic (?:MCP|tool|skill|plugin)\b/i,
     /\bCODEX_HOME\b/,
     /\.codex\b/,
     /\bartifact-tool\b/,

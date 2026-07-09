@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "description": "Replace these examples with private, user-verified queries and exhaustive relevant-hit rules; incomplete labels make precision look artificially low. Keep this file outside git if it contains personal facts.",
+  "cases": [
+    {
+      "id": "known-preference-paraphrase",
+      "query": "Ce variantă prefer de obicei pentru exemplul acesta?",
+      "relevant": [
+        {
+          "source": "USER.md",
+          "textIncludes": "replace-with-a-real-saved-fact"
+        }
+      ]
+    },
+    {
+      "id": "unknown-topic-stays-quiet",
+      "query": "Care este preferința mea pentru un subiect despre care nu am discutat niciodată?",
+      "expectRecall": false
+    }
+  ]
+}
