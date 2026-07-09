@@ -244,6 +244,7 @@ ${loopDetectionRule}
    - Do not save one-off task outcomes, captcha-specific instructions, button labels, or temporary page states.
    - Do not add memory for every action, only for significant ones.
    - Do not repeat the same memory.
+6. **Know when to stop**: The moment the page shows the result the goal asked for, return \`done\` with that result — do not re-scan, re-scroll, or re-verify content you have already captured. If you cannot confirm whether you succeeded, the page keeps changing on its own (live/streaming content like logs or feeds), or you are unsure what to do next, it is better to STOP than to keep checking: return \`ask\` with the specific uncertainty, or \`done\`/\`error\` with exactly what you have and what is unresolved. Re-checking the same state without new evidence is the loop to avoid — one clear stop-and-ask beats ten silent re-verifications.
 
 ## 🔀 BATCH ACTIONS
 When you can determine multiple actions from the current screenshot (e.g. selecting multiple CAPTCHA images, filling several form fields, clicking multiple checkboxes), return an ARRAY of actions instead of a single one.
