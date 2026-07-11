@@ -22,6 +22,7 @@ import type { ArtifactRow } from "@/lib/artifacts/schema"
 import { appPath } from "@/lib/app-path"
 import { agentFullLabel } from "@/lib/agent-label"
 import { isDesktopViewport } from "@/lib/desktop-viewport"
+import { hideInlineImageAttachments } from "@/lib/chat-attachment-display"
 
 // Layout effect on the client, plain effect during SSR (matches collapse.tsx /
 // app-sidebar.tsx). Lets us measure collapsible content before the first paint
@@ -1716,6 +1717,13 @@ function MessageBubbleComponent({
         () => buildInterleavedTimeline(reasoningGroups, contentSegments),
         [contentSegments, reasoningGroups]
     )
+    const visibleAssistantAttachments = React.useMemo(
+        () => hideInlineImageAttachments(
+            message.attachments,
+            contentSegments.map((segment) => segment.content).join("")
+        ),
+        [contentSegments, message.attachments]
+    )
 
     if (message.role === "user") {
         // Steered rows (delivered INTO a running turn) render inline inside
@@ -1901,10 +1909,10 @@ function MessageBubbleComponent({
                 timeline.map(renderTimelineItem)
             )}
             {timeline.length === 0 && <TerminalMessageStatusLine status={message.status} />}
-            {!!message.attachments?.length && (
+            {visibleAssistantAttachments.length > 0 && (
                 <div className="mt-1 flex max-w-[85%] flex-wrap gap-2">
-                    {message.attachments.map((att) => (
-                        <AttachmentCard key={att.id} attachment={att} onClick={() => onAttachmentClick?.(att, message.attachments)} />
+                    {visibleAssistantAttachments.map((att) => (
+                        <AttachmentCard key={att.id} attachment={att} onClick={() => onAttachmentClick?.(att, visibleAssistantAttachments)} />
                     ))}
                 </div>
             )}
