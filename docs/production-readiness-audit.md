@@ -108,7 +108,7 @@ Complexity was measured in addition to LOC. The following are rewrite candidates
 - Extracted and tested chat SSE transport, terminal message construction, and artifact-event bridging from the chat-store monolith.
 - Closed the update lifecycle race with cross-profile stream enumeration and an atomic top-level AI admission barrier covering chat, Inbox replies, and scheduled runs.
 - Preserved scheduled claims that meet the update barrier so the lifecycle event is not recorded as an application failure.
-- Reordered Docker layers so build provenance and changing app output no longer invalidate apt, Python, Node, CAD, or Patchright layers. Patchright and the one-slot rollback image remain intact; consecutive images can share the heavyweight runtime layers.
+- Reordered Docker layers so build provenance and changing app output no longer invalidate apt, Python, Node, CAD, or Patchright layers. Patchright and the one-slot rollback image remain intact; consecutive images can share the heavyweight runtime layers. Tagged live/rollback images also carry inline BuildKit cache metadata, allowing those layers to seed the next build after the host's disposable builder cache is pruned.
 
 ## AI Provider comparison note
 

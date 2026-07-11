@@ -5,6 +5,14 @@ services:
       args:
         ORCHESTRATOR_BUILD_COMMIT: ${ORCHESTRATOR_BUILD_COMMIT:-unknown}
         ORCHESTRATOR_BUILD_REF: ${ORCHESTRATOR_BUILD_REF:-unknown}
+        # Persist BuildKit cache metadata inside the tagged image. Managed
+        # updates intentionally prune the external builder cache to protect the
+        # small eMMC root disk; inline metadata lets the next build recover
+        # stable layers from the live/rollback images anyway.
+        BUILDKIT_INLINE_CACHE: "1"
+      cache_from:
+        - orchestrator:local
+        - orchestrator:rollback
     image: orchestrator:local
     restart: unless-stopped
     # Run as the host user so bind-mounted files are owned by the user, not by
