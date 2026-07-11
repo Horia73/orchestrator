@@ -1,14 +1,19 @@
 "use client"
 
 import * as React from "react"
-import { ClipboardCopy, ClipboardPaste, Loader2, Maximize2, Minimize2, Monitor, MousePointer2, Play, WifiOff } from "lucide-react"
+import { ClipboardCopy, ClipboardPaste, Loader2, Maximize2, Minimize2, Monitor, WifiOff } from "lucide-react"
 
 import { copyTextToClipboard } from "@/lib/clipboard"
-import { cn } from "@/lib/utils"
 
-type LiveControlMode = "agent" | "user"
 type LiveMode = "disabled" | "mac-headful" | "linux-vnc"
 type BrowserShortcutEvent = Pick<KeyboardEvent, "altKey" | "ctrlKey" | "key" | "metaKey" | "shiftKey">
+
+interface BrowserAgentCursorState {
+    x: number
+    y: number
+    kind: "move" | "click" | "drag" | "hold" | "scroll"
+    at: number
+}
 
 interface BrowserAgentLiveState {
     enabled: boolean
@@ -22,7 +27,7 @@ interface BrowserAgentLiveState {
     wsUrl?: string | null
     reason?: string
     selectedSessionId?: string | null
-    controlMode: LiveControlMode
+    cursor?: BrowserAgentCursorState | null
     running: boolean
     paused: boolean
     sessions: Array<{
@@ -57,7 +62,6 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
     const targetRef = React.useRef<HTMLDivElement>(null)
     const hiddenPasteRef = React.useRef<HTMLTextAreaElement>(null)
     const rfbRef = React.useRef<import("@novnc/novnc").default | null>(null)
-    const controlModeRef = React.useRef<LiveControlMode>("agent")
     const stateRef = React.useRef<BrowserAgentLiveState | null>(null)
     const inputBusyRef = React.useRef(false)
     const manualPasteCaptureRef = React.useRef(false)
@@ -65,11 +69,9 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
     const inputMessageTimerRef = React.useRef<number | null>(null)
     const [state, setState] = React.useState<BrowserAgentLiveState | null>(null)
     const [connection, setConnection] = React.useState<"idle" | "connecting" | "connected" | "disconnected" | "error">("idle")
-    const [busy, setBusy] = React.useState(false)
     const [inputBusy, setInputBusy] = React.useState(false)
     const [inputMessage, setInputMessage] = React.useState<string | null>(null)
     const [fullscreen, setFullscreen] = React.useState(false)
-    const controlMode = state?.controlMode
 
     const focusRfb = React.useCallback(() => {
         requestAnimationFrame(() => {
@@ -81,10 +83,6 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
             liveViewRef.current?.focus({ preventScroll: true })
         })
     }, [])
-
-    React.useEffect(() => {
-        if (controlMode) controlModeRef.current = controlMode
-    }, [controlMode])
 
     React.useEffect(() => {
         stateRef.current = state
@@ -184,6 +182,15 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
         setConnection("connecting")
         target.replaceChildren()
 
+        // The user's pointer stays their own cursor: hover moves are swallowed
+        // before noVNC's canvas listener sees them, so only clicks, drags and
+        // the wheel reach the remote browser. The agent's pointer is rendered
+        // separately as the arrow overlay below.
+        const suppressHoverMove = (event: MouseEvent) => {
+            if (event.buttons === 0) event.stopPropagation()
+        }
+        target.addEventListener("mousemove", suppressHoverMove, true)
+
         import("@novnc/novnc")
             .then(({ default: RFB }) => {
                 if (disposed) return
@@ -193,8 +200,8 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
                 rfb.background = "#ffffff"
                 rfb.qualityLevel = 8
                 rfb.compressionLevel = 2
-                rfb.showDotCursor = true
-                rfb.viewOnly = controlModeRef.current !== "user"
+                rfb.showDotCursor = false
+                rfb.viewOnly = false
                 const handleClipboard = (event: Event) => {
                     const text = (event as CustomEvent<{ text?: unknown }>).detail?.text
                     if (typeof text !== "string") return
@@ -212,15 +219,11 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
 
         return () => {
             disposed = true
+            target.removeEventListener("mousemove", suppressHoverMove, true)
             rfbRef.current?.disconnect()
             rfbRef.current = null
         }
     }, [state?.mode, state?.wsUrl, syncBrowserClipboardText])
-
-    React.useEffect(() => {
-        if (!rfbRef.current || !controlMode) return
-        rfbRef.current.viewOnly = controlMode !== "user"
-    }, [controlMode])
 
     React.useEffect(() => {
         const updateFullscreen = () => {
@@ -270,16 +273,6 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
             setInputBusy(false)
         }
     }, [focusRfb, sessionId, showInputMessage, syncBrowserClipboardText])
-
-    const setControl = async (mode: LiveControlMode) => {
-        setBusy(true)
-        try {
-            const nextState = await postLiveAction({ action: mode === "user" ? "take_control" : "release_control" })
-            if (mode === "user" && nextState.controlMode === "user") focusRfb()
-        } finally {
-            setBusy(false)
-        }
-    }
 
     const toggleFullscreen = async () => {
         try {
@@ -368,11 +361,9 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
     }, [])
 
     React.useEffect(() => {
-        if (controlMode !== "user") return
-
         const handleNativeKeyDownCapture = (event: KeyboardEvent) => {
             const currentState = stateRef.current
-            if (currentState?.controlMode !== "user" || inputBusyRef.current) return
+            if (!currentState || inputBusyRef.current) return
             if (!browserInputContainsTarget(event.target)) return
             const key = browserShortcutFromEvent(event, currentState.platform)
             if (!key) return
@@ -394,8 +385,7 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
         }
 
         const handleNativePasteCapture = (event: ClipboardEvent) => {
-            const currentState = stateRef.current
-            if (currentState?.controlMode !== "user") return
+            if (!stateRef.current) return
             if (!browserInputContainsTarget(event.target)) return
             const isManualPasteTarget = manualPasteCaptureRef.current && event.target === hiddenPasteRef.current
             const text = event.clipboardData?.getData("text/plain")
@@ -415,15 +405,15 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
             document.removeEventListener("keydown", handleNativeKeyDownCapture, true)
             document.removeEventListener("paste", handleNativePasteCapture, true)
         }
-    }, [browserInputContainsTarget, controlMode, handleBrowserShortcut, pasteText, requestManualPasteCapture])
+    }, [browserInputContainsTarget, handleBrowserShortcut, pasteText, requestManualPasteCapture])
 
     const handleViewportPointerDown = React.useCallback(() => {
-        if (stateRef.current?.controlMode === "user") focusRfb()
+        focusRfb()
     }, [focusRfb])
 
     const handleLiveViewFocus = React.useCallback((event: React.FocusEvent<HTMLDivElement>) => {
         if (event.target !== event.currentTarget) return
-        if (stateRef.current?.controlMode === "user") focusRfb()
+        focusRfb()
     }, [focusRfb])
 
     if (!state) {
@@ -489,9 +479,9 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
         )
     }
 
-    const userControl = state.controlMode === "user"
     const viewportWidth = state.width && state.width > 0 ? state.width : 16
     const viewportHeight = state.height && state.height > 0 ? state.height : 9
+    const hasRealDimensions = Boolean(state.width && state.width > 0 && state.height && state.height > 0)
     const statusLabel = state.paused
         ? "paused"
         : connection === "connected"
@@ -502,7 +492,7 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
         <div
             ref={liveViewRef}
             className="browser-agent-live-view grid gap-2 bg-background outline-none [&:fullscreen]:h-screen [&:fullscreen]:grid-rows-[auto_1fr] [&:fullscreen]:p-3"
-            tabIndex={userControl ? 0 : -1}
+            tabIndex={0}
             onFocus={handleLiveViewFocus}
         >
             <textarea
@@ -533,51 +523,26 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
                 )}
                 <button
                     type="button"
-                    disabled={busy}
-                    onClick={() => setControl(userControl ? "agent" : "user")}
-                    className={cn(
-                        "inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[12px] font-medium transition-colors disabled:opacity-60",
-                        userControl
-                            ? "border-amber-500/30 bg-amber-500/10 text-amber-700 hover:bg-amber-500/15 dark:text-amber-300"
-                            : "border-border bg-background text-foreground/80 hover:bg-muted hover:text-foreground"
-                    )}
-                    aria-label={userControl ? "Return browser control to agent" : "Take browser control"}
+                    disabled={inputBusy}
+                    onClick={() => copyFromBrowser()}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-[12px] font-medium text-foreground/80 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
+                    aria-label="Copy browser clipboard locally"
+                    title="Copy browser clipboard locally"
                 >
-                    {busy ? (
-                        <Loader2 className="size-3.5 animate-spin" />
-                    ) : userControl ? (
-                        <Play className="size-3.5" />
-                    ) : (
-                        <MousePointer2 className="size-3.5" />
-                    )}
-                    {userControl ? "Return to agent" : "Take control"}
+                    {inputBusy ? <Loader2 className="size-3.5 animate-spin" /> : <ClipboardCopy className="size-3.5" />}
+                    Copy
                 </button>
-                {userControl && (
-                    <>
-                        <button
-                            type="button"
-                            disabled={inputBusy}
-                            onClick={() => copyFromBrowser()}
-                            className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-[12px] font-medium text-foreground/80 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
-                            aria-label="Copy browser clipboard locally"
-                            title="Copy browser clipboard locally"
-                        >
-                            {inputBusy ? <Loader2 className="size-3.5 animate-spin" /> : <ClipboardCopy className="size-3.5" />}
-                            Copy
-                        </button>
-                        <button
-                            type="button"
-                            disabled={inputBusy}
-                            onClick={pasteFromClipboard}
-                            className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-[12px] font-medium text-foreground/80 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
-                            aria-label="Paste clipboard into browser"
-                            title="Paste clipboard into browser"
-                        >
-                            {inputBusy ? <Loader2 className="size-3.5 animate-spin" /> : <ClipboardPaste className="size-3.5" />}
-                            Paste
-                        </button>
-                    </>
-                )}
+                <button
+                    type="button"
+                    disabled={inputBusy}
+                    onClick={pasteFromClipboard}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-[12px] font-medium text-foreground/80 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
+                    aria-label="Paste clipboard into browser"
+                    title="Paste clipboard into browser"
+                >
+                    {inputBusy ? <Loader2 className="size-3.5 animate-spin" /> : <ClipboardPaste className="size-3.5" />}
+                    Paste
+                </button>
                 <button
                     type="button"
                     onClick={toggleFullscreen}
@@ -595,7 +560,7 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
             </div>
             <div
                 ref={viewportRef}
-                className="browser-agent-live-viewport min-h-0 w-full overflow-hidden rounded-md border border-border/70 bg-white shadow-sm [background:white]"
+                className="browser-agent-live-viewport relative min-h-0 w-full overflow-hidden rounded-md border border-border/70 bg-white shadow-sm [background:white]"
                 style={{
                     aspectRatio: fullscreen ? "auto" : `${viewportWidth} / ${viewportHeight}`,
                     height: fullscreen ? "100%" : undefined,
@@ -610,9 +575,102 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
                 onPointerDown={handleViewportPointerDown}
             >
                 <div ref={targetRef} className="size-full bg-white" />
+                {hasRealDimensions && state.cursor && connection === "connected" && (
+                    <BrowserAgentCursorOverlay
+                        cursor={state.cursor}
+                        containerRef={viewportRef}
+                        frameWidth={viewportWidth}
+                        frameHeight={viewportHeight}
+                    />
+                )}
             </div>
         </div>
     )
+}
+
+/**
+ * The agent's own pointer, rendered as a Codex-style arrow that glides between
+ * the agent's pointer actions. It is deliberately independent from the user's
+ * mouse: hovering the live view never moves it.
+ */
+function BrowserAgentCursorOverlay({
+    cursor,
+    containerRef,
+    frameWidth,
+    frameHeight,
+}: {
+    cursor: BrowserAgentCursorState
+    containerRef: React.RefObject<HTMLDivElement | null>
+    frameWidth: number
+    frameHeight: number
+}) {
+    const fit = useContainFit(containerRef, frameWidth, frameHeight)
+    if (!fit) return null
+
+    const clampedX = Math.max(0, Math.min(cursor.x, frameWidth))
+    const clampedY = Math.max(0, Math.min(cursor.y, frameHeight))
+    const left = fit.left + (clampedX / frameWidth) * fit.width
+    const top = fit.top + (clampedY / frameHeight) * fit.height
+
+    return (
+        <div className="browser-agent-cursor" style={{ left, top }} aria-hidden="true">
+            {cursor.kind === "click" && <span key={cursor.at} className="browser-agent-cursor-pulse" />}
+            <svg width="19" height="22" viewBox="0 0 12.5 19.5" style={{ overflow: "visible" }}>
+                <path
+                    d="M0 0 L0 16.9 L4.4 13.1 L7.1 19.5 L9.5 18.4 L6.9 12.1 L12.5 12.1 Z"
+                    fill="#111114"
+                    stroke="#ffffff"
+                    strokeWidth="1.4"
+                    strokeLinejoin="round"
+                />
+            </svg>
+        </div>
+    )
+}
+
+/**
+ * Computes the box the noVNC canvas actually occupies inside the viewport
+ * container ("contain" fit, centered) so overlay coordinates stay accurate
+ * when the container aspect diverges from the framebuffer (e.g. fullscreen).
+ */
+function useContainFit(
+    containerRef: React.RefObject<HTMLDivElement | null>,
+    frameWidth: number,
+    frameHeight: number,
+): { left: number; top: number; width: number; height: number } | null {
+    const [fit, setFit] = React.useState<{ left: number; top: number; width: number; height: number } | null>(null)
+
+    React.useEffect(() => {
+        const container = containerRef.current
+        if (!container || frameWidth <= 0 || frameHeight <= 0) {
+            setFit(null)
+            return
+        }
+
+        const compute = () => {
+            const rect = container.getBoundingClientRect()
+            if (rect.width <= 0 || rect.height <= 0) {
+                setFit(null)
+                return
+            }
+            const scale = Math.min(rect.width / frameWidth, rect.height / frameHeight)
+            const width = frameWidth * scale
+            const height = frameHeight * scale
+            setFit({
+                left: (rect.width - width) / 2,
+                top: (rect.height - height) / 2,
+                width,
+                height,
+            })
+        }
+
+        compute()
+        const observer = new ResizeObserver(compute)
+        observer.observe(container)
+        return () => observer.disconnect()
+    }, [containerRef, frameWidth, frameHeight])
+
+    return fit
 }
 
 function browserShortcutFromEvent(event: BrowserShortcutEvent, platform: NodeJS.Platform): string | null {

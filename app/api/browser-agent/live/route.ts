@@ -36,7 +36,9 @@ export async function POST(request: Request) {
         const manager = getBrowserSessionManager()
 
         if (action === 'take_control' || action === 'release_control') {
-            const state = await manager.setHumanControl(action === 'take_control', sessionId)
+            // The live view is always interactive now; kept as a no-op so
+            // clients still running the old bundle don't break mid-session.
+            const state = await manager.getLiveViewState(sessionId)
             return NextResponse.json(toClientState(request, state), {
                 headers: { 'Cache-Control': 'no-store' },
             })
@@ -126,7 +128,10 @@ function toClientState(request: Request, state: BrowserLiveViewClientState) {
         wsUrl: buildWsUrl(request, state),
         reason: state.reason,
         selectedSessionId: state.selectedSessionId,
-        controlMode: state.controlMode,
+        // Old bundles gate their keyboard/paste handling on this; always-'user'
+        // keeps them fully interactive until they pick up the new client.
+        controlMode: 'user' as const,
+        cursor: state.cursor,
         running: state.running,
         paused: state.paused,
         sessions: state.sessions,

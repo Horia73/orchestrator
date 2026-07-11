@@ -46,6 +46,8 @@ import type {
     BrowserPageSessionCapabilities,
     BrowserPageErrorEntry,
     BrowserPageSessionOptions,
+    BrowserPointerActionKind,
+    BrowserPointerState,
     BrowserReadPageResult,
     BrowserSetViewportResult,
     BrowserTabInfo,
@@ -83,6 +85,8 @@ export type {
     BrowserPageSessionCapabilities,
     BrowserPageErrorEntry,
     BrowserPageSessionOptions,
+    BrowserPointerActionKind,
+    BrowserPointerState,
     BrowserReadPageResult,
     BrowserSetViewportResult,
     BrowserTabInfo,
@@ -506,6 +510,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         pages: Page[];
         activePage: Page | null;
         lastMousePosition: { x: number; y: number } | null;
+        lastPointerAction: BrowserPointerState | null;
         frameSequence: number;
         latestAgentFrame: BrowserFrameSnapshot | null;
         agentFrameHistory: BrowserFrameSnapshot[];
@@ -699,6 +704,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             pages: [],
             activePage: null,
             lastMousePosition: null,
+            lastPointerAction: null,
             frameSequence: 0,
             latestAgentFrame: null,
             agentFrameHistory: [],
@@ -1545,26 +1551,51 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         try {
             return await page.evaluate(({ x, y }) => {
                 try {
-                    const markerSize = 24;
-                    const div = document.createElement('div');
-                    div.style.position = 'fixed';
-                    div.style.left = `${x - markerSize / 2}px`;
-                    div.style.top = `${y - markerSize / 2}px`;
-                    div.style.width = `${markerSize}px`;
-                    div.style.height = `${markerSize}px`;
-                    div.style.borderRadius = '50%';
-                    div.style.backgroundColor = 'rgba(255, 0, 0, 0.72)';
-                    div.style.border = '3px solid white';
-                    div.style.boxShadow = '0 0 12px rgba(0,0,0,0.55)';
-                    div.style.zIndex = '2147483647';
-                    div.style.pointerEvents = 'none';
-                    div.id = `ai-click-${Date.now()}`;
-
                     const parent = document.fullscreenElement || document.documentElement || document.body;
                     if (!parent) return false;
-                    parent.appendChild(div);
 
-                    setTimeout(() => div.remove(), 2000);
+                    // Small persistent dot: stays visible in evidence
+                    // screenshots captured after the click.
+                    const dotSize = 10;
+                    const dot = document.createElement('div');
+                    dot.style.position = 'fixed';
+                    dot.style.left = `${x - dotSize / 2}px`;
+                    dot.style.top = `${y - dotSize / 2}px`;
+                    dot.style.width = `${dotSize}px`;
+                    dot.style.height = `${dotSize}px`;
+                    dot.style.borderRadius = '50%';
+                    dot.style.backgroundColor = 'rgba(20, 20, 24, 0.85)';
+                    dot.style.border = '2px solid rgba(255, 255, 255, 0.95)';
+                    dot.style.boxShadow = '0 0 6px rgba(0, 0, 0, 0.45)';
+                    dot.style.zIndex = '2147483647';
+                    dot.style.pointerEvents = 'none';
+                    dot.id = `ai-click-${Date.now()}`;
+                    parent.appendChild(dot);
+                    setTimeout(() => dot.remove(), 2000);
+
+                    // Expanding ripple ring: the live-view click feedback.
+                    const ringSize = 26;
+                    const ring = document.createElement('div');
+                    ring.style.position = 'fixed';
+                    ring.style.left = `${x - ringSize / 2}px`;
+                    ring.style.top = `${y - ringSize / 2}px`;
+                    ring.style.width = `${ringSize}px`;
+                    ring.style.height = `${ringSize}px`;
+                    ring.style.borderRadius = '50%';
+                    ring.style.border = '2.5px solid rgba(255, 255, 255, 0.95)';
+                    ring.style.backgroundColor = 'rgba(20, 20, 24, 0.25)';
+                    ring.style.boxShadow = '0 0 10px rgba(0, 0, 0, 0.4)';
+                    ring.style.zIndex = '2147483647';
+                    ring.style.pointerEvents = 'none';
+                    parent.appendChild(ring);
+                    if (typeof ring.animate === 'function') {
+                        ring.animate([
+                            { transform: 'scale(0.4)', opacity: 1 },
+                            { transform: 'scale(1.7)', opacity: 0 },
+                        ], { duration: 650, easing: 'cubic-bezier(0.22, 1, 0.36, 1)', fill: 'forwards' });
+                    }
+                    setTimeout(() => ring.remove(), 700);
+
                     return true;
                 } catch {
                     return false;
@@ -1601,6 +1632,16 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         }
     };
 
+    const setDisplayPointer = (
+        session: BrowserSessionState,
+        x: number,
+        y: number,
+        kind: BrowserPointerActionKind,
+    ): void => {
+        session.lastMousePosition = { x, y };
+        session.lastPointerAction = { x, y, kind, at: Date.now() };
+    };
+
     const clickDisplayCoordinate = async (
         session: BrowserSessionState,
         x: number,
@@ -1613,7 +1654,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         try {
             log(`🖱️ Display click at ${safeX}, ${safeY} (Count: ${repeat})`);
             await xdotool(['mousemove', String(safeX), String(safeY)]);
-            session.lastMousePosition = { x: safeX, y: safeY };
+            setDisplayPointer(session, safeX, safeY, 'click');
             if (await drawDisplayClickMarker(session, safeX, safeY)) {
                 await sleep(120);
             }
@@ -1640,7 +1681,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         const [safeX, safeY] = clampDisplayCoordinate(x, y);
         log(`🖱️ Display hover at ${safeX}, ${safeY}`);
         await xdotool(['mousemove', String(safeX), String(safeY)]);
-        session.lastMousePosition = { x: safeX, y: safeY };
+        setDisplayPointer(session, safeX, safeY, 'move');
     };
 
     const dragDisplayCoordinate = async (
@@ -1659,7 +1700,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             log(`🖱️ Display drag from [${safeStartX}, ${safeStartY}] to [${safeEndX}, ${safeEndY}] (${durationMs}ms)`);
             await xdotool(['mousemove', String(safeStartX), String(safeStartY)]);
             await xdotool(['mousedown', '1']);
-            session.lastMousePosition = { x: safeStartX, y: safeStartY };
+            setDisplayPointer(session, safeStartX, safeStartY, 'drag');
             for (let step = 1; step <= steps; step++) {
                 const ratio = step / steps;
                 const x = Math.round(safeStartX + (safeEndX - safeStartX) * ratio);
@@ -1667,7 +1708,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 await xdotool(['mousemove', String(x), String(y)]);
                 await sleep(Math.max(5, durationMs / steps));
             }
-            session.lastMousePosition = { x: safeEndX, y: safeEndY };
+            setDisplayPointer(session, safeEndX, safeEndY, 'drag');
             await xdotool(['mouseup', '1']);
             return { success: true, trace: emptyTrace('drag') };
         } catch (error) {
@@ -1691,7 +1732,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             log(`🖱️ Display hold at ${safeX}, ${safeY} (${durationMs}ms)`);
             await xdotool(['mousemove', String(safeX), String(safeY)]);
             await xdotool(['mousedown', '1']);
-            session.lastMousePosition = { x: safeX, y: safeY };
+            setDisplayPointer(session, safeX, safeY, 'hold');
             await sleep(Math.max(200, durationMs));
             await xdotool(['mouseup', '1']);
             return { success: true, trace: emptyTrace('hold') };
@@ -1713,7 +1754,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         const target = session.lastMousePosition ?? { x: display.width / 2, y: display.height / 2 };
         const [targetX, targetY] = clampDisplayCoordinate(target.x, target.y);
         await xdotool(['mousemove', String(targetX), String(targetY)]);
-        session.lastMousePosition = { x: targetX, y: targetY };
+        setDisplayPointer(session, targetX, targetY, 'scroll');
 
         const button = direction === 'up' ? '4' : direction === 'down' ? '5' : direction === 'left' ? '6' : '7';
         const repeats = Math.max(1, Math.min(20, Math.ceil(amount / 120)));
@@ -2620,6 +2661,14 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                     failedRequests: session.failedRequests.map((entry) => ({ ...entry })),
                     httpErrors: session.httpErrors.map((entry) => ({ ...entry })),
                 };
+            },
+
+            getPointerState(): BrowserPointerState | null {
+                // Display coordinates are the live view's coordinate space; the
+                // viewport (CDP) path uses page coordinates the overlay cannot
+                // map, so only report the pointer in display-automation mode.
+                if (!shouldUseDisplayAutomation()) return null;
+                return session.lastPointerAction ? { ...session.lastPointerAction } : null;
             },
 
             async readPage(): Promise<BrowserReadPageResult> {

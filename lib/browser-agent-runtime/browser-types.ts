@@ -17,6 +17,19 @@ export interface BrowserManagerOptions {
 export type BrowserFrameSource = 'agent' | 'live';
 export type BrowserCaptureMode = 'viewport' | 'overview';
 export type BrowserCoordinateSpace = 'normalized-viewport' | 'normalized-display';
+export type BrowserPointerActionKind = 'move' | 'click' | 'drag' | 'hold' | 'scroll';
+
+/**
+ * Last agent-driven pointer action in display pixels — the live view renders
+ * its cursor overlay from this, so it only reports in display-automation mode
+ * (the same mode the VNC live view uses).
+ */
+export interface BrowserPointerState {
+    x: number;
+    y: number;
+    kind: BrowserPointerActionKind;
+    at: number;
+}
 
 export interface BrowserPageSessionCapabilities {
     backend: BrowserBackend;
@@ -255,6 +268,7 @@ export interface BrowserPageSession {
     waitForDownloads(timeoutMs?: number, options?: BrowserDownloadWaitOptions): Promise<BrowserDownloadFile[]>;
     waitForPageSettled(options?: BrowserPageSettleOptions): Promise<BrowserPageSettleResult>;
     getDiagnostics(): BrowserDiagnosticsSnapshot;
+    getPointerState(): BrowserPointerState | null;
     readPage(): Promise<BrowserReadPageResult>;
     clickRef(ref: string, count?: number): Promise<BrowserClickRefResult>;
     setViewport(preset: ViewportPreset, colorScheme?: 'dark' | 'light' | 'auto'): Promise<BrowserSetViewportResult>;

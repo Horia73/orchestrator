@@ -4,7 +4,7 @@ import os from 'os'
 import path from 'path'
 
 import type { BrowserEvidenceCapture } from '@/lib/browser-agent-runtime/agent'
-import { createBrowserManager, type BrowserDiagnosticsSnapshot, type BrowserDownloadFile, type BrowserManager, type BrowserPageSession } from '@/lib/browser-agent-runtime/browser'
+import { createBrowserManager, type BrowserDiagnosticsSnapshot, type BrowserDownloadFile, type BrowserManager, type BrowserPageSession, type BrowserPointerState } from '@/lib/browser-agent-runtime/browser'
 import type { BrowserLiveViewState } from '@/lib/browser-agent-runtime/display'
 import type { AgentConfig as BrowserRuntimeConfig } from '@/lib/browser-agent-runtime/config'
 import { createAgentRuntime, type AgentRuntime, type AgentRuntimeStatus } from '@/lib/browser-agent-runtime/runtime'
@@ -42,7 +42,7 @@ export interface BrowserSessionLease {
 
 export interface BrowserLiveViewClientState extends BrowserLiveViewState {
     selectedSessionId: string | null
-    controlMode: 'agent' | 'user'
+    cursor: BrowserPointerState | null
     running: boolean
     paused: boolean
     sessions: Array<{
@@ -172,8 +172,6 @@ class BrowserSessionManager {
     private browserManager: BrowserManager | null = null
     private sessions = new Map<string, ManagedBrowserSession>()
     private cleanupTimer: NodeJS.Timeout | null = null
-    private humanControl = false
-    private humanControlSessionId: string | null = null
     private runSlots = new AsyncSemaphore()
 
     async acquire(options: AcquireBrowserSessionOptions): Promise<BrowserSessionLease> {
@@ -199,13 +197,6 @@ class BrowserSessionManager {
                 : await this.createSession(options.config, sessionMode)
 
             const releaseLock = await session.lock.acquire()
-            if (this.humanControl) {
-                this.humanControl = false
-                this.humanControlSessionId = null
-                for (const managedSession of this.sessions.values()) {
-                    managedSession.runtime.resumeTask()
-                }
-            }
             session.currentStatusHandler = options.onStatus
             session.currentEvidenceHandler = options.onEvidence
             session.status = 'running'
@@ -349,8 +340,6 @@ class BrowserSessionManager {
             this.browserManager = null
         }
         this.sessions.clear()
-        this.humanControl = false
-        this.humanControlSessionId = null
     }
 
     async getLiveViewState(sessionId?: string | null): Promise<BrowserLiveViewClientState> {
@@ -387,10 +376,17 @@ class BrowserSessionManager {
             }
         }))
 
+        let cursor: BrowserPointerState | null = null
+        try {
+            cursor = selectedSession?.pageSession.getPointerState() ?? null
+        } catch {
+            cursor = null
+        }
+
         return {
             ...base,
             selectedSessionId: selectedSession?.id ?? null,
-            controlMode: this.humanControl ? 'user' : 'agent',
+            cursor,
             running: sessionStates.some(session => session.running),
             paused: sessionStates.some(session => session.paused),
             sessions: sessionStates,
@@ -417,26 +413,8 @@ class BrowserSessionManager {
         }
     }
 
-    async setHumanControl(enabled: boolean, sessionId?: string | null): Promise<BrowserLiveViewClientState> {
-        this.humanControl = enabled
-        this.humanControlSessionId = enabled
-            ? this.getHumanInteractionSession(sessionId)?.id ?? null
-            : null
-        for (const session of this.sessions.values()) {
-            if (enabled) {
-                session.runtime.pauseTask()
-            } else {
-                session.runtime.resumeTask()
-            }
-        }
-        return this.getLiveViewState(this.humanControlSessionId ?? sessionId)
-    }
-
     async pasteText(text: string, sessionId?: string | null): Promise<BrowserLiveViewClientState> {
-        if (!this.humanControl) {
-            throw new Error('Take browser control before sending input.')
-        }
-        const session = this.getHumanInteractionSession(sessionId ?? this.humanControlSessionId)
+        const session = this.getHumanInteractionSession(sessionId)
         if (!session) {
             throw new Error('No active browser session is available.')
         }
@@ -446,10 +424,7 @@ class BrowserSessionManager {
     }
 
     async pressKey(key: string, sessionId?: string | null): Promise<BrowserLiveViewClientState> {
-        if (!this.humanControl) {
-            throw new Error('Take browser control before sending input.')
-        }
-        const session = this.getHumanInteractionSession(sessionId ?? this.humanControlSessionId)
+        const session = this.getHumanInteractionSession(sessionId)
         if (!session) {
             throw new Error('No active browser session is available.')
         }
@@ -459,10 +434,7 @@ class BrowserSessionManager {
     }
 
     async copyFromBrowser(key?: string, sessionId?: string | null): Promise<BrowserLiveClipboardResult> {
-        if (!this.humanControl) {
-            throw new Error('Take browser control before reading clipboard.')
-        }
-        const session = this.getHumanInteractionSession(sessionId ?? this.humanControlSessionId)
+        const session = this.getHumanInteractionSession(sessionId)
         if (!session) {
             throw new Error('No active browser session is available.')
         }
