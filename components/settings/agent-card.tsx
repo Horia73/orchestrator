@@ -584,7 +584,7 @@ function BrowserModelSlotControls({
   }
   const effectiveThinkingLevel = availableThinkingLevels.includes(value.thinkingLevel)
     ? value.thinkingLevel
-    : browserThinkingFallback(availableThinkingLevels)
+    : browserThinkingFallback(modelDef, availableThinkingLevels)
 
   const handleModelChange = ({ providerId, modelId }: { providerId: string; modelId: string }) => {
     const nextModelDef = data.providers[providerId]?.models[modelId]
@@ -592,7 +592,7 @@ function BrowserModelSlotControls({
     const supportsCurrent = nextThinkingLevels.includes(effectiveThinkingLevel)
     const nextThinkingLevel: ThinkingLevel = supportsCurrent
       ? effectiveThinkingLevel
-      : browserThinkingFallback(nextThinkingLevels)
+      : browserThinkingFallback(nextModelDef, nextThinkingLevels)
     const nextHasThinkingSettings = nextThinkingLevels.length > 0
     const nextVisibleFeatures = browserVisibleFeatures(providerId, nextModelDef?.features ?? [], nextHasThinkingSettings)
     onChange(slot, {
@@ -737,7 +737,11 @@ function isBrowserRuntimeThinkingLevel(level: ThinkingLevel): boolean {
   return level === "minimal" || level === "low" || level === "medium" || level === "high" || level === "xhigh"
 }
 
-function browserThinkingFallback(levels: ThinkingLevel[]): ThinkingLevel {
+function browserThinkingFallback(modelDef: ModelDef | undefined, levels: ThinkingLevel[]): ThinkingLevel {
+  // Same precedence as every other agent card: the model's own default
+  // thinking level (registry metadata) wins before any static preference.
+  const preferred = modelDef?.defaultThinkingLevel
+  if (preferred && levels.includes(preferred)) return preferred
   if (levels.includes("high")) return "high"
   if (levels.includes("low")) return "low"
   return levels[0] ?? "high"
