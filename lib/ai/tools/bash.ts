@@ -68,11 +68,11 @@ function runtimeCommandEnv(): Record<string, string> {
     }
 }
 
-function startBackgroundCommand(command: string, cwd: string, timeoutMs: number | undefined, injection: EnvVarInjection, ctx?: ToolExecutionContext): ToolResult {
+async function startBackgroundCommand(command: string, cwd: string, timeoutMs: number | undefined, injection: EnvVarInjection, ctx?: ToolExecutionContext): Promise<ToolResult> {
     // Background commands run as TRACKED jobs: registered in background_jobs,
     // detached from this turn, and the owning conversation gets a completion
     // notice (steering follow-up or headless wake) when the process exits.
-    const result = startTrackedBackgroundJob({
+    const result = await startTrackedBackgroundJob({
         command,
         cwd,
         timeoutMs,

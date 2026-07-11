@@ -41,6 +41,7 @@ import {
 } from "@/components/chat/chat-view-helpers"
 import { ChatInput } from "@/components/chat-input"
 import { ChatConnectionPill } from "@/components/chat-connection-pill"
+import { BackgroundJobsChip } from "@/components/chat/background-jobs-chip"
 import { PendingFollowUps } from "@/components/chat/pending-follow-ups"
 import { TodoBar } from "@/components/todo-bar"
 import { MessageBubble, StreamingBubble } from "@/components/message-bubble"
@@ -3394,6 +3395,7 @@ export function ChatView() {
                 }
                 hideCompleted={!isStreamingThisConversation}
               />
+              <BackgroundJobsChip conversationId={conversationId ?? null} />
               <PendingFollowUps items={pendingFollowUpItems} />
               <ChatInput variant="chat" />
             </div>

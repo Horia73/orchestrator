@@ -174,6 +174,8 @@ export function initializeDatabaseSchema(db: SqliteExecutor): void {
           status TEXT NOT NULL DEFAULT 'running', -- running | exited | failed | killed | lost
           exitCode INTEGER,
           wakeOnExit INTEGER NOT NULL DEFAULT 1,
+          runner TEXT NOT NULL DEFAULT 'process', -- process | container
+          containerName TEXT,
           startedAt INTEGER NOT NULL,
           endedAt INTEGER,
           notifiedAt INTEGER
@@ -404,6 +406,20 @@ export function initializeDatabaseSchema(db: SqliteExecutor): void {
   } catch {
     /* column already exists */
   }
+  // Migration: background jobs learn which runner owns them ('process' =
+  // detached child of this server, 'container' = per-job Docker container via
+  // the host bridge) so reconcile/kill route correctly after upgrades.
+  try {
+    db.exec(`ALTER TABLE background_jobs ADD COLUMN runner TEXT NOT NULL DEFAULT 'process'`)
+  } catch {
+    /* column already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE background_jobs ADD COLUMN containerName TEXT`)
+  } catch {
+    /* column already exists */
+  }
+
   // Migration: Inbox item → Smart Monitor watch linkage (JSON string[] of
   // watch ids). Set when a monitor wake's notify_inbox surfaces; read by the
   // inbox surface to record user_signal events for behavioral learning.

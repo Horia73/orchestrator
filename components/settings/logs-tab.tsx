@@ -21,6 +21,7 @@ import type { Message } from "@/lib/types"
 import { withMissingToolLogReasoning } from "@/lib/observability/log-transcript"
 import { MessageBubble } from "@/components/message-bubble"
 import { Select as UiSelect } from "@/components/ui/select"
+import { BackgroundJobsSection } from "@/components/settings/background-jobs-section"
 import { ConversationArtifactsProvider } from "@/components/artifacts/use-conversation-artifacts"
 import { useLogs, useRequestDetail, useRequestInput, type LiveTailStatus, type LogsFilters, type RequestLogTranscript } from "./use-logs"
 
@@ -72,6 +73,7 @@ export function LogsTab() {
 
     return (
         <div className="flex flex-col gap-4">
+            <BackgroundJobsSection />
             <FilterBar
                 filters={filters}
                 setFilters={setFilters}

@@ -5,11 +5,14 @@ import { activeRuntimePaths } from '@/lib/runtime-paths'
 import {
     BACKGROUND_JOB_DEFAULT_TIMEOUT_MS,
     BACKGROUND_JOB_MAX_TIMEOUT_MS,
+    BACKGROUND_JOB_WAIT_DEFAULT_MS,
+    BACKGROUND_JOB_WAIT_MAX_MS,
     getBackgroundJob,
     killBackgroundJob,
     listBackgroundJobs,
     readBackgroundJobLogTail,
     startTrackedBackgroundJob,
+    waitForBackgroundJob,
 } from '@/lib/ai/background-jobs'
 import { displayPath } from './sandbox'
 import { collectEnvKeys, resolveEnvVarInjection } from './env-vars'
@@ -77,22 +80,27 @@ export const manageBackgroundJobsTool: ToolDef = {
     description: [
         'Inspect and control tracked background jobs started with start_background_job or Bash run_in_background.',
         "action 'list' shows this conversation's jobs (running and recent). action 'output' returns the redacted log tail for one job. action 'kill' terminates a running job (no completion wake — you asked for the kill).",
+        "action 'wait' blocks until the job exits (up to max_wait_ms) and returns the final status + log tail; if it is still running when the window closes you get its current state back — either wait again or end your turn and rely on the completion wake. Prefer 'wait' over sleep-and-poll loops when you expect the job to finish soon.",
     ].join(' '),
     input_schema: {
         type: 'object',
         properties: {
             action: {
                 type: 'string',
-                enum: ['list', 'output', 'kill'],
+                enum: ['list', 'output', 'kill', 'wait'],
                 description: 'What to do.',
             },
             job_id: {
                 type: 'string',
-                description: "Job id (e.g. bg_1730000000000_ab12cd). Required for 'output' and 'kill'.",
+                description: "Job id (e.g. bg_1730000000000_ab12cd). Required for 'output', 'kill', and 'wait'.",
             },
             tail_chars: {
                 type: 'integer',
-                description: "For 'output': how many characters of log tail to return. Default 4000, max 20000.",
+                description: "For 'output' and 'wait': how many characters of log tail to return. Default 4000, max 20000.",
+            },
+            max_wait_ms: {
+                type: 'integer',
+                description: `For 'wait': how long to block for the job to exit. Default ${BACKGROUND_JOB_WAIT_DEFAULT_MS} (60s), capped at ${BACKGROUND_JOB_WAIT_MAX_MS} (5 minutes).`,
             },
             all_conversations: {
                 type: 'boolean',
@@ -113,6 +121,7 @@ function jobSummary(job: NonNullable<ReturnType<typeof getBackgroundJob>>) {
         description: job.description ?? undefined,
         cwd: job.cwd ? displayPath(job.cwd) : undefined,
         log_path: displayPath(job.logPath),
+        runner: job.runner,
         started_at: job.startedAt,
         ended_at: job.endedAt ?? undefined,
         wake_on_exit: Boolean(job.wakeOnExit),
@@ -147,7 +156,7 @@ export async function executeStartBackgroundJob(
         : undefined
     const wakeOnExit = args.wake_on_exit !== false && Boolean(ctx?.conversationId)
 
-    const result = startTrackedBackgroundJob({
+    const result = await startTrackedBackgroundJob({
         command,
         cwd,
         timeoutMs: timeout,
@@ -211,13 +220,37 @@ export async function executeManageBackgroundJobs(
 
     if (action === 'kill') {
         if (!jobId) return { success: false, error: "job_id is required for action 'kill'" }
-        const result = killBackgroundJob(jobId)
+        const result = await killBackgroundJob(jobId)
         if (!result.ok) return { success: false, error: result.error }
         return {
             success: true,
-            data: { id: jobId, killed: true, note: 'SIGTERM sent (SIGKILL follows in 1.5s if needed). No completion wake will fire for a deliberate kill.' },
+            data: { id: jobId, killed: true, note: 'Stop signal sent. No completion wake will fire for a deliberate kill.' },
         }
     }
 
-    return { success: false, error: `Unknown action: ${action || '(missing)'}. Use 'list', 'output', or 'kill'.` }
+    if (action === 'wait') {
+        if (!jobId) return { success: false, error: "job_id is required for action 'wait'" }
+        const maxWait = typeof args.max_wait_ms === 'number' && Number.isFinite(args.max_wait_ms)
+            ? Math.floor(args.max_wait_ms)
+            : BACKGROUND_JOB_WAIT_DEFAULT_MS
+        const job = await waitForBackgroundJob(jobId, maxWait)
+        if (!job) return { success: false, error: `Unknown background job: ${jobId}` }
+        const tailChars = typeof args.tail_chars === 'number' && Number.isFinite(args.tail_chars)
+            ? Math.min(Math.max(Math.floor(args.tail_chars), 200), 20_000)
+            : 4_000
+        const done = job.status !== 'running'
+        return {
+            success: true,
+            data: {
+                ...jobSummary(job),
+                done,
+                output_tail: readBackgroundJobLogTail(job, tailChars) || '(no output captured yet)',
+                note: done
+                    ? 'The job settled while you waited; no separate completion notice will be posted — act on this result now.'
+                    : 'Still running when the wait window closed. Wait again if you expect it to finish soon, or end your turn — the completion notice will wake you.',
+            },
+        }
+    }
+
+    return { success: false, error: `Unknown action: ${action || '(missing)'}. Use 'list', 'output', 'kill', or 'wait'.` }
 }

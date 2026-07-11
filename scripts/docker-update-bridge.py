@@ -17,6 +17,7 @@ import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 from pathlib import Path
 from typing import Optional
 
@@ -1218,6 +1219,117 @@ def update_clis() -> dict:
     return {"ok": True, "phase": "restarting", "versions": versions.strip()}
 
 
+# ── Background job containers ────────────────────────────────────────────
+# Per-job ephemeral containers: the app asks the bridge to run a tracked
+# background job in its OWN container, with image/mounts/network/user cloned
+# from the live app container, so app redeploys never kill running jobs. The
+# job writes its log + exit-code marker to the shared state volume and the
+# app's reconcile sweep finalizes it from there. The container dies with the
+# job (--rm) — there is deliberately no long-lived runner to keep updated.
+
+JOB_CONTAINER_PREFIX = "orch-bgjob-"
+JOB_ID_RE = re.compile(r"^bg_[A-Za-z0-9_]{1,80}$")
+ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+
+
+def job_container_name(job_id: str) -> str:
+    return JOB_CONTAINER_PREFIX + job_id
+
+
+def app_container_inspect() -> Optional[dict]:
+    docker = docker_command()
+    lines = capture_optional(compose_command() + ["ps", "-q", SERVICE_NAME]).splitlines()
+    cid = next((line.strip() for line in lines if line.strip()), "")
+    if not cid:
+        return None
+    raw = capture_optional([docker, "inspect", cid])
+    try:
+        parsed = json.loads(raw)
+        return parsed[0] if isinstance(parsed, list) and parsed else None
+    except Exception:
+        return None
+
+
+def run_background_job_container(payload: dict) -> dict:
+    job_id = str(payload.get("jobId") or "")
+    command = payload.get("command")
+    cwd = str(payload.get("cwd") or "")
+    env = payload.get("env") or {}
+    if not JOB_ID_RE.match(job_id):
+        return {"ok": False, "error": "Invalid jobId."}
+    if not isinstance(command, str) or not command.strip():
+        return {"ok": False, "error": "command is required."}
+    if not cwd.startswith("/"):
+        return {"ok": False, "error": "cwd must be an absolute container path."}
+    if not isinstance(env, dict):
+        return {"ok": False, "error": "env must be an object."}
+
+    inspect = app_container_inspect()
+    if not inspect:
+        return {"ok": False, "error": "The app container is not running; cannot clone its runtime."}
+    # Pin the job to the image DIGEST the app runs right now: rebuilds retag
+    # orchestrator:local but the digest stays valid (and prune-safe) while
+    # this container uses it.
+    image = inspect.get("Image") or ""
+    if not image:
+        return {"ok": False, "error": "Could not resolve the app container image."}
+    config = inspect.get("Config") or {}
+    user = config.get("User") or ""
+    docker = docker_command()
+
+    args = [
+        docker, "run", "-d", "--rm",
+        "--name", job_container_name(job_id),
+        "--label", "orchestrator.background-job=1",
+    ]
+    if user:
+        args += ["--user", user]
+    for mount in inspect.get("Mounts") or []:
+        src = mount.get("Source")
+        dst = mount.get("Destination")
+        if not src or not dst:
+            continue
+        suffix = "" if mount.get("RW", True) else ":ro"
+        args += ["-v", f"{src}:{dst}{suffix}"]
+    networks = list(((inspect.get("NetworkSettings") or {}).get("Networks") or {}).keys())
+    if networks:
+        args += ["--network", networks[0]]
+    for key, value in env.items():
+        if not isinstance(key, str) or not ENV_KEY_RE.match(key) or not isinstance(value, str):
+            return {"ok": False, "error": f"Invalid env entry: {key!r}"}
+        args += ["-e", f"{key}={value}"]
+    args += ["-w", cwd, image, "/bin/bash", "-lc", command]
+
+    code, output = run_capture(args, timeout=60)
+    if code != 0:
+        return {"ok": False, "error": (output or "docker run failed").strip()[-500:]}
+    container_id = output.strip().splitlines()[-1][:64] if output.strip() else ""
+    return {"ok": True, "containerName": job_container_name(job_id), "containerId": container_id}
+
+
+def kill_background_job_container(payload: dict) -> dict:
+    job_id = str(payload.get("jobId") or "")
+    if not JOB_ID_RE.match(job_id):
+        return {"ok": False, "error": "Invalid jobId."}
+    docker = docker_command()
+    code, output = run_capture([docker, "stop", "-t", "5", job_container_name(job_id)], timeout=30)
+    if code != 0:
+        if "no such container" in (output or "").lower():
+            return {"ok": True, "alreadyGone": True}
+        return {"ok": False, "error": (output or "docker stop failed").strip()[-300:]}
+    return {"ok": True}
+
+
+def background_job_container_status(job_id: str) -> dict:
+    if not JOB_ID_RE.match(job_id):
+        return {"ok": False, "error": "Invalid jobId."}
+    docker = docker_command()
+    out = capture_optional([docker, "inspect", "--format", "{{.State.Running}}", job_container_name(job_id)])
+    if not out:
+        return {"ok": True, "exists": False, "running": False}
+    return {"ok": True, "exists": True, "running": out.strip().lower() == "true"}
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "OrchestratorDockerUpdateBridge/1.0"
 
@@ -1244,11 +1356,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
-        if path not in {"/status", "/claude-usage", "/update-log", "/remote-access"}:
+        if path not in {"/status", "/claude-usage", "/update-log", "/remote-access", "/background-job/status"}:
             self.send_json(404, {"error": "Not found."})
             return
         if not self.authenticated():
             self.send_json(401, {"error": "Unauthorized."})
+            return
+        if path == "/background-job/status":
+            query = parse_qs(urlsplit(self.path).query)
+            job_id = (query.get("jobId") or [""])[0]
+            result = background_job_container_status(job_id)
+            self.send_json(200 if result.get("ok") else 400, result)
             return
         if path == "/remote-access":
             self.send_json(200, detect_remote_access())
@@ -1284,11 +1402,31 @@ class Handler(BaseHTTPRequestHandler):
             "/remote-access/published-app-funnel",
             "/remote-access/install-tailscale",
             "/remote-access/https",
+            "/background-job/run",
+            "/background-job/kill",
         }:
             self.send_json(404, {"error": "Not found."})
             return
         if not self.authenticated():
             self.send_json(401, {"error": "Unauthorized."})
+            return
+
+        # Background-job containers are independent of the update pipeline —
+        # quick docker commands, no update lock.
+        if path in {"/background-job/run", "/background-job/kill"}:
+            try:
+                length = min(int(self.headers.get("Content-Length", "0") or "0"), 1024 * 1024)
+                raw = self.rfile.read(length) if length else b"{}"
+                body = json.loads(raw.decode("utf-8") or "{}")
+            except Exception:
+                self.send_json(400, {"error": "Invalid JSON payload."})
+                return
+            result = (
+                run_background_job_container(body)
+                if path == "/background-job/run"
+                else kill_background_job_container(body)
+            )
+            self.send_json(200 if result.get("ok") else 502, result)
             return
 
         # Remote-access actions are independent of the update pipeline, so handle

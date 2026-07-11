@@ -41,6 +41,7 @@ async function main(): Promise<void> {
         getBackgroundJob,
         readBackgroundJobLogTail,
         pruneExpiredBackgroundJobs,
+        waitForBackgroundJob,
         BACKGROUND_JOB_RETENTION_MS,
     } = await import('@/lib/ai/background-jobs')
     const { resolveEnvVarInjection } = await import('@/lib/ai/tools/env-vars')
@@ -55,7 +56,7 @@ async function main(): Promise<void> {
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-bg-cwd-'))
 
     // ── Happy path: run, exit 0, log + marker written ───────────────────
-    const okJob = startTrackedBackgroundJob({
+    const okJob = await startTrackedBackgroundJob({
         command: 'echo smoke-bg-output',
         cwd: workDir,
         injection: emptyInjection.injection,
@@ -78,7 +79,7 @@ async function main(): Promise<void> {
     }
 
     // ── Spawn failure settles as failed (never eternal 'running') ───────
-    const badCwdJob = startTrackedBackgroundJob({
+    const badCwdJob = await startTrackedBackgroundJob({
         command: 'echo never-runs',
         cwd: path.join(workDir, 'does-not-exist'),
         injection: emptyInjection.injection,
@@ -97,7 +98,7 @@ async function main(): Promise<void> {
     }
 
     // ── Timeout kill ────────────────────────────────────────────────────
-    const slowJob = startTrackedBackgroundJob({
+    const slowJob = await startTrackedBackgroundJob({
         command: 'sleep 30',
         cwd: workDir,
         timeoutMs: 1_200,
@@ -119,7 +120,7 @@ async function main(): Promise<void> {
     const secretInjection = resolveEnvVarInjection(['ORCH_SMOKE_BG_SECRET'])
     check('secret injection resolves', secretInjection.ok, secretInjection)
     if (secretInjection.ok) {
-        const secretJob = startTrackedBackgroundJob({
+        const secretJob = await startTrackedBackgroundJob({
             command: 'printf "leak:%s\\n" "$ORCH_SMOKE_BG_SECRET"',
             cwd: workDir,
             injection: secretInjection.injection,
@@ -135,6 +136,22 @@ async function main(): Promise<void> {
             check('secret value never reaches the log file', !rawLog.includes('supersecret-bg-value-123'), rawLog.slice(-200))
             check('command output still logged', rawLog.includes('leak:'), rawLog.slice(-200))
         }
+    }
+
+    // ── Blocking wait ───────────────────────────────────────────────────
+    const waitJob = await startTrackedBackgroundJob({
+        command: 'sleep 1; echo wait-done',
+        cwd: workDir,
+        injection: emptyInjection.injection,
+        conversationId: null,
+        wakeOnExit: false,
+    })
+    check('wait job starts', waitJob.ok && Boolean(waitJob.job), waitJob.error)
+    if (waitJob.job) {
+        const settled = await waitForBackgroundJob(waitJob.job.id, 15_000)
+        check('wait returns the settled job', settled?.status === 'exited' && settled.exitCode === 0, settled?.status)
+        const unknownWait = await waitForBackgroundJob('bg_unknown_job', 1_000)
+        check('wait on unknown id returns null', unknownWait === null)
     }
 
     // ── Retention pruning ───────────────────────────────────────────────

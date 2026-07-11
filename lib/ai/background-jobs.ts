@@ -52,6 +52,10 @@ export interface BackgroundJobRow {
     status: 'running' | 'exited' | 'failed' | 'killed' | 'lost'
     exitCode: number | null
     wakeOnExit: number
+    /** 'process' = detached child of this server; 'container' = per-job
+     *  Docker container via the host bridge (survives app redeploys). */
+    runner: 'process' | 'container'
+    containerName: string | null
     startedAt: number
     endedAt: number | null
     notifiedAt: number | null
@@ -66,12 +70,22 @@ export const BACKGROUND_JOB_MAX_TIMEOUT_MS = 24 * 60 * 60 * 1000
 const globalForJobs = globalThis as unknown as {
     __orchestratorBgJobWatcher?: ReturnType<typeof setInterval>
     __orchestratorBgJobsWatched?: Set<string>
+    __orchestratorBgJobsAwaited?: Set<string>
 }
 
 /** Job ids whose exit is watched in-process (we spawned them this boot). */
 const watchedJobs = globalForJobs.__orchestratorBgJobsWatched ?? new Set<string>()
 if (!globalForJobs.__orchestratorBgJobsWatched) {
     globalForJobs.__orchestratorBgJobsWatched = watchedJobs
+}
+
+/** Job ids an agent is actively blocked on via the `wait` action. Their
+ *  completion needs no notice/wake — the waiting turn consumes the result
+ *  inline. globalThis-shared: the watcher sweep lives in the instrumentation
+ *  module graph while tools run in the route graph. */
+const awaitedJobs = globalForJobs.__orchestratorBgJobsAwaited ?? new Set<string>()
+if (!globalForJobs.__orchestratorBgJobsAwaited) {
+    globalForJobs.__orchestratorBgJobsAwaited = awaitedJobs
 }
 
 // ---------------------------------------------------------------------------
@@ -110,8 +124,8 @@ function insertBackgroundJob(row: BackgroundJobRow): void {
     db.prepare(
         `INSERT INTO background_jobs
             (id, conversationId, command, description, cwd, pid, logPath, exitMarkerPath,
-             status, exitCode, wakeOnExit, startedAt, endedAt, notifiedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+             status, exitCode, wakeOnExit, runner, containerName, startedAt, endedAt, notifiedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
         row.id,
         row.conversationId,
@@ -124,6 +138,8 @@ function insertBackgroundJob(row: BackgroundJobRow): void {
         row.status,
         row.exitCode,
         row.wakeOnExit,
+        row.runner,
+        row.containerName,
         row.startedAt,
         row.endedAt,
         row.notifiedAt,
@@ -179,7 +195,86 @@ function shellQuote(value: string): string {
     return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
-export function startTrackedBackgroundJob(args: StartBackgroundJobArgs): StartBackgroundJobResult {
+// ---------------------------------------------------------------------------
+// Host-bridge container runner
+// ---------------------------------------------------------------------------
+// On Docker installs, secret-free jobs run in their OWN ephemeral container
+// (image/mounts/network cloned from the live app container by the host
+// bridge), so app redeploys never kill a running job. The job writes its log
+// and exit marker to the shared state volume; the reconcile sweep finalizes
+// it from there. Jobs with injected secrets stay in-process so log redaction
+// happens before anything reaches disk.
+
+interface HostBridgeConfig {
+    origin: string
+    token: string
+}
+
+function hostBridgeConfig(): HostBridgeConfig | null {
+    if ((process.env.ORCHESTRATOR_SERVICE_MANAGER || '').toLowerCase() !== 'docker') return null
+    const raw = (
+        process.env.ORCHESTRATOR_HOST_BRIDGE_URL
+        || process.env.ORCHESTRATOR_DOCKER_UPDATE_URL
+        || process.env.ORCHESTRATOR_HOST_UPDATE_URL
+        || ''
+    ).trim()
+    const token = process.env.ORCHESTRATOR_HOST_BRIDGE_TOKEN
+        || process.env.ORCHESTRATOR_DOCKER_UPDATE_TOKEN
+        || process.env.ORCHESTRATOR_HOST_UPDATE_TOKEN
+    if (!raw || !token) return null
+    try {
+        return { origin: new URL(raw).origin, token }
+    } catch {
+        return null
+    }
+}
+
+async function bridgeRequest(
+    bridge: HostBridgeConfig,
+    path: string,
+    init?: { method?: 'GET' | 'POST'; body?: unknown; timeoutMs?: number },
+): Promise<Record<string, unknown> | null> {
+    try {
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), init?.timeoutMs ?? 15_000)
+        const response = await fetch(`${bridge.origin}${path}`, {
+            method: init?.method ?? 'GET',
+            headers: {
+                Authorization: `Bearer ${bridge.token}`,
+                'X-Orchestrator-Host-Bridge-Token': bridge.token,
+                ...(init?.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+            },
+            body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
+            signal: controller.signal,
+        }).finally(() => clearTimeout(timer))
+        return (await response.json().catch(() => null)) as Record<string, unknown> | null
+    } catch {
+        return null
+    }
+}
+
+/** Container-side wrapper: log via the shared volume, enforce the timeout
+ *  in-container (survives everything), persist the exit code marker. */
+function buildContainerJobCommand(args: {
+    command: string
+    logPath: string
+    exitMarkerPath: string
+    timeoutMs: number
+}): string {
+    const timeoutSeconds = Math.max(1, Math.ceil(args.timeoutMs / 1000))
+    return [
+        `exec >> ${shellQuote(args.logPath)} 2>&1`,
+        // timeout exits 124 when it fires; reconcile maps that to 'killed'.
+        `timeout --signal=TERM --kill-after=5 ${timeoutSeconds} /bin/bash -c ${shellQuote(args.command)}`,
+        '__orch_bg_ec=$?',
+        `printf '%s' "$__orch_bg_ec" > ${shellQuote(args.exitMarkerPath)}`,
+        'exit $__orch_bg_ec',
+    ].join('\n')
+}
+
+const CONTAINER_JOB_TIMEOUT_EXIT_CODE = 124
+
+export async function startTrackedBackgroundJob(args: StartBackgroundJobArgs): Promise<StartBackgroundJobResult> {
     const id = `bg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
     const jobsDir = path.join(activeRuntimePaths().workspaceDir, '.background-jobs')
     const logPath = path.join(jobsDir, `${id}.log`)
@@ -214,7 +309,82 @@ export function startTrackedBackgroundJob(args: StartBackgroundJobArgs): StartBa
         ORCHESTRATOR_PROFILE_STATE_DIR: paths.stateDir,
         ORCHESTRATOR_PROJECT_RUNS_DIR: path.join(process.cwd(), '.orchestrator', 'project-runs'),
     }
+    const timeoutMs = Math.min(
+        Math.max(args.timeoutMs ?? BACKGROUND_JOB_DEFAULT_TIMEOUT_MS, 1_000),
+        BACKGROUND_JOB_MAX_TIMEOUT_MS,
+    )
+    const profileId = getActiveProfileId()
 
+    // ── Container runner: Docker installs, secret-free jobs ─────────────
+    // The job gets its own ephemeral container, so app redeploys never kill
+    // it. Falls back to the in-process runner when the bridge is missing,
+    // old, or unreachable — the job still runs, just tied to this server.
+    const bridge = args.injection.redactions.length === 0 ? hostBridgeConfig() : null
+    if (bridge) {
+        const response = await bridgeRequest(bridge, '/background-job/run', {
+            method: 'POST',
+            timeoutMs: 60_000,
+            body: {
+                jobId: id,
+                command: buildContainerJobCommand({
+                    command: args.command,
+                    logPath,
+                    exitMarkerPath,
+                    timeoutMs,
+                }),
+                cwd: args.cwd,
+                // Minimal, secret-free env: the job container is the same
+                // image, so runtime paths and the CLI bin dirs are valid.
+                env: {
+                    ...runtimeEnv,
+                    HOME: '/home/node',
+                    PATH: augmentedEnv().PATH ?? '',
+                    NPM_CONFIG_PREFIX: process.env.NPM_CONFIG_PREFIX ?? '/home/node/.npm-global',
+                },
+            },
+        })
+        if (response?.ok === true) {
+            try {
+                fs.appendFileSync(
+                    /* turbopackIgnore: true */ logPath,
+                    '[orchestrator] running in an isolated job container — survives app restarts and updates\n\n',
+                )
+            } catch { /* best-effort */ }
+            const row: BackgroundJobRow = {
+                id,
+                conversationId: args.conversationId ?? null,
+                command: args.command,
+                description: args.description ?? null,
+                cwd: args.cwd,
+                pid: null,
+                logPath,
+                exitMarkerPath,
+                status: 'running',
+                exitCode: null,
+                wakeOnExit: args.wakeOnExit === false ? 0 : 1,
+                runner: 'container',
+                containerName: typeof response.containerName === 'string'
+                    ? response.containerName
+                    : `orch-bgjob-${id}`,
+                startedAt: Date.now(),
+                endedAt: null,
+                notifiedAt: null,
+            }
+            insertBackgroundJob(row)
+            return { ok: true, job: row }
+        }
+        const reason = response && typeof response.error === 'string' && response.error.trim()
+            ? response.error.trim()
+            : 'host bridge unreachable'
+        try {
+            fs.appendFileSync(
+                /* turbopackIgnore: true */ logPath,
+                `[orchestrator] container runner unavailable (${reason}); running in-process — this job will not survive an app restart\n\n`,
+            )
+        } catch { /* best-effort */ }
+    }
+
+    // ── In-process detached runner ───────────────────────────────────────
     // Secret-free jobs write straight to the log file: the child owns the
     // fd, so both the job and its output survive a server restart instead of
     // dying on SIGPIPE the moment the dead parent's pipe reader vanishes.
@@ -261,11 +431,6 @@ export function startTrackedBackgroundJob(args: StartBackgroundJobArgs): StartBa
         } catch { /* best-effort */ }
     }
 
-    const timeoutMs = Math.min(
-        Math.max(args.timeoutMs ?? BACKGROUND_JOB_DEFAULT_TIMEOUT_MS, 1_000),
-        BACKGROUND_JOB_MAX_TIMEOUT_MS,
-    )
-    const profileId = getActiveProfileId()
     const row: BackgroundJobRow = {
         id,
         conversationId: args.conversationId ?? null,
@@ -278,6 +443,8 @@ export function startTrackedBackgroundJob(args: StartBackgroundJobArgs): StartBa
         status: 'running',
         exitCode: null,
         wakeOnExit: args.wakeOnExit === false ? 0 : 1,
+        runner: 'process',
+        containerName: null,
         startedAt: Date.now(),
         endedAt: null,
         notifiedAt: null,
@@ -359,15 +526,37 @@ export function startTrackedBackgroundJob(args: StartBackgroundJobArgs): StartBa
     return { ok: true, job: row }
 }
 
-export function killBackgroundJob(id: string, opts?: { silent?: boolean }): { ok: boolean; error?: string } {
+export async function killBackgroundJob(id: string, opts?: { silent?: boolean }): Promise<{ ok: boolean; error?: string }> {
     const job = getBackgroundJob(id)
     if (!job) return { ok: false, error: `Unknown background job: ${id}` }
     if (job.status !== 'running') return { ok: false, error: `Job ${id} is not running (status: ${job.status})` }
-    if (!job.pid) return { ok: false, error: `Job ${id} has no recorded pid` }
     if (opts?.silent !== false) {
         // A deliberate kill needs no completion wake — the caller already knows.
         setBackgroundJobWake(id, false)
     }
+
+    if (job.runner === 'container') {
+        const bridge = hostBridgeConfig()
+        if (!bridge) return { ok: false, error: 'Host bridge is not configured; cannot stop the job container.' }
+        const response = await bridgeRequest(bridge, '/background-job/kill', {
+            method: 'POST',
+            timeoutMs: 40_000,
+            body: { jobId: id },
+        })
+        if (response?.ok !== true) {
+            const reason = response && typeof response.error === 'string' ? response.error : 'host bridge unreachable'
+            return { ok: false, error: `Could not stop job container: ${reason}` }
+        }
+        // docker stop usually kills the wrapper before it writes the exit
+        // marker — finalize the bookkeeping ourselves.
+        finalizeBackgroundJob(id, 'killed', null)
+        try {
+            fs.appendFileSync(/* turbopackIgnore: true */ job.logPath, '\n[orchestrator] job container stopped on request\n')
+        } catch { /* best-effort */ }
+        return { ok: true }
+    }
+
+    if (!job.pid) return { ok: false, error: `Job ${id} has no recorded pid` }
     try { process.kill(-job.pid, 'SIGTERM') } catch { try { process.kill(job.pid, 'SIGTERM') } catch { /* gone */ } }
     setTimeout(() => {
         try { process.kill(-job.pid!, 'SIGKILL') } catch { try { process.kill(job.pid!, 'SIGKILL') } catch { /* gone */ } }
@@ -443,6 +632,12 @@ export function buildBackgroundJobNotice(job: BackgroundJobRow): string {
  */
 async function notifyBackgroundJobCompletion(profileId: string, job: BackgroundJobRow): Promise<void> {
     if (!job.wakeOnExit || !job.conversationId || job.notifiedAt) return
+    if (awaitedJobs.has(job.id)) {
+        // An agent turn is blocked on this job via `wait` and consumes the
+        // result inline; a notice + wake would just replay it.
+        markBackgroundJobNotified(job.id)
+        return
+    }
     if (!getConversation(job.conversationId)) return
 
     const message: Message = {
@@ -471,6 +666,44 @@ async function notifyBackgroundJobCompletion(profileId: string, job: BackgroundJ
 }
 
 // ---------------------------------------------------------------------------
+// Blocking wait (manage_background_jobs action 'wait')
+// ---------------------------------------------------------------------------
+
+export const BACKGROUND_JOB_WAIT_DEFAULT_MS = 60_000
+export const BACKGROUND_JOB_WAIT_MAX_MS = 5 * 60 * 1000
+
+/**
+ * Block until the job settles or the window closes; returns the latest row
+ * (still 'running' on timeout) or null for an unknown id. While a waiter is
+ * registered, completion skips the notice/wake — the waiting turn consumes
+ * the result inline. Container jobs are settled eagerly from their exit
+ * marker instead of waiting for the 30s sweep.
+ */
+export async function waitForBackgroundJob(id: string, maxWaitMs: number): Promise<BackgroundJobRow | null> {
+    const clamped = Math.min(Math.max(maxWaitMs, 1_000), BACKGROUND_JOB_WAIT_MAX_MS)
+    const deadline = Date.now() + clamped
+    awaitedJobs.add(id)
+    try {
+        for (;;) {
+            const job = getBackgroundJob(id)
+            if (!job) return null
+            if (job.status !== 'running') return job
+            if (job.runner === 'container') {
+                const settled = settleContainerJobFromMarker(job)
+                if (settled) {
+                    markBackgroundJobNotified(id)
+                    return settled
+                }
+            }
+            if (Date.now() >= deadline) return getBackgroundJob(id)
+            await new Promise(resolve => setTimeout(resolve, 400))
+        }
+    } finally {
+        awaitedJobs.delete(id)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Boot reconciliation + liveness poll
 // ---------------------------------------------------------------------------
 
@@ -494,10 +727,53 @@ function readExitMarker(job: BackgroundJobRow): number | null {
     }
 }
 
+/** A settled container job's exit marker → finalized row (124 = the
+ *  in-container `timeout` fired). Returns null when the marker is absent. */
+function settleContainerJobFromMarker(job: BackgroundJobRow): BackgroundJobRow | null {
+    const exitCode = readExitMarker(job)
+    if (exitCode === null) return null
+    return finalizeBackgroundJob(
+        job.id,
+        exitCode === CONTAINER_JOB_TIMEOUT_EXIT_CODE ? 'killed' : 'exited',
+        exitCode,
+    )
+}
+
+/** Container jobs settle through the shared-volume exit marker; liveness for
+ *  marker-less rows comes from the bridge (container inspect). */
+async function reconcileContainerJob(profileId: string, job: BackgroundJobRow): Promise<void> {
+    const settled = settleContainerJobFromMarker(job)
+    if (settled) {
+        await notifyBackgroundJobCompletion(profileId, settled)
+        return
+    }
+    // Give a fresh container a moment: it may still be starting, or be
+    // mid-exit with the marker write in flight.
+    if (Date.now() - job.startedAt < 10_000) return
+    const bridge = hostBridgeConfig()
+    if (!bridge) return
+    const status = await bridgeRequest(bridge, `/background-job/status?jobId=${encodeURIComponent(job.id)}`, {
+        timeoutMs: 10_000,
+    })
+    // Bridge unreachable or errored — don't false-finalize a healthy job.
+    if (!status || status.ok !== true) return
+    if (status.exists === true && status.running === true) return
+    const finalized = finalizeBackgroundJob(job.id, 'lost', null)
+    if (finalized) await notifyBackgroundJobCompletion(profileId, finalized)
+}
+
 /** Reconcile 'running' rows whose in-process watcher is gone (server restart). */
 async function reconcileBackgroundJobsForActiveProfile(profileId: string): Promise<void> {
     const running = listBackgroundJobs({ runningOnly: true, limit: 100 })
     for (const job of running) {
+        if (job.runner === 'container') {
+            try {
+                await reconcileContainerJob(profileId, job)
+            } catch (err) {
+                console.error(`[background-jobs] container reconcile for ${job.id} failed`, err)
+            }
+            continue
+        }
         if (watchedJobs.has(job.id)) continue
         if (job.pid && pidAlive(job.pid)) continue
         const exitCode = readExitMarker(job)
