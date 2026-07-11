@@ -1,7 +1,6 @@
 "use client"
 
-import * as React from "react"
-
+import { useShikiHighlight } from "@/hooks/use-shiki-highlight"
 import { cn } from "@/lib/utils"
 
 /**
@@ -12,8 +11,6 @@ import { cn } from "@/lib/utils"
  * Shiki ships a big set of languages — we accept whatever the model labels;
  * if it's not recognised Shiki falls back to plaintext on its own.
  */
-const highlightCache = new Map<string, string>()
-
 export function CodeRenderer({
     source,
     language,
@@ -24,29 +21,7 @@ export function CodeRenderer({
     className?: string
 }) {
     const lang = (language ?? 'text').toLowerCase()
-    const cacheKey = `${lang}:${source}`
-    const [html, setHtml] = React.useState<string | null>(() => highlightCache.get(cacheKey) ?? null)
-
-    React.useEffect(() => {
-        if (highlightCache.has(cacheKey)) {
-            setHtml(highlightCache.get(cacheKey)!)
-            return
-        }
-        let cancelled = false
-        // Dynamic import keeps Shiki out of the chat route's initial bundle;
-        // the plain <pre> fallback below already shows the code instantly.
-        import("shiki")
-            .then(({ codeToHtml }) =>
-                codeToHtml(source, { lang, theme: 'github-light' })
-            )
-            .then(result => {
-                if (cancelled) return
-                highlightCache.set(cacheKey, result)
-                setHtml(result)
-            })
-            .catch(() => { /* leave fallback */ })
-        return () => { cancelled = true }
-    }, [cacheKey, source, lang])
+    const html = useShikiHighlight(source, lang)
 
     if (html) {
         return (

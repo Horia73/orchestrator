@@ -20,19 +20,18 @@ FROM deps AS builder
 
 COPY . .
 RUN npm run build
+# Runtime dependencies are copied from the stable deps stage. Keeping them out
+# of the changing application tree lets consecutive release images (including
+# the one-slot rollback image) share the ~1.4 GB node_modules layer.
+RUN rm -rf /app/node_modules /app/.next/cache
 
 FROM node:22-bookworm-slim AS runner
 
 WORKDIR /app
 
-ARG ORCHESTRATOR_BUILD_COMMIT=unknown
-ARG ORCHESTRATOR_BUILD_REF=unknown
-
 ENV NODE_ENV=production \
     ORCHESTRATOR_HOST=0.0.0.0 \
     ORCHESTRATOR_PORT=3000 \
-    ORCHESTRATOR_BUILD_COMMIT=${ORCHESTRATOR_BUILD_COMMIT} \
-    ORCHESTRATOR_BUILD_REF=${ORCHESTRATOR_BUILD_REF} \
     PORT=3000 \
     HOME=/home/node \
     NPM_CONFIG_PREFIX=/home/node/.npm-global \
@@ -124,7 +123,14 @@ RUN pip3 install --break-system-packages --no-cache-dir \
     python-pptx \
     pypdf
 
-COPY --from=builder --chown=node:node /app /app
+# Stable Node runtime + Patchright browser. These layers depend only on the
+# lockfile, not on the per-release source tree or build commit.
+COPY --from=deps --chown=node:node /app/package.json /app/package-lock.json /app/
+COPY --from=deps --chown=node:node /app/node_modules /app/node_modules
+
+RUN npx patchright install chromium \
+  && mkdir -p /app/.orchestrator /ms-playwright /home/node/.npm-global /home/node/.npm \
+  && chown -R node:node /app/.orchestrator /ms-playwright /home/node
 
 # CAD runtime for the bundled skills/cad skill, plus python playwright for
 # snapshot rendering (reuses system chromium via CAD_SNAPSHOT_CHROMIUM — no
@@ -137,10 +143,26 @@ COPY --from=builder --chown=node:node /app /app
 # .HashCode was removed in OCCT 7.9). The dev branch requires novtk>=7.9 and
 # handles the aarch64 lib3mf split. Drop the pin for plain
 # "/app/skills/cad/scripts/packages/cadpy" once build123d >=0.11 is on PyPI.
+# Copy only that local package before installing it so ordinary app changes do
+# not invalidate the large CAD dependency layer.
+COPY --from=builder /app/skills/cad/scripts/packages/cadpy /tmp/cadpy
 RUN pip3 install --break-system-packages --no-cache-dir \
     "build123d @ git+https://github.com/gumyr/build123d@dd35508482ed9e22352290a7366b4b36b0f37438" \
-    /app/skills/cad/scripts/packages/cadpy \
-    playwright
+    /tmp/cadpy \
+    playwright \
+  && rm -rf /tmp/cadpy
+
+# Changing application/build output comes after every heavyweight runtime
+# dependency. /app/node_modules was removed in the builder stage, so this copy
+# merges with (rather than duplicates) the stable dependency layer above.
+COPY --from=builder --chown=node:node /app /app
+
+# Build provenance changes on every release. Keep it at the very end so it no
+# longer busts the apt, Python, Node, CAD, and Patchright caches.
+ARG ORCHESTRATOR_BUILD_COMMIT=unknown
+ARG ORCHESTRATOR_BUILD_REF=unknown
+ENV ORCHESTRATOR_BUILD_COMMIT=${ORCHESTRATOR_BUILD_COMMIT} \
+    ORCHESTRATOR_BUILD_REF=${ORCHESTRATOR_BUILD_REF}
 
 # Bake build metadata into a file the running app can read directly. We
 # can't rely on `git rev-parse HEAD` inside the container (.git is
@@ -156,13 +178,12 @@ RUN printf '{"commit":"%s","ref":"%s","builtAt":"%s"}\n' \
   && chown node:node /app/.build-info.json \
   && chmod 0644 /app/.build-info.json
 
-RUN npx patchright install chromium \
-  && mkdir -p /app/.orchestrator /ms-playwright /home/node/.npm-global /home/node/.npm \
-  && chown -R node:node /app/.orchestrator /ms-playwright /home/node
-
 USER node
 
 EXPOSE 3000 6080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl --fail --silent --show-error http://127.0.0.1:3000/api/ping >/dev/null || exit 1
 
 ENTRYPOINT ["tini", "--"]
 CMD ["npm", "start"]

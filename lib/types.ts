@@ -30,6 +30,37 @@ export interface TokenUsageBreakdown {
   reasoningOutputTokens?: number | null
 }
 
+export type ContextUsageCategoryId =
+  | "messages"
+  | "skills"
+  | "tools"
+  | "system"
+  | "memory"
+  | "agents"
+  | "attachments"
+  | "provider"
+
+export interface ContextUsageBreakdownEntry {
+  /** Stable UI/category key. Deferred entries use the category they would join once loaded. */
+  id: ContextUsageCategoryId
+  label: string
+  tokens: number
+  /** Number of messages, tools, files, agents, or attachments represented when meaningful. */
+  count?: number
+}
+
+export interface ContextUsageBreakdown {
+  /** Categories that currently occupy the context window. */
+  categories: ContextUsageBreakdownEntry[]
+  /** Available prompt material that is discoverable but not currently loaded. */
+  deferred?: ContextUsageBreakdownEntry[]
+  /** Character-based total before reconciliation against provider-reported occupancy. */
+  estimatedTokens: number
+  /** Provider-reported occupancy used to reconcile the visible category sum. */
+  reconciledTokens?: number | null
+  accuracy: "estimated" | "reconciled"
+}
+
 export interface ContextUsageSnapshot {
   provider: string
   model: string
@@ -52,6 +83,7 @@ export interface ContextUsageSnapshot {
   total?: TokenUsageBreakdown | null
   lastCompactedAt?: number | null
   compactedCount?: number
+  contextBreakdown?: ContextUsageBreakdown | null
 }
 
 export interface ThoughtReasoningEntry {

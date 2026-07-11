@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from 'crypto'
 
+import { SlidingWindowRateLimiter } from '@/lib/api/sliding-window-rate-limit'
 import type { WebhookEndpoint } from './schema'
 
 interface AuthResult {
@@ -9,32 +10,21 @@ interface AuthResult {
     retryAfterSeconds?: number
 }
 
-interface RateBucket {
-    resetAt: number
-    count: number
-}
-
-const buckets = new Map<string, RateBucket>()
+const rateLimiter = new SlidingWindowRateLimiter(60_000, 5_000)
 
 export function checkWebhookRateLimit(endpoint: WebhookEndpoint, request: Request, now = Date.now()): AuthResult {
     const limit = endpoint.rateLimitPerMinute
     if (!Number.isFinite(limit) || limit <= 0) return { ok: true, status: 200 }
 
     const key = `${endpoint.id}:${requestIp(request)}`
-    const current = buckets.get(key)
-    if (!current || current.resetAt <= now) {
-        buckets.set(key, { resetAt: now + 60_000, count: 1 })
-        return { ok: true, status: 200 }
-    }
-
-    current.count += 1
-    if (current.count <= limit) return { ok: true, status: 200 }
+    const result = rateLimiter.check(key, limit, now)
+    if (result.allowed) return { ok: true, status: 200 }
 
     return {
         ok: false,
         status: 429,
         error: 'Webhook rate limit exceeded.',
-        retryAfterSeconds: Math.max(1, Math.ceil((current.resetAt - now) / 1000)),
+        retryAfterSeconds: result.retryAfterSeconds,
     }
 }
 

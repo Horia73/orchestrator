@@ -9,7 +9,7 @@ import { Copy, Check, FileText, FileSpreadsheet, Presentation, Image as ImageIco
 import { cn } from "@/lib/utils"
 import { copyTextToClipboard } from "@/lib/clipboard"
 import { appApiPath, appPath } from "@/lib/app-path"
-import { isDesktopViewport } from "@/lib/desktop-viewport"
+import { useShikiHighlight } from "@/hooks/use-shiki-highlight"
 import { UPLOAD_MIME_MAP } from "@/lib/upload-mime"
 import {
   is3DModelFile,
@@ -131,7 +131,6 @@ export function useLazyRehypeKatex(content: string): RehypeKatexPlugin | null {
 // Highlighted code block (async shiki → cached HTML)
 // ---------------------------------------------------------------------------
 
-const highlightCache = new Map<string, string>()
 const remarkMathOptions: RemarkMathOptions = { singleDollarTextMath: false }
 
 function HighlightedCode({
@@ -141,78 +140,7 @@ function HighlightedCode({
   code: string
   language: string
 }) {
-  const [html, setHtml] = React.useState<string | null>(() => {
-    const key = `${language}:${code}`
-    return highlightCache.get(key) ?? null
-  })
-
-  React.useEffect(() => {
-    const key = `${language}:${code}`
-    if (highlightCache.has(key)) {
-      setHtml(highlightCache.get(key)!)
-      return
-    }
-
-    let cancelled = false
-    let idleHandle: number | null = null
-
-    // Defer Shiki (dynamic import + tokenization) to browser idle time. The
-    // plain <pre> fallback already shows the code instantly, so highlighting is
-    // a pure enhancement — running it on idle keeps it off the conversation-open
-    // critical path (first paint + scroll restore), where a burst of code blocks
-    // would otherwise jank the main thread on mobile. The `timeout` guarantees
-    // it still runs promptly when the tab never goes fully idle.
-    const highlight = () => {
-      import("shiki")
-        .then(({ codeToHtml }) =>
-          codeToHtml(code, {
-            lang: language,
-            theme: "github-light",
-          })
-        )
-        .then((result) => {
-          if (cancelled) return
-          highlightCache.set(key, result)
-          setHtml(result)
-        })
-        .catch(() => {
-          if (!cancelled) setHtml("")
-        })
-    }
-
-    const ric = (
-      window as typeof window & {
-        requestIdleCallback?: (
-          cb: () => void,
-          opts?: { timeout: number }
-        ) => number
-      }
-    ).requestIdleCallback
-    if (isDesktopViewport()) {
-      // Desktop: highlight right away (still async via the dynamic import) so a
-      // freshly opened conversation isn't shown with plain code that visibly
-      // colors in up to ~1.2s later — which reads as the text "still loading".
-      // The mobile idle-deferral below stays: it's there to keep a burst of code
-      // blocks off the conversation-open critical path on phones.
-      highlight()
-    } else if (typeof ric === "function") {
-      idleHandle = ric(highlight, { timeout: 1200 })
-    } else {
-      idleHandle = window.setTimeout(highlight, 1)
-    }
-
-    return () => {
-      cancelled = true
-      if (idleHandle == null) return
-      const cic = (
-        window as typeof window & {
-          cancelIdleCallback?: (handle: number) => void
-        }
-      ).cancelIdleCallback
-      if (typeof cic === "function") cic(idleHandle)
-      else window.clearTimeout(idleHandle)
-    }
-  }, [code, language])
+  const html = useShikiHighlight(code, language, { deferOnMobile: true })
 
   if (html === null || html === "") {
     return (

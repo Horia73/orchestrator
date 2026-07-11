@@ -374,6 +374,26 @@ export function claimForRun(id: string, nowMs: number): ClaimedTask | null {
   return claimed
 }
 
+/** Restore a claimed task when lifecycle admission closed before execution.
+ * This is not a failure and must not consume a one-shot or advance a recurring
+ * schedule. The original due time remains intact for the post-restart sweep. */
+export function deferClaimedRun(task: ScheduledTask, nowMs: number): void {
+  db.prepare(
+    `
+        UPDATE scheduled_tasks
+        SET status = 'scheduled', schedule = @schedule,
+            nextRunAt = @nextRunAt, updatedAt = @now
+        WHERE id = @id AND status = 'running'
+    `
+  ).run({
+    id: task.id,
+    schedule: JSON.stringify(task.schedule),
+    nextRunAt: task.nextRunAt,
+    now: nowMs,
+  })
+  emitScheduledTaskChanged(task.id, "deferred")
+}
+
 /** One-shot whose time passed while the server was down: do NOT run it. */
 export function markMissed(id: string, nowMs: number): ScheduledTask | null {
   db.prepare(

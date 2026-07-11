@@ -3,8 +3,13 @@ import path from 'path'
 import { execFileSync, spawn } from 'child_process'
 import { randomUUID } from 'crypto'
 
-import { listActiveChatStreams } from '@/lib/chat-streams'
+import { listAllActiveChatStreams } from '@/lib/chat-streams'
 import { listAgentRuns, type ActiveAgentRun } from '@/lib/agent-runs'
+import {
+    blockAiRunAdmission,
+    getAiRunAdmissionBlock,
+    unblockAiRunAdmission,
+} from '@/lib/ai/run-admission'
 import { getEnvValue } from '@/lib/config'
 import { shutdownBrowserSessionManager } from '@/lib/ai/providers/browser-session-manager'
 import { createInboxConversation } from '@/lib/scheduling/store'
@@ -306,8 +311,17 @@ function reconcilePersistedJob(current: CurrentInstallInfo): UpdateJob | null {
     const job = memory.job ?? persisted
     if (!job) return null
 
+    if (job.phase === 'completed' || job.phase === 'failed') {
+        unblockAiRunAdmission(job.id)
+    }
+
     const restartResult = reconcileRestartingJobWithCurrentInstall(job, current)
-    if (restartResult) return restartResult
+    if (restartResult) {
+        if (restartResult.phase === 'completed' || restartResult.phase === 'failed') {
+            unblockAiRunAdmission(restartResult.id)
+        }
+        return restartResult
+    }
 
     if (
         (job.phase === 'updating' || job.phase === 'restarting') &&
@@ -322,6 +336,7 @@ function reconcilePersistedJob(current: CurrentInstallInfo): UpdateJob | null {
             waitReason: 'Update installed and service restarted.',
         }
         setJob(completed)
+        unblockAiRunAdmission(completed.id)
         return completed
     }
 
@@ -923,6 +938,7 @@ async function startDockerHostUpdateRunner(job: UpdateJob) {
             error: 'Docker host updater is not configured.',
             waitReason: 'Update failed.',
         })
+        unblockAiRunAdmission(job.id)
         return
     }
 
@@ -959,17 +975,40 @@ async function startDockerHostUpdateRunner(job: UpdateJob) {
             error: err instanceof Error ? err.message : 'Docker host updater request failed.',
             waitReason: 'Update failed.',
         })
+        unblockAiRunAdmission(job.id)
     }
 }
 
 async function startUpdateRunner() {
+    const queued = memory.job
+    if (!queued || queued.phase !== 'queued') return
+
+    // Synchronous barrier + recheck: a request that registered before the
+    // barrier is now visible and must drain; one that finishes async setup
+    // afterwards is rejected by the registries. No AI run can slip between the
+    // final idle check and the updater/rebuild.
+    blockAiRunAdmission(queued.id, 'A managed app update is starting.')
+    const activeRuns = listAllActiveRuns()
+    if (activeRuns.length > 0) {
+        patchJob({
+            idleSince: undefined,
+            activeRunCount: activeRuns.length,
+            waitReason: `Draining ${activeRuns.length} active AI run${activeRuns.length === 1 ? '' : 's'} before update.`,
+        })
+        scheduleQueuedJob(queued.id)
+        return
+    }
+
     const next = patchJob({
         phase: 'updating',
         startedAt: Date.now(),
         waitReason: 'Installing update.',
         activeRunCount: 0,
     })
-    if (!next) return
+    if (!next) {
+        unblockAiRunAdmission(queued.id)
+        return
+    }
 
     try {
         patchJob({ waitReason: 'Closing browser agent before update.' })
@@ -1016,6 +1055,7 @@ async function startUpdateRunner() {
             error: err instanceof Error ? err.message : 'Failed to start update runner.',
             waitReason: 'Update runner failed to start.',
         })
+        unblockAiRunAdmission(next.id)
     }
 }
 
@@ -1032,7 +1072,11 @@ function listAllActiveRuns(): ActiveRunInfo[] {
     // model wakes. The update manager treats both as "AI is busy" so a managed
     // update won't pre-empt a running scheduled run or inbox-reply continuation.
     return [
-        ...listActiveChatStreams(),
+        ...listAllActiveChatStreams().map(({ conversationId, messageId, startedAt }) => ({
+            conversationId,
+            messageId,
+            startedAt,
+        })),
         ...listAgentRuns().map(agentRunToActiveRunInfo),
     ]
 }
@@ -1181,6 +1225,7 @@ export function recordHostUpdateResult(result: HostUpdateResult): UpdateJob {
             waitReason: result.waitReason || 'Update failed.',
         }
         setJob(failed)
+        unblockAiRunAdmission(failed.id)
         return failed
     }
 
@@ -1211,6 +1256,7 @@ export function recordHostUpdateResult(result: HostUpdateResult): UpdateJob {
 export function isUpdateMaintenanceActive(): boolean {
     const job = memory.job ?? readPersistedJob()
     if (!job) return false
+    if (getAiRunAdmissionBlock()?.owner === job.id) return true
     if (job.phase !== 'updating' && job.phase !== 'restarting') return false
     if (job.phase === 'restarting' && job.targetCommit) {
         const reconciled = reconcileRestartingJobWithCurrentInstall(job, getCurrentInstall())

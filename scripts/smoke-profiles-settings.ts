@@ -36,6 +36,10 @@ const {
 } = await import("@/lib/config")
 const { runtimePathsForProfile } = await import("@/lib/runtime-paths")
 const {
+  closeDatabaseForProfile,
+  getDatabaseForProfile,
+} = await import("@/lib/db")
+const {
   getWorkspaceFile,
   listWorkspaceFiles,
 } = await import("@/lib/settings/workspace-files")
@@ -83,6 +87,16 @@ const selfServiceMember = createProfile({
   name: "Self Service",
   permissions: selfServicePermissions,
 })
+
+getDatabaseForProfile(normalMember.id)
+check(
+  "profile database connection closes before state deletion",
+  closeDatabaseForProfile(normalMember.id) === true
+)
+check(
+  "closed profile database connection is forgotten",
+  closeDatabaseForProfile(normalMember.id) === false
+)
 
 await runWithProfileContext(
   { profileId: selfServiceMember.id, role: "member" },

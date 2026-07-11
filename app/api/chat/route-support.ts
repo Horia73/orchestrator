@@ -176,6 +176,7 @@ export function contextUsageKey(snapshot: ContextUsageSnapshot): string {
     threadTokens: snapshot.threadTokens ?? null,
     lastCompactedAt: snapshot.lastCompactedAt ?? null,
     compactedCount: snapshot.compactedCount ?? null,
+    contextBreakdown: snapshot.contextBreakdown ?? null,
   })
 }
 

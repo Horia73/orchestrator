@@ -50,6 +50,9 @@ export interface ScheduledRunResult {
   /** Full run output — always kept in Past runs, even when silent. */
   summary: string
   error?: string
+  /** The updater closed AI admission before this run could start. The
+   * scheduler must restore the claim rather than recording a failed run. */
+  deferred?: boolean
 }
 
 function triggerNote(task: ScheduledTask, firedAt: number): string {
@@ -168,12 +171,22 @@ export async function runScheduledTask(
   }
 
   const runId = `sched_run_${randomUUID()}`
-  registerAgentRun({
+  const registered = registerAgentRun({
     id: runId,
     kind: "scheduled",
     conversationId,
     startedAt: firedAt,
   })
+  if (!registered) {
+    return {
+      ok: false,
+      conversationId: null,
+      surfaced: false,
+      summary: "Deferred while a managed app update is starting.",
+      error: "Update in progress.",
+      deferred: true,
+    }
+  }
 
   // Scheduled runs have no incoming HTTP request, so derive the app origin
   // from configuration. Without this, prompt-side integration status checks

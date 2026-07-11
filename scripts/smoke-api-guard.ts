@@ -44,6 +44,14 @@ async function main(): Promise<void> {
         isProfileExemptPath('/api/cli/mcp-exec') === true,
     )
     check(
+        'reachability ping skips API guard',
+        shouldGuardApiRequest('/api/ping', 'GET') === false,
+    )
+    check(
+        'reachability ping skips profile gate',
+        isProfileExemptPath('/api/ping') === true,
+    )
+    check(
         'published apps reach their route before profile gating',
         isProfileExemptPath('/published-apps/smoke-static/assets/app.js') === true,
     )

@@ -5,6 +5,7 @@ import { PROFILE_SESSION_COOKIE } from "@/lib/profiles/constants"
 
 const API_GUARD_EXEMPT_PATHS = new Set([
   "/api/cli/mcp-exec",
+  "/api/ping",
   "/api/integrations/gmail/oauth/callback",
   "/api/integrations/google/oauth/callback",
   "/api/integrations/mcp/oauth/callback",
@@ -22,6 +23,7 @@ const PROFILE_EXEMPT_PATH_PREFIXES = [
 
 const PROFILE_EXEMPT_EXACT_PATHS = new Set([
   "/api/cli/mcp-exec",
+  "/api/ping",
   "/favicon.ico",
   "/icon.svg",
   "/icon-192.png",

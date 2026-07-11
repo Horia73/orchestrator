@@ -5,6 +5,7 @@ import {
     AlertCircle,
     AlertTriangle,
     CheckCircle2,
+    ChevronDown,
     ChevronRight,
     Loader2,
 } from "lucide-react"
@@ -19,7 +20,19 @@ import {
     FIVE_HOUR_SECONDS,
     WEEKLY_SECONDS,
 } from "@/lib/cli/quota-pace"
-import type { Attachment, ContextUsageSnapshot, Message } from "@/lib/types"
+import type {
+    Attachment,
+    ContextUsageBreakdown,
+    ContextUsageBreakdownEntry,
+    ContextUsageCategoryId,
+    ContextUsageSnapshot,
+    Message,
+} from "@/lib/types"
+import {
+    estimateAttachmentTokens,
+    estimateCharCountTokens,
+    estimateTextTokens,
+} from "@/lib/ai/context-token-estimate"
 
 type ChatStatusSource = "globalDefault" | "agentDefault" | "agentOverride"
 
@@ -50,6 +63,7 @@ interface ChatStatusResponse {
     canViewCliQuotas?: boolean
     /** Estimated orchestrator system prompt size, in tokens. Null when unavailable. */
     systemPromptTokens?: number | null
+    contextBreakdown?: ContextUsageBreakdown | null
 }
 
 interface CliQuotaWindow {
@@ -91,6 +105,7 @@ interface ChatStatusPopoverProps {
     draftValue: string
     attachments: DraftAttachment[]
     contextUsage?: ContextUsageSnapshot
+    conversationId?: string | null
     side?: React.ComponentProps<typeof PopoverContent>["side"]
 }
 
@@ -107,10 +122,10 @@ function isCliProvider(providerId: string | undefined): providerId is CliProvide
     return providerId === "claude-code" || providerId === "codex"
 }
 
-export function ChatStatusPopover({ messages, draftValue, attachments, contextUsage, side = "top" }: ChatStatusPopoverProps) {
+export function ChatStatusPopover({ messages, draftValue, attachments, contextUsage, conversationId, side = "top" }: ChatStatusPopoverProps) {
     const [open, setOpen] = React.useState(false)
     const isMobile = useIsMobile()
-    const status = useChatStatus()
+    const status = useChatStatus(conversationId)
     const activeCliId = isCliProvider(status.data?.chat.provider.id)
         ? status.data.chat.provider.id
         : null
@@ -121,8 +136,14 @@ export function ChatStatusPopover({ messages, draftValue, attachments, contextUs
     )
     const systemPromptTokens = status.data?.systemPromptTokens ?? null
     const contextEstimate = React.useMemo(
-        () => estimateContextTokens(messages, draftValue, attachments, systemPromptTokens),
-        [attachments, draftValue, messages, systemPromptTokens]
+        () => estimateContextTokens(
+            messages,
+            draftValue,
+            attachments,
+            systemPromptTokens,
+            status.data?.contextBreakdown ?? null
+        ),
+        [attachments, draftValue, messages, status.data?.contextBreakdown, systemPromptTokens]
     )
 
     const contextDisplay = buildContextDisplay({
@@ -197,16 +218,7 @@ export function ChatStatusPopover({ messages, draftValue, attachments, contextUs
                         <InlineNotice tone="danger">{unavailableReason}</InlineNotice>
                     ) : (
                         <>
-                            <MetricRow
-                                label="Context window"
-                                value={contextDisplay.contextWindow
-                                    ? `${formatTokens(contextDisplay.tokens)} / ${formatTokens(contextDisplay.contextWindow)} (${formatPercent(contextPct ?? 0)})`
-                                    : `${formatTokens(contextDisplay.tokens)} / unknown`}
-                                progress={contextPct ?? 0}
-                                tone="context"
-                                trailing={<ChevronRight className="size-4 text-foreground/45" />}
-                            />
-                            <ContextUsageDetails display={contextDisplay} />
+                            <ContextWindowSection display={contextDisplay} />
                             {activeCliId && canViewCliQuotas && <PlanUsageSection cliId={activeCliId} quotas={quotas} />}
                         </>
                     )}
@@ -443,7 +455,7 @@ function InlineNotice({ tone, children }: { tone: "danger"; children: React.Reac
     )
 }
 
-function useChatStatus() {
+function useChatStatus(conversationId?: string | null) {
     const [data, setData] = React.useState<ChatStatusResponse | null>(null)
     const [loading, setLoading] = React.useState(true)
     const [error, setError] = React.useState<string | null>(null)
@@ -452,7 +464,10 @@ function useChatStatus() {
         const controller = new AbortController()
         setLoading(true)
 
-        fetch("/api/chat/status", { cache: "no-store", signal: controller.signal })
+        const query = conversationId
+            ? `?conversationId=${encodeURIComponent(conversationId)}`
+            : ""
+        fetch(`/api/chat/status${query}`, { cache: "no-store", signal: controller.signal })
             .then(async res => {
                 if (!res.ok) throw new Error(`Failed to load status (${res.status})`)
                 return (await res.json()) as ChatStatusResponse
@@ -470,7 +485,7 @@ function useChatStatus() {
             })
 
         return () => controller.abort()
-    }, [])
+    }, [conversationId])
 
     return { data, loading, error }
 }
@@ -530,6 +545,7 @@ interface ContextDisplay {
     source: string
     usage: ContextUsageSnapshot | null
     draftTokens: number
+    breakdown: ContextUsageBreakdown | null
 }
 
 function buildContextDisplay(args: {
@@ -551,9 +567,10 @@ function buildContextDisplay(args: {
         ? finiteNumber(usage?.contextTokens) ?? finiteNumber(usage?.inputTokens)
         : null
     const cachedTokens = usageMatches ? finiteNumber(usage?.cachedTokens) : null
-    const draftTokens = realTokens !== null
-        ? estimateDraftTokens(args.draftValue, args.attachments)
-        : 0
+    const draftBreakdown = realTokens !== null
+        ? estimateDraftBreakdown(args.draftValue, args.attachments)
+        : { messageTokens: 0, attachmentTokens: 0, totalTokens: 0 }
+    const draftTokens = draftBreakdown.totalTokens
     const tokens = realTokens !== null
         ? realTokens + draftTokens
         : args.contextEstimate.tokens
@@ -565,6 +582,16 @@ function buildContextDisplay(args: {
     const source = realTokens !== null
         ? `${usage?.accuracy === "live" ? "Live provider input" : "Actual provider input"}${cachedTokens && cachedTokens > 0 ? " (cache included)" : ""}${draftTokens > 0 ? " + draft estimate" : ""}`
         : "Local estimate"
+    const baseBreakdown = usageMatches && usage?.contextBreakdown
+        ? cloneBreakdown(usage.contextBreakdown)
+        : cloneBreakdown(args.contextEstimate.breakdown)
+    if (baseBreakdown && draftTokens > 0) {
+        addBreakdownTokens(baseBreakdown.categories, "messages", draftBreakdown.messageTokens)
+        addBreakdownTokens(baseBreakdown.categories, "attachments", draftBreakdown.attachmentTokens)
+    }
+    const breakdown = baseBreakdown
+        ? reconcileDisplayBreakdown(baseBreakdown, tokens)
+        : null
 
     return {
         tokens,
@@ -573,7 +600,154 @@ function buildContextDisplay(args: {
         source,
         usage: realTokens !== null ? usage ?? null : null,
         draftTokens,
+        breakdown,
     }
+}
+
+const CONTEXT_COLORS: Record<ContextUsageCategoryId, string> = {
+    messages: "bg-blue-600",
+    skills: "bg-blue-500",
+    tools: "bg-blue-400",
+    system: "bg-sky-400",
+    memory: "bg-sky-300",
+    agents: "bg-indigo-300",
+    attachments: "bg-cyan-300",
+    provider: "bg-violet-400",
+}
+
+function ContextWindowSection({ display }: { display: ContextDisplay }) {
+    const categories = display.breakdown?.categories ?? []
+    const deferred = display.breakdown?.deferred ?? []
+    const freeTokens = display.contextWindow
+        ? Math.max(0, display.contextWindow - display.tokens)
+        : null
+    const value = display.contextWindow
+        ? `${formatTokens(display.tokens)} / ${formatTokens(display.contextWindow)} (${formatPercent(display.pct ?? 0)})`
+        : `${formatTokens(display.tokens)} / unknown`
+
+    return (
+        <details className="group/context">
+            <summary className="cursor-pointer list-none rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/60 [&::-webkit-details-marker]:hidden">
+                <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0 truncate text-[13px] font-medium text-foreground/70">Context window</div>
+                    <div className="flex shrink-0 items-center gap-1.5 text-[13px] tabular-nums text-foreground/55">
+                        <span>{value}</span>
+                        <ChevronDown className="size-4 -rotate-90 text-foreground/45 transition-transform group-open/context:rotate-0" />
+                    </div>
+                </div>
+                <ContextSegmentBar
+                    categories={categories}
+                    tokens={display.tokens}
+                    contextWindow={display.contextWindow}
+                />
+            </summary>
+
+            <div className="mt-3 border-t border-border/60 pt-2.5">
+                <div className="space-y-1.5">
+                    {categories.map((item) => (
+                        <ContextBreakdownRow
+                            key={item.id}
+                            item={item}
+                            contextWindow={display.contextWindow}
+                        />
+                    ))}
+                    {freeTokens !== null && (
+                        <ContextBreakdownRow
+                            item={{ id: "system", label: "Free space", tokens: freeTokens }}
+                            contextWindow={display.contextWindow}
+                            colorClass="bg-foreground/10"
+                        />
+                    )}
+                </div>
+
+                {deferred.length > 0 && (
+                    <div className="mt-2.5 space-y-1.5 border-t border-border/50 pt-2.5">
+                        {deferred.map((item) => (
+                            <ContextBreakdownRow
+                                key={`deferred-${item.id}`}
+                                item={{ ...item, label: `${item.label} (deferred)` }}
+                                contextWindow={null}
+                                colorClass="bg-foreground/15"
+                                deferred
+                            />
+                        ))}
+                    </div>
+                )}
+
+                <ContextUsageDetails display={display} />
+            </div>
+        </details>
+    )
+}
+
+function ContextSegmentBar({
+    categories,
+    tokens,
+    contextWindow,
+}: {
+    categories: ContextUsageBreakdownEntry[]
+    tokens: number
+    contextWindow: number | null
+}) {
+    const denominator = contextWindow && contextWindow > 0
+        ? contextWindow
+        : Math.max(tokens, 1)
+    const used = categories.reduce((total, item) => total + item.tokens, 0)
+    const free = contextWindow ? Math.max(0, contextWindow - used) : 0
+
+    return (
+        <div
+            className="mt-2 flex h-1.5 overflow-hidden rounded-full bg-muted/80 ring-1 ring-inset ring-border/30"
+            aria-hidden="true"
+        >
+            {categories.map((item) => (
+                <div
+                    key={item.id}
+                    className={cn("h-full min-w-px transition-[width]", CONTEXT_COLORS[item.id])}
+                    style={{ width: `${Math.max(0, (item.tokens / denominator) * 100)}%` }}
+                    title={`${item.label}: ${formatTokens(item.tokens)}`}
+                />
+            ))}
+            {free > 0 && (
+                <div
+                    className="h-full bg-foreground/8"
+                    style={{ width: `${(free / denominator) * 100}%` }}
+                    title={`Free space: ${formatTokens(free)}`}
+                />
+            )}
+        </div>
+    )
+}
+
+function ContextBreakdownRow({
+    item,
+    contextWindow,
+    colorClass,
+    deferred = false,
+}: {
+    item: ContextUsageBreakdownEntry
+    contextWindow: number | null
+    colorClass?: string
+    deferred?: boolean
+}) {
+    const pct = contextWindow && contextWindow > 0
+        ? (item.tokens / contextWindow) * 100
+        : null
+    return (
+        <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-3 text-[12.5px] leading-5">
+            <div className="flex min-w-0 items-center gap-2">
+                <span className={cn("size-2.5 shrink-0 rounded-[3px]", colorClass ?? CONTEXT_COLORS[item.id])} />
+                <span className="truncate text-foreground/70">{item.label}</span>
+                {item.count != null && (
+                    <span className="shrink-0 text-[11px] tabular-nums text-foreground/35">{item.count}</span>
+                )}
+            </div>
+            <span className="min-w-14 text-right tabular-nums text-foreground/50">{formatTokens(item.tokens)}</span>
+            <span className="min-w-9 text-right tabular-nums text-foreground/70">
+                {deferred || pct === null ? "—" : formatPercent(pct)}
+            </span>
+        </div>
+    )
 }
 
 function ContextUsageDetails({ display }: { display: ContextDisplay }) {
@@ -591,7 +765,7 @@ function ContextUsageDetails({ display }: { display: ContextDisplay }) {
     const compacted = usage?.lastCompactedAt ? formatTimeAgo(usage.lastCompactedAt) : null
 
     return (
-        <div className="mt-2 space-y-1.5 text-[12px] leading-snug text-foreground/50">
+        <div className="mt-2.5 space-y-1.5 border-t border-border/50 pt-2.5 text-[12px] leading-snug text-foreground/50">
             <div className="flex justify-between gap-3">
                 <span>Source</span>
                 <span className="text-right text-foreground/60">{display.source}</span>
@@ -632,17 +806,16 @@ function estimateContextTokens(
     messages: Message[],
     draftValue: string,
     attachments: DraftAttachment[],
-    systemTokens: number | null
+    systemTokens: number | null,
+    baselineBreakdown: ContextUsageBreakdown | null
 ) {
     let chars = 0
     let attachmentTokens = 0
-    let attachmentCount = 0
 
     for (const message of messages) {
         chars += message.role.length + message.content.length + 8
         for (const attachment of message.attachments ?? []) {
             attachmentTokens += estimateAttachmentTokens(attachment)
-            attachmentCount += 1
         }
     }
 
@@ -653,49 +826,95 @@ function estimateContextTokens(
         attachmentTokens += uploaded
             ? estimateAttachmentTokens(uploaded)
             : estimateAttachmentTokens({
-                id: "",
-                filename: attachment.file?.name ?? "file",
                 mimeType: attachment.file?.type ?? "",
                 size: attachment.file?.size ?? 0,
                 type: attachment.type === "image" || attachment.type === "pdf" ? attachment.type : "other",
             })
-        attachmentCount += 1
     }
 
-    // The system prompt dominates base context; use the real measured size
-    // when the status endpoint provided it, else fall back to a flat guess.
-    const baseTokens = systemTokens && systemTokens > 0 ? systemTokens : BASE_CHAT_OVERHEAD_TOKENS
-    const textTokens = Math.ceil(chars / 4)
+    const baseTokens = systemTokens && systemTokens > 0
+        ? systemTokens
+        : BASE_CHAT_OVERHEAD_TOKENS
+    const textTokens = estimateCharCountTokens(chars)
+    const breakdown: ContextUsageBreakdown = cloneBreakdown(baselineBreakdown) ?? {
+        categories: [{ id: "system", label: "System prompt", tokens: baseTokens }],
+        deferred: [],
+        estimatedTokens: baseTokens,
+        accuracy: "estimated",
+    }
+    addBreakdownTokens(breakdown.categories, "messages", textTokens)
+    addBreakdownTokens(breakdown.categories, "attachments", attachmentTokens)
+    const tokens = sumBreakdownTokens(breakdown.categories)
+    breakdown.estimatedTokens = tokens
     return {
-        tokens: Math.max(baseTokens, baseTokens + textTokens + attachmentTokens),
-        attachmentCount,
+        tokens: Math.max(baseTokens, tokens),
+        breakdown,
     }
 }
 
-function estimateDraftTokens(draftValue: string, attachments: DraftAttachment[]): number {
-    let tokens = draftValue.trim() ? Math.ceil((draftValue.length + 8) / 4) : 0
+function estimateDraftBreakdown(draftValue: string, attachments: DraftAttachment[]) {
+    const messageTokens = draftValue.trim() ? estimateTextTokens(`${draftValue}\n`) : 0
+    let attachmentTokens = 0
     for (const attachment of attachments) {
         const uploaded = attachment.uploaded
-        tokens += uploaded
+        attachmentTokens += uploaded
             ? estimateAttachmentTokens(uploaded)
             : estimateAttachmentTokens({
-                id: "",
-                filename: attachment.file?.name ?? "file",
                 mimeType: attachment.file?.type ?? "",
                 size: attachment.file?.size ?? 0,
                 type: attachment.type === "image" || attachment.type === "pdf" ? attachment.type : "other",
             })
     }
-    return tokens
+    return {
+        messageTokens,
+        attachmentTokens,
+        totalTokens: messageTokens + attachmentTokens,
+    }
 }
 
-function estimateAttachmentTokens(attachment: Attachment): number {
-    if (attachment.type === "image") return 1200
-    if (attachment.type === "pdf" || attachment.type === "document") {
-        return Math.min(60_000, Math.max(800, Math.ceil(attachment.size / 12)))
+function cloneBreakdown(value: ContextUsageBreakdown | null): ContextUsageBreakdown | null {
+    if (!value) return null
+    return {
+        ...value,
+        categories: value.categories.map((item) => ({ ...item })),
+        deferred: value.deferred?.map((item) => ({ ...item })),
     }
-    if (attachment.type === "audio" || attachment.type === "video") return 0
-    return Math.min(12_000, Math.max(100, Math.ceil(attachment.size / 24)))
+}
+
+function addBreakdownTokens(
+    categories: ContextUsageBreakdownEntry[],
+    id: ContextUsageCategoryId,
+    tokens: number
+): void {
+    if (!tokens) return
+    const existing = categories.find((item) => item.id === id)
+    if (existing) {
+        existing.tokens += tokens
+        return
+    }
+    const label = id === "messages"
+        ? "Messages"
+        : id === "attachments"
+            ? "Attachments"
+            : id === "provider"
+                ? "Provider & tool state"
+                : id
+    categories.push({ id, label, tokens })
+}
+
+function reconcileDisplayBreakdown(
+    breakdown: ContextUsageBreakdown,
+    tokens: number
+): ContextUsageBreakdown {
+    const current = sumBreakdownTokens(breakdown.categories)
+    if (current < tokens) {
+        addBreakdownTokens(breakdown.categories, "provider", tokens - current)
+    }
+    return breakdown
+}
+
+function sumBreakdownTokens(categories: ContextUsageBreakdownEntry[]): number {
+    return categories.reduce((total, item) => total + item.tokens, 0)
 }
 
 function formatTokens(value: number): string {

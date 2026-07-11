@@ -11,6 +11,8 @@ import { getEffectiveRegistry } from '@/lib/models/registry'
 import { getProviderReadiness } from '@/lib/provider-readiness'
 import { resolveRequestOrigin } from '@/lib/app-origin'
 import { runWithRequestProfile } from "@/lib/profiles/server"
+import { buildContextUsageBreakdown } from '@/lib/ai/context-usage-breakdown'
+import type { ContextUsageBreakdown } from '@/lib/types'
 
 type ProviderCaps = NonNullable<ReturnType<typeof getProviderCapabilities>>
 
@@ -35,16 +37,22 @@ function resolveChatAgentSettings() {
  * in app/api/chat/route.ts — kept in sync by hand; this only needs to be
  * close, not byte-exact. Char/4 matches the client-side token estimate.
  */
-function estimateSystemPromptTokens(origin: string, providerCaps: ProviderCaps): number | null {
+function estimateSystemContext(
+    origin: string,
+    providerCaps: ProviderCaps,
+    conversationId: string | undefined,
+    modelContextWindow: number | null
+): { systemPromptTokens: number; contextBreakdown: ContextUsageBreakdown } | null {
     if (!orchestrator.buildPrompt) return null
     try {
         const seen = new Set<string>()
+        const declaredTools = getToolsForAgent(orchestrator.tools)
         const candidateTools = filterIntegrationToolExposure(
             [
-                ...getToolsForAgent(orchestrator.tools),
+                ...declaredTools,
                 ...getToolsForBuiltins(orchestrator.builtins),
             ].filter(tool => (seen.has(tool.id) ? false : (seen.add(tool.id), true))),
-            { conversationId: undefined, origin, agentId: orchestrator.id }
+            { conversationId, origin, agentId: orchestrator.id }
         )
         const surface = resolveProviderToolSurface(candidateTools, orchestrator.builtins, providerCaps)
         const config = getConfig()
@@ -59,13 +67,26 @@ function estimateSystemPromptTokens(origin: string, providerCaps: ProviderCaps):
             availableBuiltins: surface.builtins,
             customToolNamePrefix: providerCaps.customToolNamePrefix,
             availableAgents,
+            conversationId,
             declaredToolIds: orchestrator.tools,
-            declaredTools: getToolsForAgent(orchestrator.tools),
+            declaredTools,
             delegationDepth: 0,
             maxDelegationDepth: MAX_AGENT_DEPTH,
+            modelContextWindow,
             extra: { appOrigin: origin },
         })
-        return Math.ceil(prompt.length / 4)
+        return {
+            systemPromptTokens: Math.ceil(prompt.length / 4),
+            contextBreakdown: buildContextUsageBreakdown({
+                systemPrompt: prompt,
+                messages: [],
+                tools: surface.tools,
+                exposedTools: candidateTools,
+                declaredTools,
+                builtins: surface.builtins,
+                availableAgentCount: availableAgents.length,
+            }),
+        }
     } catch {
         return null
     }
@@ -106,8 +127,17 @@ export async function GET(request: Request) {
             }
         }))
 
-        const systemPromptTokens = providerCaps && availableModel
-            ? estimateSystemPromptTokens(origin, providerCaps)
+        const requestedConversationId = new URL(request.url).searchParams.get('conversationId')?.trim()
+        const conversationId = requestedConversationId
+            ? requestedConversationId.slice(0, 200)
+            : undefined
+        const systemContext = providerCaps && availableModel
+            ? estimateSystemContext(
+                origin,
+                providerCaps,
+                conversationId,
+                availableModel.contextWindow ?? null
+            )
             : null
 
         return NextResponse.json({
@@ -141,7 +171,8 @@ export async function GET(request: Request) {
             // indicator, not per-profile private billing — any authenticated
             // profile may view it (runWithRequestProfile already guarantees one).
             canViewCliQuotas: true,
-            systemPromptTokens,
+            systemPromptTokens: systemContext?.systemPromptTokens ?? null,
+            contextBreakdown: systemContext?.contextBreakdown ?? null,
         }, {
             headers: { 'Cache-Control': 'no-store' },
         })

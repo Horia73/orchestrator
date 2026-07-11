@@ -4,6 +4,7 @@ import * as React from "react"
 import Link from "next/link"
 import { ChefHat, Clock, Flame, Users } from "lucide-react"
 
+import { LruCache } from "@/lib/cache/lru-cache"
 import { cn } from "@/lib/utils"
 import { formatRelativeTime } from "./use-attachments"
 import { LibraryLoadableImage } from "./loadable-thumbnail"
@@ -103,7 +104,9 @@ function RecipeCard({ recipe }: { recipe: LibraryRecipeRow }) {
 // Resolved thumbnail URL per imageQuery, kept at module scope so remounted
 // cards (tab revisits, grid re-renders) reuse the lookup instead of re-hitting
 // /api/recipe-images and re-popping the image in.
-const recipeImageCache = new Map<string, string | null>()
+const recipeImageCache = new LruCache<string, string | null>({
+    maxEntries: 200,
+})
 
 function RecipeImage({ recipe }: { recipe: LibraryRecipeRow }) {
     const [resolvedSrc, setResolvedSrc] = React.useState<string | null>(() => {

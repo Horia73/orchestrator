@@ -1,4 +1,5 @@
 import { emitChatEvent } from '@/lib/events'
+import { getAiRunAdmissionBlock } from '@/lib/ai/run-admission'
 import { getActiveProfileId } from '@/lib/profiles/context'
 
 interface ActiveChatStream {
@@ -56,6 +57,7 @@ export function registerChatStream(
     controller: AbortController,
     options?: { announce?: boolean },
 ): boolean {
+    if (getAiRunAdmissionBlock()) return false
     const key = streamKey(conversationId)
     const current = streams.get(key)
     if (current && !current.controller.signal.aborted) {
@@ -148,6 +150,36 @@ export function listActiveChatStreams(): Array<{ conversationId: string; message
         }
         active.push({
             conversationId,
+            messageId: stream.messageId,
+            startedAt: stream.startedAt,
+        })
+    }
+    return active.sort((a, b) => a.startedAt - b.startedAt)
+}
+
+/** Process-wide view used by lifecycle machinery such as managed updates. */
+export function listAllActiveChatStreams(): Array<{
+    profileId: string
+    conversationId: string
+    messageId: string
+    startedAt: number
+}> {
+    const active: Array<{
+        profileId: string
+        conversationId: string
+        messageId: string
+        startedAt: number
+    }> = []
+    for (const [key, stream] of streams.entries()) {
+        if (stream.controller.signal.aborted) {
+            streams.delete(key)
+            continue
+        }
+        const separator = key.indexOf(':')
+        if (separator <= 0) continue
+        active.push({
+            profileId: key.slice(0, separator),
+            conversationId: key.slice(separator + 1),
             messageId: stream.messageId,
             startedAt: stream.startedAt,
         })

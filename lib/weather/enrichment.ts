@@ -6,6 +6,7 @@ import type {
     WeatherPollenSpecies,
     WeatherRadar,
 } from './schema'
+import { LruCache } from '@/lib/cache/lru-cache'
 import { fetchGooglePollen } from './google-pollen'
 import { uvLabel } from './weather-codes'
 
@@ -28,9 +29,9 @@ const OM_AIR_QUALITY = 'https://air-quality-api.open-meteo.com/v1/air-quality'
 const RAINVIEWER_MANIFEST = 'https://api.rainviewer.com/public/weather-maps.json'
 
 type CacheEntry<T> = { at: number; value: T }
-const historicalCache = new Map<string, CacheEntry<WeatherHistoricalComparison | null>>()
-const pollenCache = new Map<string, CacheEntry<WeatherPollen | null>>()
-const radarCache = new Map<string, CacheEntry<WeatherRadar | null>>()
+const historicalCache = new LruCache<string, CacheEntry<WeatherHistoricalComparison | null>>({ maxEntries: 200 })
+const pollenCache = new LruCache<string, CacheEntry<WeatherPollen | null>>({ maxEntries: 300 })
+const radarCache = new LruCache<string, CacheEntry<WeatherRadar | null>>({ maxEntries: 100 })
 
 const HOUR_MS = 60 * 60 * 1000
 const HISTORICAL_TTL_MS = 6 * HOUR_MS
@@ -450,7 +451,7 @@ async function fetchJson<T>(url: string, timeoutMs: number): Promise<T> {
     }
 }
 
-function getFresh<T>(cache: Map<string, CacheEntry<T>>, key: string, ttlMs: number): T | undefined {
+function getFresh<T>(cache: LruCache<string, CacheEntry<T>>, key: string, ttlMs: number): T | undefined {
     const entry = cache.get(key)
     if (!entry) return undefined
     if (Date.now() - entry.at > ttlMs) {
@@ -460,7 +461,7 @@ function getFresh<T>(cache: Map<string, CacheEntry<T>>, key: string, ttlMs: numb
     return entry.value
 }
 
-function setCache<T>(cache: Map<string, CacheEntry<T>>, key: string, value: T): T {
+function setCache<T>(cache: LruCache<string, CacheEntry<T>>, key: string, value: T): T {
     cache.set(key, { at: Date.now(), value })
     return value
 }

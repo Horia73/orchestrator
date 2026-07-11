@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import dynamic from "next/dynamic"
 import { useRouter, useSearchParams } from "next/navigation"
 import { useTheme } from "next-themes"
 import {
@@ -21,16 +22,57 @@ import {
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { SettingsProvider, useSettings } from "@/components/settings/use-settings"
-import { LogsTab } from "@/components/settings/logs-tab"
-import { UsageTab } from "@/components/settings/usage-tab"
-import { FilesTab } from "@/components/settings/files-tab"
-import { UpdateTab } from "@/components/settings/update-tab"
-import { AuthTab as IntegrationsTab } from "@/components/settings/auth-tab"
-import { ModelsTab } from "@/components/settings/models-tab"
-import { ProfilesTab } from "@/components/settings/profiles-tab"
-import { NotificationsTab } from "@/components/settings/notifications-tab"
-import { RemoteAccessTab } from "@/components/settings/remote-access-tab"
-import { VoiceTab } from "@/components/settings/voice-tab"
+
+const ModelsTab = dynamic(
+  () => import("@/components/settings/models-tab").then((mod) => mod.ModelsTab),
+  { loading: SettingsTabLoading }
+)
+const IntegrationsTab = dynamic(
+  () => import("@/components/settings/auth-tab").then((mod) => mod.AuthTab),
+  { loading: SettingsTabLoading }
+)
+const VoiceTab = dynamic(
+  () => import("@/components/settings/voice-tab").then((mod) => mod.VoiceTab),
+  { loading: SettingsTabLoading }
+)
+const FilesTab = dynamic(
+  () => import("@/components/settings/files-tab").then((mod) => mod.FilesTab),
+  { loading: SettingsTabLoading }
+)
+const RemoteAccessTab = dynamic(
+  () => import("@/components/settings/remote-access-tab").then((mod) => mod.RemoteAccessTab),
+  { loading: SettingsTabLoading }
+)
+const LogsTab = dynamic(
+  () => import("@/components/settings/logs-tab").then((mod) => mod.LogsTab),
+  { loading: SettingsTabLoading }
+)
+const UsageTab = dynamic(
+  () => import("@/components/settings/usage-tab").then((mod) => mod.UsageTab),
+  { loading: SettingsTabLoading }
+)
+const NotificationsTab = dynamic(
+  () => import("@/components/settings/notifications-tab").then((mod) => mod.NotificationsTab),
+  { loading: SettingsTabLoading }
+)
+const ProfilesTab = dynamic(
+  () => import("@/components/settings/profiles-tab").then((mod) => mod.ProfilesTab),
+  { loading: SettingsTabLoading }
+)
+const UpdateTab = dynamic(
+  () => import("@/components/settings/update-tab").then((mod) => mod.UpdateTab),
+  { loading: SettingsTabLoading }
+)
+
+function SettingsTabLoading() {
+  return (
+    <div
+      className="h-[180px] animate-pulse rounded-2xl border border-border/60 bg-muted/40"
+      role="status"
+      aria-label="Loading settings"
+    />
+  )
+}
 
 const TAB_IDS = ["models", "integrations", "voice", "files", "remote", "logs", "usage", "notifications", "profiles", "updates"] as const
 type TabId = (typeof TAB_IDS)[number]

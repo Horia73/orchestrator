@@ -10,6 +10,7 @@ import {
 import { cn } from "@/lib/utils"
 import { copyTextToClipboard } from "@/lib/clipboard"
 import { MarkdownRenderer } from "@/components/markdown-renderer"
+import { useShikiHighlight } from "@/hooks/use-shiki-highlight"
 
 // ---------------------------------------------------------------------------
 // Public payload types
@@ -353,8 +354,6 @@ function PanelShell({ children }: { children: React.ReactNode }) {
 // Highlighted code with optional line numbers
 // ---------------------------------------------------------------------------
 
-const highlightCache = new Map<string, string>()
-
 function HighlightedCode({
     code,
     language,
@@ -366,32 +365,7 @@ function HighlightedCode({
     startLine?: number
     showLineNumbers?: boolean
 }) {
-    const cacheKey = `${language}:${code}`
-    const [html, setHtml] = React.useState<string | null>(() => highlightCache.get(cacheKey) ?? null)
-
-    React.useEffect(() => {
-        const cached = highlightCache.get(cacheKey)
-        if (cached !== undefined) { setHtml(cached); return }
-        let cancelled = false
-        // Dynamic import keeps Shiki out of the chat route's initial bundle;
-        // the plain <pre> fallback below already shows the code instantly.
-        import("shiki")
-            .then(({ codeToHtml }) =>
-                codeToHtml(code, { lang: language, theme: "github-light" })
-            )
-            .then((result) => {
-                if (cancelled) return
-                highlightCache.set(cacheKey, result)
-                setHtml(result)
-            })
-            .catch(() => {
-                if (!cancelled) {
-                    highlightCache.set(cacheKey, "")
-                    setHtml("")
-                }
-            })
-        return () => { cancelled = true }
-    }, [cacheKey, code, language])
+    const html = useShikiHighlight(code, language)
 
     const lineNumberPadding = showLineNumbers
         ? `${String((startLine ?? 1) + Math.max(0, code.split("\n").length - 1)).length + 1}ch`

@@ -2,21 +2,65 @@
 
 import * as React from "react"
 import { createPortal } from "react-dom"
+import dynamic from "next/dynamic"
 import { X, ChevronLeft, ChevronRight } from "lucide-react"
 import { appPath } from "@/lib/app-path"
-import { PdfViewer } from "@/components/pdf-viewer"
-import { SpreadsheetViewer } from "@/components/office/spreadsheet-viewer"
-import { DocxViewer } from "@/components/office/docx-viewer"
-import { PptxViewer } from "@/components/office/pptx-viewer"
-import { SvgViewer } from "@/components/office/svg-viewer"
-import { CodeViewer } from "@/components/code-viewer"
-import { MarkdownViewer } from "@/components/markdown-viewer"
-import { HtmlFileViewer } from "@/components/html-file-viewer"
 import { ViewerErrorBoundary } from "@/components/office/viewer-error-boundary"
-import { CadFileViewer } from "@/components/cad/cad-file-viewer"
-import { ImageAnnotationEditor } from "@/components/image-annotation-editor"
 import { isDocxFile, isSvgFile, isSpreadsheetFile, isPresentationFile, isCodeOrTextFile, is3DModelFile, isHtmlFile, isMarkdownFile } from "@/lib/preview-kinds"
 import type { Attachment } from "@/lib/types"
+
+const PdfViewer = dynamic(
+    () => import("@/components/pdf-viewer").then((mod) => mod.PdfViewer),
+    { loading: FileViewerLoading }
+)
+const SpreadsheetViewer = dynamic(
+    () => import("@/components/office/spreadsheet-viewer").then((mod) => mod.SpreadsheetViewer),
+    { loading: FileViewerLoading }
+)
+const DocxViewer = dynamic(
+    () => import("@/components/office/docx-viewer").then((mod) => mod.DocxViewer),
+    { loading: FileViewerLoading }
+)
+const PptxViewer = dynamic(
+    () => import("@/components/office/pptx-viewer").then((mod) => mod.PptxViewer),
+    { loading: FileViewerLoading }
+)
+const SvgViewer = dynamic(
+    () => import("@/components/office/svg-viewer").then((mod) => mod.SvgViewer),
+    { loading: FileViewerLoading }
+)
+const CodeViewer = dynamic(
+    () => import("@/components/code-viewer").then((mod) => mod.CodeViewer),
+    { loading: FileViewerLoading }
+)
+const MarkdownViewer = dynamic(
+    () => import("@/components/markdown-viewer").then((mod) => mod.MarkdownViewer),
+    { loading: FileViewerLoading }
+)
+const HtmlFileViewer = dynamic(
+    () => import("@/components/html-file-viewer").then((mod) => mod.HtmlFileViewer),
+    { loading: FileViewerLoading }
+)
+const CadFileViewer = dynamic(
+    () => import("@/components/cad/cad-file-viewer").then((mod) => mod.CadFileViewer),
+    { loading: FileViewerLoading }
+)
+const ImageAnnotationEditor = dynamic(
+    () => import("@/components/image-annotation-editor").then((mod) => mod.ImageAnnotationEditor),
+    { loading: FileViewerLoading }
+)
+
+function FileViewerLoading() {
+    return (
+        <div
+            className="flex h-full min-h-48 w-full animate-pulse items-center justify-center bg-pdf-canvas text-sm text-pdf-text-muted"
+            role="status"
+            aria-label="Loading file preview"
+        >
+            Loading preview…
+        </div>
+    )
+}
 
 interface FilePreviewModalProps {
     attachment: Attachment | null

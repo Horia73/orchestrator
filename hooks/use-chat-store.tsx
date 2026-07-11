@@ -83,6 +83,13 @@ import {
 } from "./chat-store-utils"
 import { CHAT_VIEW_SAVE_STATE_EVENT } from "@/lib/chat-view-state"
 import { PROFILE_SESSION_CHANGED_EVENT } from "@/lib/profile-session-client"
+import { readJsonSseStream } from "./chat-stream-sse"
+import {
+  completedAssistantMessage,
+  erroredAssistantMessage,
+  stoppedAssistantMessage,
+} from "./chat-stream-messages"
+import { handleArtifactStreamEvent } from "./chat-stream-artifacts"
 
 export interface SendMessageOptions {
   promptContext?: string
@@ -99,27 +106,6 @@ export interface SendMessageOptions {
 // 12 × 200 ≈ 2400 messages of reach for a deep-link jump target — covers
 // virtually every real conversation; deeper targets degrade to "not found".
 const MAX_LOAD_UNTIL_PRESENT_FETCHES = 12
-
-// Terminal stream events (done/stopped/error) carry the server-persisted
-// message so local state ends up exactly what a refresh would load from the
-// DB — same timestamp, durationMs, sanitized reasoning, and error text.
-// Returns null when the payload is missing or malformed; callers fall back
-// to the locally-accumulated message.
-function assistantMessageFromStreamEvent(
-  value: unknown,
-  expectedId: string
-): Message | null {
-  if (!value || typeof value !== "object") return null
-  const message = value as Message
-  if (
-    message.id !== expectedId ||
-    message.role !== "assistant" ||
-    typeof message.content !== "string" ||
-    typeof message.timestamp !== "number"
-  )
-    return null
-  return message
-}
 
 interface ChatContextType {
   state: ChatState
@@ -138,7 +124,10 @@ interface ChatContextType {
   newChat: () => void
   selectConversation: (id: string, conversation?: Conversation) => void
   prefetchConversationMessages: (id: string) => Promise<void>
-  loadMessageDetails: (conversationId: string, messageId: string) => Promise<void>
+  loadMessageDetails: (
+    conversationId: string,
+    messageId: string
+  ) => Promise<void>
   loadOlderMessages: (id: string) => Promise<void>
   /** Page older messages until `messageId` is loaded (or a cap is hit), so a
    *  deep-link can scroll to a message beyond the initial page. Resolves true
@@ -174,10 +163,8 @@ const HOME_SWITCH_TARGET = "__home__"
 
 export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
-  const [state, dispatch] = React.useReducer(
-    chatReducer,
-    undefined,
-    () => createInitialChatState(true)
+  const [state, dispatch] = React.useReducer(chatReducer, undefined, () =>
+    createInitialChatState(true)
   )
   const [unreadConversationIds, setUnreadConversationIds] = React.useState<
     Set<string>
@@ -251,19 +238,17 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     Map<string, Array<{ followUpId: string; userMessage: Message }>>
   >(new Map())
   const sendMessageToConversationRef = React.useRef<
-    ((
-      conversationId: string | null,
-      content: string,
-      files?: File[],
-      uploadedAttachments?: import("@/lib/types").Attachment[],
-      options?: SendMessageOptions
-    ) => Promise<string | null>) | null
+    | ((
+        conversationId: string | null,
+        content: string,
+        files?: File[],
+        uploadedAttachments?: import("@/lib/types").Attachment[],
+        options?: SendMessageOptions
+      ) => Promise<string | null>)
+    | null
   >(null)
   const drainNextFollowUp = React.useCallback((conversationId: string) => {
-    if (
-      streamingRef.current ||
-      activeChatStreamsRef.current[conversationId]
-    ) {
+    if (streamingRef.current || activeChatStreamsRef.current[conversationId]) {
       return
     }
     const queue = followUpQueuesRef.current.get(conversationId)
@@ -291,7 +276,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   // reconciles the visible tail against the DB, even when the local page is
   // marked "full". Keep those loads separate so an older prefetch cannot make
   // the click join a snapshot captured before the agent finalized.
-  const openMessageLoadsRef = React.useRef<Map<string, Promise<void>>>(new Map())
+  const openMessageLoadsRef = React.useRef<Map<string, Promise<void>>>(
+    new Map()
+  )
   // `selectConversation` starts the authoritative load during the outgoing
   // fade. The active-id effect that runs when the delayed selection commits
   // consumes this marker instead of immediately launching a second refresh.
@@ -435,9 +422,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
     const sync = () => {
       if (thinkingStartRef.current === null) return
-      const elapsed = Math.round(
-        (Date.now() - thinkingStartRef.current) / 1000
-      )
+      const elapsed = Math.round((Date.now() - thinkingStartRef.current) / 1000)
       dispatch({ type: "SET_THINKING_SECONDS", seconds: elapsed })
     }
 
@@ -521,7 +506,11 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     (id: string, title: string) => {
       const clean = title.trim()
       if (!clean) return
-      dispatch({ type: "SET_CONVERSATION_TITLE", conversationId: id, title: clean })
+      dispatch({
+        type: "SET_CONVERSATION_TITLE",
+        conversationId: id,
+        title: clean,
+      })
     },
     []
   )
@@ -1041,9 +1030,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
       const needsDetails = Boolean(
         !message ||
-          message.deferred?.reasoning ||
-          message.deferred?.contentSegments ||
-          message.deferred?.toolCalls
+        message.deferred?.reasoning ||
+        message.deferred?.contentSegments ||
+        message.deferred?.toolCalls
       )
       if (!needsDetails) return message
 
@@ -1067,223 +1056,235 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       if (inFlight) return inFlight
 
       const run = (async (): Promise<"final" | "running" | null> => {
-      const recoveryStartedAt = Date.now()
-      // Attempts where the server actually answered are budgeted by
-      // STREAM_RECOVERY_ATTEMPTS; stretches where it was unreachable (flaky
-      // mobile signal) retry with backoff against a much longer deadline —
-      // giving up after ~6s of airplane mode was what left the UI stuck.
-      let reachableAttempts = 0
-      let unreachableStreak = 0
-      // With a known target messageId, consecutive server answers confirming
-      // "no run, no row for that id" mean the start POST never arrived — exit
-      // early so the send path can re-send instead of polling out the budget.
-      let confirmedMissingTurn = 0
-      while (true) {
-        const lifecycleGeneration =
-          chatStreamLifecycleGenerationRef.current.get(conversationId) ?? 0
-        // Fetch BEFORE touching streaming state. Flipping isStreaming on up
-        // front would re-light the "..." cursor and auto-open every reasoning/
-        // tool card on a conversation that already finished — exactly the
-        // flicker seen when returning to a backgrounded tab. We only enter the
-        // "recovering" UI below, once we know there is genuinely a live or
-        // interrupted stream to recover.
-        const [messagesResult, stream] = await Promise.allSettled([
-          refreshConversationMessages(conversationId),
-          checkServerStreaming(conversationId),
-        ])
-        // fetchChatRuntimeState swallows network errors into null, so the
-        // messages fetch (which rejects on failure) is the reachability
-        // canary. Without it, a dead radio read as "server says nothing is
-        // running" and recovery marked live runs as aborted.
-        const serverReachable = messagesResult.status === "fulfilled"
-        const messages =
-          messagesResult.status === "fulfilled" &&
-          Array.isArray(messagesResult.value)
-            ? messagesResult.value
-            : []
-        // When the caller knows which assistant message this turn owns, only
-        // that row counts. Falling back to "the last assistant message" here
-        // used to resurface the PREVIOUS turn's reply as this turn's result
-        // when the start POST was lost on flaky signal — recovery reported
-        // "final", the resend never fired, and the user's message sat
-        // unanswered. The fallback remains for callers without an id (e.g.
-        // another tab's stream observed as "unknown").
-        const recoveredMessage = messageId
-          ? messages.find((message) => message.id === messageId) ?? null
-          : [...messages]
-              .reverse()
-              .find((message) => message.role === "assistant") ?? null
-        const activeStream = stream.status === "fulfilled" ? stream.value : null
+        const recoveryStartedAt = Date.now()
+        // Attempts where the server actually answered are budgeted by
+        // STREAM_RECOVERY_ATTEMPTS; stretches where it was unreachable (flaky
+        // mobile signal) retry with backoff against a much longer deadline —
+        // giving up after ~6s of airplane mode was what left the UI stuck.
+        let reachableAttempts = 0
+        let unreachableStreak = 0
+        // With a known target messageId, consecutive server answers confirming
+        // "no run, no row for that id" mean the start POST never arrived — exit
+        // early so the send path can re-send instead of polling out the budget.
+        let confirmedMissingTurn = 0
+        while (true) {
+          const lifecycleGeneration =
+            chatStreamLifecycleGenerationRef.current.get(conversationId) ?? 0
+          // Fetch BEFORE touching streaming state. Flipping isStreaming on up
+          // front would re-light the "..." cursor and auto-open every reasoning/
+          // tool card on a conversation that already finished — exactly the
+          // flicker seen when returning to a backgrounded tab. We only enter the
+          // "recovering" UI below, once we know there is genuinely a live or
+          // interrupted stream to recover.
+          const [messagesResult, stream] = await Promise.allSettled([
+            refreshConversationMessages(conversationId),
+            checkServerStreaming(conversationId),
+          ])
+          // fetchChatRuntimeState swallows network errors into null, so the
+          // messages fetch (which rejects on failure) is the reachability
+          // canary. Without it, a dead radio read as "server says nothing is
+          // running" and recovery marked live runs as aborted.
+          const serverReachable = messagesResult.status === "fulfilled"
+          const messages =
+            messagesResult.status === "fulfilled" &&
+            Array.isArray(messagesResult.value)
+              ? messagesResult.value
+              : []
+          // When the caller knows which assistant message this turn owns, only
+          // that row counts. Falling back to "the last assistant message" here
+          // used to resurface the PREVIOUS turn's reply as this turn's result
+          // when the start POST was lost on flaky signal — recovery reported
+          // "final", the resend never fired, and the user's message sat
+          // unanswered. The fallback remains for callers without an id (e.g.
+          // another tab's stream observed as "unknown").
+          const recoveredMessage = messageId
+            ? (messages.find((message) => message.id === messageId) ?? null)
+            : ([...messages]
+                .reverse()
+                .find((message) => message.role === "assistant") ?? null)
+          const activeStream =
+            stream.status === "fulfilled" ? stream.value : null
 
-        if (activeStream) {
-          // Keep the live thinking counter alive through recovery. A refocus
-          // after a long absence often interrupts the original stream and its
-          // ticker, so re-anchor elapsed time to the server's stream start;
-          // the counter effect resumes ticking the moment streaming is set.
-          thinkingStartRef.current = activeStream.startedAt
-          const activeMessage =
-            (activeStream.messageId
-              ? messages.find((message) => message.id === activeStream.messageId)
-              : null) ??
-            recoveredMessage ??
-            null
-          const snapshot = await hydrateStreamMessage(
-            conversationId,
-            activeMessage,
-            activeStream.messageId
-          )
-          if (
-            (chatStreamLifecycleGenerationRef.current.get(conversationId) ??
-              0) !== lifecycleGeneration
-          ) {
-            // A start/end event landed while the snapshot request was in
-            // flight. Loop against current server state instead of reviving
-            // the now-stale stream frame after its terminal event.
-            continue
-          }
-          if (snapshot) {
-            dispatch({
-              type: "ADD_ASSISTANT_MESSAGE",
+          if (activeStream) {
+            // Keep the live thinking counter alive through recovery. A refocus
+            // after a long absence often interrupts the original stream and its
+            // ticker, so re-anchor elapsed time to the server's stream start;
+            // the counter effect resumes ticking the moment streaming is set.
+            thinkingStartRef.current = activeStream.startedAt
+            const activeMessage =
+              (activeStream.messageId
+                ? messages.find(
+                    (message) => message.id === activeStream.messageId
+                  )
+                : null) ??
+              recoveredMessage ??
+              null
+            const snapshot = await hydrateStreamMessage(
               conversationId,
-              message: snapshot,
-              stopStreaming: false,
-            })
+              activeMessage,
+              activeStream.messageId
+            )
+            if (
+              (chatStreamLifecycleGenerationRef.current.get(conversationId) ??
+                0) !== lifecycleGeneration
+            ) {
+              // A start/end event landed while the snapshot request was in
+              // flight. Loop against current server state instead of reviving
+              // the now-stale stream frame after its terminal event.
+              continue
+            }
+            if (snapshot) {
+              dispatch({
+                type: "ADD_ASSISTANT_MESSAGE",
+                conversationId,
+                message: snapshot,
+                stopStreaming: false,
+              })
+              dispatch({
+                type: "SET_STREAMING",
+                isStreaming: true,
+                conversationId,
+                messageId: activeStream.messageId,
+                snapshot,
+                status: "recovering",
+              })
+              dispatch({ type: "CHAT_STREAM_STARTED", stream: activeStream })
+              return "running"
+            }
+
             dispatch({
               type: "SET_STREAMING",
               isStreaming: true,
               conversationId,
               messageId: activeStream.messageId,
-              snapshot,
-              status: "recovering",
+              status: recoveryStreamingStatus(),
             })
             dispatch({ type: "CHAT_STREAM_STARTED", stream: activeStream })
             return "running"
           }
 
+          if (serverReachable) {
+            reachableAttempts += 1
+            unreachableStreak = 0
+          } else {
+            unreachableStreak += 1
+          }
+
+          if (
+            messageId &&
+            serverReachable &&
+            !activeStream &&
+            !recoveredMessage
+          ) {
+            // The server answered and has neither a live run nor any row for
+            // this turn's id — the start POST almost certainly never arrived.
+            // Two consecutive confirmations (a backoff apart) rule out the race
+            // where the POST landed but its run hasn't registered yet; then let
+            // the caller re-send instead of polling out the whole budget.
+            confirmedMissingTurn += 1
+            if (confirmedMissingTurn >= 2) return null
+          } else {
+            confirmedMissingTurn = 0
+          }
+
+          if (recoveredMessage) {
+            const hydratedMessage =
+              (await hydrateStreamMessage(
+                conversationId,
+                recoveredMessage,
+                messageId
+              )) ?? recoveredMessage
+
+            if (isTerminalAssistantMessage(hydratedMessage)) {
+              dispatch({
+                type: "ADD_ASSISTANT_MESSAGE",
+                conversationId,
+                message: hydratedMessage,
+              })
+              handleAssistantFinished(conversationId, hydratedMessage)
+              return "final"
+            }
+
+            const hasProgress =
+              hydratedMessage.content.trim().length > 0 ||
+              (hydratedMessage.reasoning?.length ?? 0) > 0 ||
+              hydratedMessage.contentSegments?.some(
+                (segment) => segment.content.length > 0
+              )
+            // Only declare the run dead after the server itself has repeatedly
+            // answered "nothing is running" — never off failed fetches, which
+            // just mean WE were offline while the run may have kept going.
+            if (
+              serverReachable &&
+              reachableAttempts >= STREAM_RECOVERY_ATTEMPTS &&
+              hasProgress
+            ) {
+              const abortedMessage: Message = {
+                ...hydratedMessage,
+                status: "aborted",
+                reasoning: markReasoningStopped(
+                  hydratedMessage.reasoning,
+                  Date.now()
+                ),
+                thinkingDuration: hydratedMessage.thinkingDuration ?? 0,
+              }
+              dispatch({
+                type: "ADD_ASSISTANT_MESSAGE",
+                conversationId,
+                message: abortedMessage,
+              })
+              addConversationMessageRequest(
+                conversationId,
+                abortedMessage
+              ).catch(console.error)
+              return "final"
+            }
+          }
+
+          if (
+            serverReachable &&
+            reachableAttempts >= STREAM_RECOVERY_ATTEMPTS
+          ) {
+            return null
+          }
+          if (
+            !serverReachable &&
+            Date.now() - recoveryStartedAt >=
+              STREAM_RECOVERY_UNREACHABLE_DEADLINE_MS
+          ) {
+            return null
+          }
+          // The user moved to another conversation: stop churning its streaming
+          // state from here. Re-opening the conversation re-checks the server
+          // (mount effect) and the sync stream delivers the final message.
+          if (activeConversationIdRef.current !== conversationId) return null
+
+          // No terminal message and no active server stream yet: this is a
+          // genuine mid-flight interruption (e.g. a mobile PWA that dropped the
+          // EventSource). Only now show the recovering indicator, then retry.
           dispatch({
             type: "SET_STREAMING",
             isStreaming: true,
             conversationId,
-            messageId: activeStream.messageId,
+            messageId: messageId ?? undefined,
             status: recoveryStreamingStatus(),
           })
-          dispatch({ type: "CHAT_STREAM_STARTED", stream: activeStream })
-          return "running"
-        }
-
-        if (serverReachable) {
-          reachableAttempts += 1
-          unreachableStreak = 0
-        } else {
-          unreachableStreak += 1
-        }
-
-        if (messageId && serverReachable && !activeStream && !recoveredMessage) {
-          // The server answered and has neither a live run nor any row for
-          // this turn's id — the start POST almost certainly never arrived.
-          // Two consecutive confirmations (a backoff apart) rule out the race
-          // where the POST landed but its run hasn't registered yet; then let
-          // the caller re-send instead of polling out the whole budget.
-          confirmedMissingTurn += 1
-          if (confirmedMissingTurn >= 2) return null
-        } else {
-          confirmedMissingTurn = 0
-        }
-
-        if (recoveredMessage) {
-          const hydratedMessage =
-            (await hydrateStreamMessage(
-              conversationId,
-              recoveredMessage,
-              messageId
-            )) ?? recoveredMessage
-
-          if (isTerminalAssistantMessage(hydratedMessage)) {
-            dispatch({
-              type: "ADD_ASSISTANT_MESSAGE",
-              conversationId,
-              message: hydratedMessage,
-            })
-            handleAssistantFinished(conversationId, hydratedMessage)
-            return "final"
-          }
-
-          const hasProgress =
-            hydratedMessage.content.trim().length > 0 ||
-            (hydratedMessage.reasoning?.length ?? 0) > 0 ||
-            hydratedMessage.contentSegments?.some(
-              (segment) => segment.content.length > 0
+          if (typeof navigator !== "undefined" && !navigator.onLine) {
+            // Known-offline: park until the radio returns (or the slice ends)
+            // instead of burning backoff sleeps nobody can answer.
+            await sleepUntilOnline(OFFLINE_WAIT_SLICE_MS)
+          } else {
+            const backoffStep = serverReachable
+              ? reachableAttempts
+              : unreachableStreak
+            await sleep(
+              Math.min(
+                STREAM_RECOVERY_MAX_DELAY_MS,
+                STREAM_RECOVERY_DELAY_MS * 2 ** Math.min(backoffStep - 1, 3)
+              )
             )
-          // Only declare the run dead after the server itself has repeatedly
-          // answered "nothing is running" — never off failed fetches, which
-          // just mean WE were offline while the run may have kept going.
-          if (
-            serverReachable &&
-            reachableAttempts >= STREAM_RECOVERY_ATTEMPTS &&
-            hasProgress
-          ) {
-            const abortedMessage: Message = {
-              ...hydratedMessage,
-              status: "aborted",
-              reasoning: markReasoningStopped(
-                hydratedMessage.reasoning,
-                Date.now()
-              ),
-              thinkingDuration: hydratedMessage.thinkingDuration ?? 0,
-            }
-            dispatch({
-              type: "ADD_ASSISTANT_MESSAGE",
-              conversationId,
-              message: abortedMessage,
-            })
-            addConversationMessageRequest(conversationId, abortedMessage).catch(
-              console.error
-            )
-            return "final"
           }
         }
-
-        if (serverReachable && reachableAttempts >= STREAM_RECOVERY_ATTEMPTS) {
-          return null
-        }
-        if (
-          !serverReachable &&
-          Date.now() - recoveryStartedAt >=
-            STREAM_RECOVERY_UNREACHABLE_DEADLINE_MS
-        ) {
-          return null
-        }
-        // The user moved to another conversation: stop churning its streaming
-        // state from here. Re-opening the conversation re-checks the server
-        // (mount effect) and the sync stream delivers the final message.
-        if (activeConversationIdRef.current !== conversationId) return null
-
-        // No terminal message and no active server stream yet: this is a
-        // genuine mid-flight interruption (e.g. a mobile PWA that dropped the
-        // EventSource). Only now show the recovering indicator, then retry.
-        dispatch({
-          type: "SET_STREAMING",
-          isStreaming: true,
-          conversationId,
-          messageId: messageId ?? undefined,
-          status: recoveryStreamingStatus(),
-        })
-        if (typeof navigator !== "undefined" && !navigator.onLine) {
-          // Known-offline: park until the radio returns (or the slice ends)
-          // instead of burning backoff sleeps nobody can answer.
-          await sleepUntilOnline(OFFLINE_WAIT_SLICE_MS)
-        } else {
-          const backoffStep = serverReachable
-            ? reachableAttempts
-            : unreachableStreak
-          await sleep(
-            Math.min(
-              STREAM_RECOVERY_MAX_DELAY_MS,
-              STREAM_RECOVERY_DELAY_MS * 2 ** Math.min(backoffStep - 1, 3)
-            )
-          )
-        }
-      }
       })()
 
       const tracked = run.finally(() => {
@@ -1329,7 +1330,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     tick()
     const interval = window.setInterval(tick, 5000)
     const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") void refreshActiveChatStreams()
+      if (document.visibilityState === "visible")
+        void refreshActiveChatStreams()
     }
     document.addEventListener("visibilitychange", handleVisibilityChange)
     return () => {
@@ -1362,7 +1364,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         const quietForMs = Date.now() - streamLastActivityRef.current
         const stalled = streamReaderActiveRef.current
           ? quietForMs > STREAM_RESUME_STALL_MS
-          : streamPostInFlightRef.current && quietForMs > STREAM_STALL_TIMEOUT_MS
+          : streamPostInFlightRef.current &&
+            quietForMs > STREAM_STALL_TIMEOUT_MS
         if (stalled) {
           streamStallRequestedRef.current = true
           abortControllerRef.current?.abort()
@@ -1378,7 +1381,11 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
       const knownStream = activeChatStreamsRef.current[conversationId]
       const wasHiddenDuringStream = streamPageWasHiddenRef.current
-      if (!knownStream && !isStreamingStateRef.current && !wasHiddenDuringStream)
+      if (
+        !knownStream &&
+        !isStreamingStateRef.current &&
+        !wasHiddenDuringStream
+      )
         return
 
       const currentSequence = ++sequence
@@ -1443,7 +1450,11 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true
     }
-  }, [checkServerStreaming, recoverInterruptedStream, state.activeConversationId])
+  }, [
+    checkServerStreaming,
+    recoverInterruptedStream,
+    state.activeConversationId,
+  ])
 
   React.useEffect(() => {
     const conversationId = state.activeConversationId
@@ -1483,17 +1494,21 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           if (shouldRefreshSnapshot && !recovering) {
             recovering = true
             streamSnapshotRefreshAtRef.current = now
-            void recoverInterruptedStream(conversationId, stream.messageId)
-              .finally(() => {
-                recovering = false
-              })
+            void recoverInterruptedStream(
+              conversationId,
+              stream.messageId
+            ).finally(() => {
+              recovering = false
+            })
           } else {
             dispatch({
               type: "SET_STREAMING",
               isStreaming: true,
               conversationId,
               messageId: stream.messageId,
-              status: hasStreamingPayload ? undefined : recoveryStreamingStatus(),
+              status: hasStreamingPayload
+                ? undefined
+                : recoveryStreamingStatus(),
             })
             dispatch({ type: "CHAT_STREAM_STARTED", stream })
           }
@@ -2460,249 +2475,253 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           followUpId: followUpClaim?.followUpId,
           signal: attemptController.signal,
         })
-        .then(async (response) => {
-          streamPostInFlightRef.current = false
-          if (!response.ok) {
-            const err = await response
-              .json()
-              .catch(() => ({ error: "Unknown error" }))
-            if (
-              response.status === 409 &&
-              err?.code === "stream_already_active" &&
-              typeof err.activeMessageId === "string"
-            ) {
-              streamDoneRef.current = true
-              const activeStream: ActiveChatStream = {
-                conversationId: finalConvId,
-                messageId: err.activeMessageId,
-                startedAt:
-                  typeof err.activeStartedAt === "number"
-                    ? err.activeStartedAt
-                    : Date.now(),
-              }
-              activeChatStreamsRef.current = {
-                ...activeChatStreamsRef.current,
-                [finalConvId]: activeStream,
-              }
-              thinkingStartRef.current = activeStream.startedAt
-              dispatch({
-                type: "SET_STREAMING",
-                isStreaming: true,
-                conversationId: finalConvId,
-                messageId: activeStream.messageId,
-                status: recoveryStreamingStatus(),
-              })
-              dispatch({ type: "CHAT_STREAM_STARTED", stream: activeStream })
-              void recoverInterruptedStream(
-                finalConvId,
-                activeStream.messageId
-              )
-              return
-            }
-            if (
-              response.status === 409 &&
-              (err?.code === "stream_active_queued" ||
-                err?.code === "followup_deferred") &&
-              typeof err.followUpId === "string" &&
-              typeof err.activeMessageId === "string"
-            ) {
-              const queuedMessage = followUpClaim?.userMessage ?? userMessage
-              const queue = followUpQueuesRef.current.get(finalConvId) ?? []
-              if (!queue.some((entry) => entry.followUpId === err.followUpId)) {
-                const queuedEntry = {
-                  followUpId: err.followUpId,
-                  userMessage: queuedMessage,
-                }
-                if (followUpClaim) queue.unshift(queuedEntry)
-                else queue.push(queuedEntry)
-              }
-              followUpQueuesRef.current.set(finalConvId, queue)
-              dispatch({
-                type: "UPSERT_PENDING_FOLLOWUP",
-                conversationId: finalConvId,
-                followUp: {
-                  followUpId: err.followUpId,
-                  userMessageId: queuedMessage.id,
-                  source: "user",
-                  queuedAt:
-                    typeof err.queuedAt === "number"
-                      ? err.queuedAt
-                      : queuedMessage.timestamp,
-                  status: "queued",
-                },
-              })
-
-              streamDoneRef.current = true
-              streamingRef.current = false
-              clientStreamMessageIdRef.current = null
-              abortControllerRef.current = null
-              const activeStream: ActiveChatStream = {
-                conversationId: finalConvId,
-                messageId: err.activeMessageId,
-                startedAt:
-                  typeof err.activeStartedAt === "number"
-                    ? err.activeStartedAt
-                    : Date.now(),
-              }
-              activeChatStreamsRef.current = {
-                ...activeChatStreamsRef.current,
-                [finalConvId]: activeStream,
-              }
-              thinkingStartRef.current = activeStream.startedAt
-              dispatch({
-                type: "CHAT_STREAM_ENDED",
-                conversationId: finalConvId,
-                messageId: assistantMsgId,
-              })
-              dispatch({
-                type: "SET_STREAMING",
-                isStreaming: true,
-                conversationId: finalConvId,
-                messageId: activeStream.messageId,
-                status: recoveryStreamingStatus(),
-              })
-              dispatch({ type: "CHAT_STREAM_STARTED", stream: activeStream })
-              void recoverInterruptedStream(
-                finalConvId,
-                activeStream.messageId
-              )
-              return
-            }
-            if (
-              response.status === 409 &&
-              err?.code === "followup_already_claimed"
-            ) {
-              // The server-side sweep beat us to this follow-up — its wake
-              // turn is (or will be) streaming. Quietly stand down; sync
-              // events surface that run.
-              streamDoneRef.current = true
-              dispatch({ type: "SET_STREAMING", isStreaming: false })
-              dispatch({
-                type: "CHAT_STREAM_ENDED",
-                conversationId: finalConvId,
-                messageId: assistantMsgId,
-              })
-              if (followUpClaim) {
-                dispatch({
-                  type: "REMOVE_PENDING_FOLLOWUP",
+          .then(async (response) => {
+            streamPostInFlightRef.current = false
+            if (!response.ok) {
+              const err = await response
+                .json()
+                .catch(() => ({ error: "Unknown error" }))
+              if (
+                response.status === 409 &&
+                err?.code === "stream_already_active" &&
+                typeof err.activeMessageId === "string"
+              ) {
+                streamDoneRef.current = true
+                const activeStream: ActiveChatStream = {
                   conversationId: finalConvId,
-                  userMessageId: followUpClaim.userMessage.id,
+                  messageId: err.activeMessageId,
+                  startedAt:
+                    typeof err.activeStartedAt === "number"
+                      ? err.activeStartedAt
+                      : Date.now(),
+                }
+                activeChatStreamsRef.current = {
+                  ...activeChatStreamsRef.current,
+                  [finalConvId]: activeStream,
+                }
+                thinkingStartRef.current = activeStream.startedAt
+                dispatch({
+                  type: "SET_STREAMING",
+                  isStreaming: true,
+                  conversationId: finalConvId,
+                  messageId: activeStream.messageId,
+                  status: recoveryStreamingStatus(),
                 })
+                dispatch({ type: "CHAT_STREAM_STARTED", stream: activeStream })
+                void recoverInterruptedStream(
+                  finalConvId,
+                  activeStream.messageId
+                )
+                return
               }
-              return
-            }
-            throw new ChatFetchError(
-              err.error || `HTTP ${response.status}`,
-              typeof err.chatMessage === "string" ? err.chatMessage : undefined
-            )
-          }
+              if (
+                response.status === 409 &&
+                (err?.code === "stream_active_queued" ||
+                  err?.code === "followup_deferred") &&
+                typeof err.followUpId === "string" &&
+                typeof err.activeMessageId === "string"
+              ) {
+                const queuedMessage = followUpClaim?.userMessage ?? userMessage
+                const queue = followUpQueuesRef.current.get(finalConvId) ?? []
+                if (
+                  !queue.some((entry) => entry.followUpId === err.followUpId)
+                ) {
+                  const queuedEntry = {
+                    followUpId: err.followUpId,
+                    userMessage: queuedMessage,
+                  }
+                  if (followUpClaim) queue.unshift(queuedEntry)
+                  else queue.push(queuedEntry)
+                }
+                followUpQueuesRef.current.set(finalConvId, queue)
+                dispatch({
+                  type: "UPSERT_PENDING_FOLLOWUP",
+                  conversationId: finalConvId,
+                  followUp: {
+                    followUpId: err.followUpId,
+                    userMessageId: queuedMessage.id,
+                    source: "user",
+                    queuedAt:
+                      typeof err.queuedAt === "number"
+                        ? err.queuedAt
+                        : queuedMessage.timestamp,
+                    status: "queued",
+                  },
+                })
 
-          if (followUpClaim) {
+                streamDoneRef.current = true
+                streamingRef.current = false
+                clientStreamMessageIdRef.current = null
+                abortControllerRef.current = null
+                const activeStream: ActiveChatStream = {
+                  conversationId: finalConvId,
+                  messageId: err.activeMessageId,
+                  startedAt:
+                    typeof err.activeStartedAt === "number"
+                      ? err.activeStartedAt
+                      : Date.now(),
+                }
+                activeChatStreamsRef.current = {
+                  ...activeChatStreamsRef.current,
+                  [finalConvId]: activeStream,
+                }
+                thinkingStartRef.current = activeStream.startedAt
+                dispatch({
+                  type: "CHAT_STREAM_ENDED",
+                  conversationId: finalConvId,
+                  messageId: assistantMsgId,
+                })
+                dispatch({
+                  type: "SET_STREAMING",
+                  isStreaming: true,
+                  conversationId: finalConvId,
+                  messageId: activeStream.messageId,
+                  status: recoveryStreamingStatus(),
+                })
+                dispatch({ type: "CHAT_STREAM_STARTED", stream: activeStream })
+                void recoverInterruptedStream(
+                  finalConvId,
+                  activeStream.messageId
+                )
+                return
+              }
+              if (
+                response.status === 409 &&
+                err?.code === "followup_already_claimed"
+              ) {
+                // The server-side sweep beat us to this follow-up — its wake
+                // turn is (or will be) streaming. Quietly stand down; sync
+                // events surface that run.
+                streamDoneRef.current = true
+                dispatch({ type: "SET_STREAMING", isStreaming: false })
+                dispatch({
+                  type: "CHAT_STREAM_ENDED",
+                  conversationId: finalConvId,
+                  messageId: assistantMsgId,
+                })
+                if (followUpClaim) {
+                  dispatch({
+                    type: "REMOVE_PENDING_FOLLOWUP",
+                    conversationId: finalConvId,
+                    userMessageId: followUpClaim.userMessage.id,
+                  })
+                }
+                return
+              }
+              throw new ChatFetchError(
+                err.error || `HTTP ${response.status}`,
+                typeof err.chatMessage === "string"
+                  ? err.chatMessage
+                  : undefined
+              )
+            }
+
+            if (followUpClaim) {
+              dispatch({
+                type: "REMOVE_PENDING_FOLLOWUP",
+                conversationId: finalConvId,
+                userMessageId: followUpClaim.userMessage.id,
+              })
+            }
+
+            if (!response.body) throw new Error("No response body")
+
+            // Server accepted the stream — we're connected. Clear the
+            // "connecting" status now (rather than waiting for the first token)
+            // so the bottom pill reflects connection, not the model's latency.
             dispatch({
-              type: "REMOVE_PENDING_FOLLOWUP",
+              type: "SET_STREAMING",
+              isStreaming: true,
               conversationId: finalConvId,
-              userMessageId: followUpClaim.userMessage.id,
+              messageId: assistantMsgId,
+              status: null,
             })
-          }
 
-          const reader = response.body?.getReader()
-          if (!reader) throw new Error("No response body")
-
-          // Server accepted the stream — we're connected. Clear the
-          // "connecting" status now (rather than waiting for the first token)
-          // so the bottom pill reflects connection, not the model's latency.
-          dispatch({
-            type: "SET_STREAMING",
-            isStreaming: true,
-            conversationId: finalConvId,
-            messageId: assistantMsgId,
-            status: null,
-          })
-
-          streamReaderActiveRef.current = true
-          streamLastActivityRef.current = Date.now()
-
-          const decoder = new TextDecoder()
-          let buffer = ""
-          let accThinking = ""
-          let accContent = ""
-          const accContentSegments: NonNullable<Message["contentSegments"]> = []
-          let finalThinkingDuration = 0
-          const accReasoning: StreamingReasoning = []
-          let accAttachments: Attachment[] = []
-          let reasoningPhase = 0
-          let streamMode: "reasoning" | "content" = "reasoning"
-
-          const appendReasoningThoughtChunk = (chunk: string) => {
-            const last = accReasoning[accReasoning.length - 1]
-            if (last?.type === "thought" && last.phase === reasoningPhase) {
-              last.content += chunk
-              return
-            }
-            accReasoning.push({
-              type: "thought",
-              id: `thought_${accReasoning.length + 1}`,
-              phase: reasoningPhase,
-              content: chunk,
-            })
-          }
-
-          const appendContentChunk = (chunk: string) => {
-            const last = accContentSegments[accContentSegments.length - 1]
-            if (last && last.phase === reasoningPhase) {
-              last.content += chunk
-              return
-            }
-            accContentSegments.push({
-              phase: reasoningPhase,
-              content: chunk,
-            })
-          }
-
-          const findAgent = (runId: string) =>
-            accReasoning.find(
-              (entry) => entry.type === "agent_call" && entry.runId === runId
-            )
-          const appendLocalAgentThinking = (
-            runId: string,
-            chunk: string,
-            phase?: number
-          ) => {
-            const entry = findAgent(runId)
-            if (!entry || entry.type !== "agent_call") return
-            entry.reasoning = appendAgentThought(entry, chunk, phase).reasoning
-          }
-          const appendLocalAgentContent = (
-            runId: string,
-            chunk: string,
-            phase?: number
-          ) => {
-            const entry = findAgent(runId)
-            if (!entry || entry.type !== "agent_call") return
-            const updated = appendAgentContent(entry, chunk, phase)
-            entry.content = updated.content
-            entry.contentSegments = updated.contentSegments
-          }
-
-          while (true) {
-            const { done, value } = await reader.read()
-            // Any bytes — including `: ping` keepalive comments the parser
-            // below skips — count as liveness for the stall watchdog.
+            streamReaderActiveRef.current = true
             streamLastActivityRef.current = Date.now()
-            if (done) break
 
-            buffer += decoder.decode(value, { stream: true })
+            let accThinking = ""
+            let accContent = ""
+            const accContentSegments: NonNullable<Message["contentSegments"]> =
+              []
+            let finalThinkingDuration = 0
+            const accReasoning: StreamingReasoning = []
+            const accAttachments: Attachment[] = []
+            let reasoningPhase = 0
+            let streamMode: "reasoning" | "content" = "reasoning"
 
-            const lines = buffer.split("\n")
-            buffer = lines.pop() ?? ""
+            const appendReasoningThoughtChunk = (chunk: string) => {
+              const last = accReasoning[accReasoning.length - 1]
+              if (last?.type === "thought" && last.phase === reasoningPhase) {
+                last.content += chunk
+                return
+              }
+              accReasoning.push({
+                type: "thought",
+                id: `thought_${accReasoning.length + 1}`,
+                phase: reasoningPhase,
+                content: chunk,
+              })
+            }
 
-            for (const line of lines) {
-              if (!line.startsWith("data: ")) continue
-              const jsonStr = line.slice(6)
-              if (!jsonStr) continue
+            const appendContentChunk = (chunk: string) => {
+              const last = accContentSegments[accContentSegments.length - 1]
+              if (last && last.phase === reasoningPhase) {
+                last.content += chunk
+                return
+              }
+              accContentSegments.push({
+                phase: reasoningPhase,
+                content: chunk,
+              })
+            }
 
-              try {
-                const data = JSON.parse(jsonStr)
+            const findAgent = (runId: string) =>
+              accReasoning.find(
+                (entry) => entry.type === "agent_call" && entry.runId === runId
+              )
+            const appendLocalAgentThinking = (
+              runId: string,
+              chunk: string,
+              phase?: number
+            ) => {
+              const entry = findAgent(runId)
+              if (!entry || entry.type !== "agent_call") return
+              entry.reasoning = appendAgentThought(
+                entry,
+                chunk,
+                phase
+              ).reasoning
+            }
+            const appendLocalAgentContent = (
+              runId: string,
+              chunk: string,
+              phase?: number
+            ) => {
+              const entry = findAgent(runId)
+              if (!entry || entry.type !== "agent_call") return
+              const updated = appendAgentContent(entry, chunk, phase)
+              entry.content = updated.content
+              entry.contentSegments = updated.contentSegments
+            }
+            const terminalSnapshot = () => ({
+              messageId: assistantMsgId,
+              content: accContent,
+              contentSegments: accContentSegments,
+              reasoning: accReasoning,
+              thinking: accThinking,
+              thinkingDuration: finalThinkingDuration,
+              attachments: accAttachments,
+            })
+
+            await readJsonSseStream(response.body, {
+              // Any bytes — including `: ping` keepalive comments the parser
+              // skips — count as liveness for the stall watchdog.
+              onActivity: () => {
+                streamLastActivityRef.current = Date.now()
+              },
+              onEvent: (data) => {
+                if (handleArtifactStreamEvent(data, assistantMsgId)) return
 
                 if (data.type === "thinking") {
                   if (streamMode === "content") {
@@ -2798,10 +2817,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                         item.toolCallId === toolCallId
                     )
                     if (entry?.type === "tool_call") {
-                      entry.deltas = appendBoundedToolDelta(
-                        entry.deltas,
-                        delta
-                      )
+                      entry.deltas = appendBoundedToolDelta(entry.deltas, delta)
                       entry.status = "running"
                     }
                     dispatch({
@@ -3203,7 +3219,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                     if (
                       !accReasoning.some(
                         (item) =>
-                          item.type === "steered_message" && item.id === entry.id
+                          item.type === "steered_message" &&
+                          item.id === entry.id
                       )
                     ) {
                       accReasoning.push({ ...entry, phase: reasoningPhase })
@@ -3237,103 +3254,15 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                       contextUsage: data.contextUsage as ContextUsageSnapshot,
                     })
                   }
-                } else if (data.type === "artifact_end") {
-                  // Server finalised an artifact and persisted it; bridge the
-                  // row to the ConversationArtifactsProvider via a window
-                  // event so the message renderer can swap in the rendered
-                  // card without round-tripping back to the API.
-                  if (data.artifact && typeof window !== "undefined") {
-                    window.dispatchEvent(
-                      new CustomEvent("orch:artifact", {
-                        detail: data.artifact,
-                      })
-                    )
-                  }
-                } else if (data.type === "artifact_start") {
-                  // Bridge to the provider so a "Generating…" placeholder
-                  // appears immediately. Carries messageId so the draft
-                  // lands in the right bubble.
-                  if (
-                    typeof window !== "undefined" &&
-                    data.clientToken &&
-                    data.attrs
-                  ) {
-                    window.dispatchEvent(
-                      new CustomEvent("orch:artifact-start", {
-                        detail: {
-                          clientToken: data.clientToken,
-                          messageId: assistantMsgId,
-                          attrs: data.attrs,
-                        },
-                      })
-                    )
-                  }
-                } else if (data.type === "artifact_chunk") {
-                  // Append content into the draft so the placeholder can
-                  // live-render (mermaid/svg/markdown partials).
-                  if (
-                    typeof window !== "undefined" &&
-                    data.clientToken &&
-                    typeof data.content === "string"
-                  ) {
-                    window.dispatchEvent(
-                      new CustomEvent("orch:artifact-chunk", {
-                        detail: {
-                          clientToken: data.clientToken,
-                          content: data.content,
-                        },
-                      })
-                    )
-                  }
-                } else if (data.type === "artifact_error") {
-                  console.warn("Artifact parse error:", data.message)
-                  if (
-                    typeof window !== "undefined" &&
-                    typeof data.clientToken === "string"
-                  ) {
-                    window.dispatchEvent(
-                      new CustomEvent("orch:artifact-error", {
-                        detail: {
-                          clientToken: data.clientToken,
-                          message:
-                            typeof data.message === "string"
-                              ? data.message
-                              : undefined,
-                        },
-                      })
-                    )
-                  }
                 } else if (data.type === "done") {
                   // Stream complete — adopt the server-persisted message so a
                   // refresh shows the exact same state; fall back to the
                   // locally-accumulated payload if the event lacks it.
                   streamDoneRef.current = true
-                  if (Array.isArray(data.attachments)) {
-                    accAttachments = data.attachments as Attachment[]
-                  }
-                  const finalMsg: Message = assistantMessageFromStreamEvent(
-                    data.message,
-                    assistantMsgId
-                  ) ?? {
-                    id: assistantMsgId,
-                    role: "assistant",
-                    content: accContent,
-                    status: "ok",
-                    contentSegments: accContentSegments,
-                    reasoning: accReasoning,
-                    thinking: accThinking || undefined,
-                    thinkingDuration:
-                      data.thinkingDuration ||
-                      finalThinkingDuration ||
-                      undefined,
-                    durationMs:
-                      typeof data.durationMs === "number"
-                        ? data.durationMs
-                        : undefined,
-                    attachments:
-                      accAttachments.length > 0 ? accAttachments : undefined,
-                    timestamp: Date.now(),
-                  }
+                  const finalMsg = completedAssistantMessage(
+                    data,
+                    terminalSnapshot()
+                  )
                   dispatch({
                     type: "ADD_ASSISTANT_MESSAGE",
                     conversationId: finalConvId,
@@ -3342,26 +3271,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                   handleAssistantFinished(finalConvId, finalMsg)
                 } else if (data.type === "stopped") {
                   streamDoneRef.current = true
-                  const finalMsg: Message = assistantMessageFromStreamEvent(
-                    data.message,
-                    assistantMsgId
-                  ) ?? {
-                    id: assistantMsgId,
-                    role: "assistant",
-                    content: accContent,
-                    status: "aborted",
-                    contentSegments: accContentSegments,
-                    reasoning: accReasoning,
-                    thinking: accThinking || undefined,
-                    thinkingDuration: finalThinkingDuration || 0,
-                    durationMs:
-                      typeof data.durationMs === "number"
-                        ? data.durationMs
-                        : undefined,
-                    attachments:
-                      accAttachments.length > 0 ? accAttachments : undefined,
-                    timestamp: Date.now(),
-                  }
+                  const finalMsg = stoppedAssistantMessage(
+                    data,
+                    terminalSnapshot()
+                  )
                   dispatch({
                     type: "ADD_ASSISTANT_MESSAGE",
                     conversationId: finalConvId,
@@ -3374,37 +3287,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                   // Mirror it into local state so the user sees the error
                   // immediately — symmetrically with the "stopped" branch.
                   streamDoneRef.current = true
-                  const rawError =
-                    typeof data.error === "string" && data.error.trim()
-                      ? data.error
-                      : "The model runtime returned an error."
-                  const errorBody =
-                    accContent && accContent.trim().length > 0
-                      ? `${accContent}\n\n[Error: ${rawError}]`
-                      : `[Error: ${rawError}]`
-                  const finalMsg: Message = assistantMessageFromStreamEvent(
-                    data.message,
-                    assistantMsgId
-                  ) ?? {
-                    id: assistantMsgId,
-                    role: "assistant",
-                    content: errorBody,
-                    status: "error",
-                    contentSegments:
-                      accContentSegments.length > 0
-                        ? accContentSegments
-                        : [{ phase: 0, content: errorBody }],
-                    reasoning: accReasoning,
-                    thinking: accThinking || undefined,
-                    thinkingDuration: finalThinkingDuration || 0,
-                    durationMs:
-                      typeof data.durationMs === "number"
-                        ? data.durationMs
-                        : undefined,
-                    attachments:
-                      accAttachments.length > 0 ? accAttachments : undefined,
-                    timestamp: Date.now(),
-                  }
+                  const { message: finalMsg, error: rawError } =
+                    erroredAssistantMessage(data, terminalSnapshot())
                   dispatch({
                     type: "ADD_ASSISTANT_MESSAGE",
                     conversationId: finalConvId,
@@ -3413,98 +3297,95 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                   handleAssistantFinished(finalConvId, finalMsg)
                   console.error("Stream error:", rawError)
                 }
-              } catch {
-                // Skip malformed JSON
-              }
-            }
-          }
-
-          streamReaderActiveRef.current = false
-        })
-        .catch(async (err) => {
-          streamPostInFlightRef.current = false
-          streamReaderActiveRef.current = false
-          const stallAborted = streamStallRequestedRef.current
-          streamStallRequestedRef.current = false
-          // A plain abort is the user's Stop (or unmount); a stall-requested
-          // abort is the watchdog cutting a dead connection loose — that one
-          // must fall through to recovery.
-          if (err.name === "AbortError" && !stallAborted) return
-          console.error("Chat fetch error:", err)
-
-          // Treat every network-shaped failure as recoverable, regardless of
-          // visibility. The old visibility/offline gate missed the common
-          // flaky-mobile case: visible tab, navigator.onLine still true, and
-          // a fetch that died with a bare "Failed to fetch".
-          if (stallAborted || isLikelyStreamInterruption(err)) {
-            dispatch({
-              type: "SET_STREAMING",
-              isStreaming: true,
-              conversationId: finalConvId,
-              messageId: assistantMsgId,
-              status: recoveryStreamingStatus(),
+              },
             })
-            const recovered = await recoverInterruptedStream(
-              finalConvId,
-              assistantMsgId
-            )
-            if (recovered) {
-              streamDoneRef.current = true
-              return
-            }
 
-            // Nothing recoverable server-side — the start POST most likely
-            // never arrived. While this turn is still the live one (no Stop,
-            // no navigation, same conversation), re-send it: message ids are
-            // stable and persistence upserts by id, so a duplicate start is
-            // the same turn, not a second one.
-            if (
-              sendRetriesLeft > 0 &&
-              streamingRef.current &&
-              clientStreamMessageIdRef.current === assistantMsgId &&
-              activeConversationIdRef.current === finalConvId
-            ) {
-              sendRetriesLeft -= 1
+            streamReaderActiveRef.current = false
+          })
+          .catch(async (err) => {
+            streamPostInFlightRef.current = false
+            streamReaderActiveRef.current = false
+            const stallAborted = streamStallRequestedRef.current
+            streamStallRequestedRef.current = false
+            // A plain abort is the user's Stop (or unmount); a stall-requested
+            // abort is the watchdog cutting a dead connection loose — that one
+            // must fall through to recovery.
+            if (err.name === "AbortError" && !stallAborted) return
+            console.error("Chat fetch error:", err)
+
+            // Treat every network-shaped failure as recoverable, regardless of
+            // visibility. The old visibility/offline gate missed the common
+            // flaky-mobile case: visible tab, navigator.onLine still true, and
+            // a fetch that died with a bare "Failed to fetch".
+            if (stallAborted || isLikelyStreamInterruption(err)) {
               dispatch({
                 type: "SET_STREAMING",
                 isStreaming: true,
                 conversationId: finalConvId,
                 messageId: assistantMsgId,
-                status: "connecting",
+                status: recoveryStreamingStatus(),
               })
-              streamLastActivityRef.current = Date.now()
-              return runStreamTurn()
+              const recovered = await recoverInterruptedStream(
+                finalConvId,
+                assistantMsgId
+              )
+              if (recovered) {
+                streamDoneRef.current = true
+                return
+              }
+
+              // Nothing recoverable server-side — the start POST most likely
+              // never arrived. While this turn is still the live one (no Stop,
+              // no navigation, same conversation), re-send it: message ids are
+              // stable and persistence upserts by id, so a duplicate start is
+              // the same turn, not a second one.
+              if (
+                sendRetriesLeft > 0 &&
+                streamingRef.current &&
+                clientStreamMessageIdRef.current === assistantMsgId &&
+                activeConversationIdRef.current === finalConvId
+              ) {
+                sendRetriesLeft -= 1
+                dispatch({
+                  type: "SET_STREAMING",
+                  isStreaming: true,
+                  conversationId: finalConvId,
+                  messageId: assistantMsgId,
+                  status: "connecting",
+                })
+                streamLastActivityRef.current = Date.now()
+                return runStreamTurn()
+              }
+
+              dispatch({ type: "SET_STREAMING", isStreaming: false })
+              dispatch({
+                type: "CHAT_STREAM_ENDED",
+                conversationId: finalConvId,
+                messageId: assistantMsgId,
+              })
+              return
             }
 
-            dispatch({ type: "SET_STREAMING", isStreaming: false })
+            streamDoneRef.current = true
+            const messageText =
+              err instanceof ChatFetchError && err.chatMessage
+                ? err.chatMessage
+                : `I couldn't start the model runtime: ${errorMessageFromUnknown(err)}`
+            const finalMsg: Message = {
+              id: assistantMsgId,
+              role: "assistant",
+              content: messageText,
+              status: "error",
+              contentSegments: [{ phase: 0, content: messageText }],
+              timestamp: Date.now(),
+            }
             dispatch({
-              type: "CHAT_STREAM_ENDED",
+              type: "ADD_ASSISTANT_MESSAGE",
               conversationId: finalConvId,
-              messageId: assistantMsgId,
+              message: finalMsg,
             })
-            return
-          }
-
-          streamDoneRef.current = true
-          const messageText =
-            err instanceof ChatFetchError && err.chatMessage
-              ? err.chatMessage
-              : `I couldn't start the model runtime: ${errorMessageFromUnknown(err)}`
-          const finalMsg: Message = {
-            id: assistantMsgId,
-            role: "assistant",
-            content: messageText,
-            status: "error",
-            contentSegments: [{ phase: 0, content: messageText }],
-            timestamp: Date.now(),
-          }
-          dispatch({
-            type: "ADD_ASSISTANT_MESSAGE",
-            conversationId: finalConvId,
-            message: finalMsg,
+            handleAssistantFinished(finalConvId, finalMsg)
           })
-          handleAssistantFinished(finalConvId, finalMsg)
-        })
       }
 
       void runStreamTurn().finally(() => {

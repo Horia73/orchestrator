@@ -10,6 +10,7 @@ import { getRemoteMcpIntegrationStatus } from '@/lib/integrations/mcp'
 import { resolveAppOrigin } from '@/lib/app-origin'
 import { getLocationIntelligenceStatus } from '@/lib/location-intelligence/journal'
 import { getActiveProfileId } from '@/lib/profiles/context'
+import { LruCache } from '@/lib/cache/lru-cache'
 
 // ---------------------------------------------------------------------------
 // Connection-status snapshot.
@@ -151,7 +152,9 @@ interface SnapshotCacheEntry {
     inFlight: Promise<void> | null
 }
 
-const cacheByProfile = new Map<string, SnapshotCacheEntry>()
+const cacheByProfile = new LruCache<string, SnapshotCacheEntry>({
+    maxEntries: 100,
+})
 
 /** Reachable Orchestrator origin captured from the last request; status fns need it. */
 let lastKnownOrigin: string | undefined

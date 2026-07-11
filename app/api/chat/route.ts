@@ -16,6 +16,7 @@ import {
 import type {
   Attachment,
   ContextCompactionReasoningEntry,
+  ContextUsageBreakdown,
   ContextUsageSnapshot,
   Conversation,
   MemoryRecallReasoningEntry,
@@ -82,6 +83,10 @@ import {
 } from "@/lib/artifacts/direct-emit"
 import { redactToolArgs } from "@/lib/ai/tools/redaction"
 import { prepareAudioContextsForProvider } from "@/lib/ai/audio-context"
+import {
+  buildContextUsageBreakdown,
+  reconcileContextUsageBreakdown,
+} from "@/lib/ai/context-usage-breakdown"
 import { filterIntegrationToolExposure } from "@/lib/integrations/exposure"
 import { activateIntegrations } from "@/lib/integrations/activation-store"
 import { resolveExistingUploadPath } from "@/lib/uploads"
@@ -129,6 +134,7 @@ import {
 import { createArtifactStreamBridge } from "./artifact-stream"
 import { repairArtifactContent } from "@/lib/artifacts/repair"
 import { runTextSubAgent } from "@/lib/ai/agents/runner"
+import { getAiRunAdmissionBlock } from "@/lib/ai/run-admission"
 import { buildArtifactRepairRuntimeAgent } from "@/lib/ai/agents/artifact-repair"
 import { runWithRequestProfile } from "@/lib/profiles/server"
 
@@ -465,6 +471,7 @@ export async function POST(request: Request) {
       const availableAgents: AgentConfig[] = (orchestrator.canCallAgents ?? [])
         .map((id) => getAgent(id))
         .filter((a): a is AgentConfig => a !== undefined)
+      const declaredTools = getToolsForAgent(orchestrator.tools)
 
       const pendingUpdate = getCachedPendingUpdate()
 
@@ -579,7 +586,7 @@ export async function POST(request: Request) {
         const candidateTools = modelSupportsFunctionTools
           ? filterIntegrationToolExposure(
               dedupeTools([
-                ...getToolsForAgent(orchestrator.tools),
+                ...declaredTools,
                 ...getToolsForBuiltins(orchestrator.builtins),
               ]),
               { conversationId, origin: requestOrigin, agentId: orchestrator.id }
@@ -603,7 +610,7 @@ export async function POST(request: Request) {
           availableAgents,
           conversationId,
           declaredToolIds: orchestrator.tools,
-          declaredTools: getToolsForAgent(orchestrator.tools),
+          declaredTools,
           delegationDepth: 0,
           maxDelegationDepth: MAX_AGENT_DEPTH,
           modelContextWindow,
@@ -624,6 +631,8 @@ export async function POST(request: Request) {
           providerStream,
           agentTools: toolSurface.tools,
           agentBuiltins: toolSurface.builtins,
+          exposedTools: candidateTools,
+          declaredTools,
           systemPrompt,
           prevSession,
           modelContextWindow,
@@ -682,6 +691,23 @@ export async function POST(request: Request) {
       if (!registered) {
         if (claimedFollowUp) {
           requeueClaimedFollowUp(conversationId, claimedFollowUp)
+        }
+        const admissionBlock = getAiRunAdmissionBlock()
+        if (admissionBlock) {
+          return new Response(
+            JSON.stringify({
+              error: "Update in progress. The app will reconnect after restart.",
+              code: "update_in_progress",
+            }),
+            {
+              status: 503,
+              headers: {
+                "Content-Type": "application/json",
+                "Cache-Control": "no-store",
+                "Retry-After": "30",
+              },
+            }
+          )
         }
         const active = getActiveChatStream(conversationId)
         if (active?.messageId === messageId) {
@@ -831,6 +857,7 @@ export async function POST(request: Request) {
       }
       let latestContextUsage: ContextUsageSnapshot | null =
         existingConversation?.contextUsage ?? null
+      let activeContextBreakdown: ContextUsageBreakdown | null = null
       let lastPublishedContextUsageKey = latestContextUsage
         ? contextUsageKey(latestContextUsage)
         : ""
@@ -1238,8 +1265,18 @@ export async function POST(request: Request) {
             snapshot: ContextUsageSnapshot,
             opts?: { force?: boolean }
           ) => {
+            const occupiedTokens =
+              snapshot.contextTokens ?? snapshot.inputTokens ?? null
+            const contextBreakdown = activeContextBreakdown
+              ? reconcileContextUsageBreakdown(
+                  activeContextBreakdown,
+                  occupiedTokens,
+                  snapshot.outputTokens
+                )
+              : snapshot.contextBreakdown
             const enriched = mergeContextUsage(latestContextUsage, {
               ...snapshot,
+              contextBreakdown,
               provider: snapshot.provider || activeAttempt.settings.provider,
               model: snapshot.model || activeAttempt.settings.model,
               requestId: snapshot.requestId ?? messageId,
@@ -1570,6 +1607,37 @@ export async function POST(request: Request) {
 
               try {
                 const resolvedMessages = await buildResolvedMessages()
+                activeContextBreakdown = buildContextUsageBreakdown({
+                  systemPrompt: prepared.systemPrompt,
+                  messages: resolvedMessages,
+                  tools: prepared.agentTools,
+                  exposedTools: prepared.exposedTools,
+                  declaredTools: prepared.declaredTools,
+                  builtins: prepared.agentBuiltins,
+                  availableAgentCount: availableAgents.length,
+                  attachments: messagesForProvider.flatMap(
+                    (message) => message.attachments ?? []
+                  ),
+                })
+                publishContextUsage(
+                  {
+                    provider: prepared.settings.provider,
+                    model: prepared.settings.model,
+                    source: "estimated",
+                    accuracy: "estimated",
+                    updatedAt: Date.now(),
+                    requestId: messageId,
+                    contextWindow: prepared.modelContextWindow,
+                    contextTokens: activeContextBreakdown.estimatedTokens,
+                    inputTokens: activeContextBreakdown.estimatedTokens,
+                    outputTokens: null,
+                    thinkingTokens: null,
+                    cachedTokens: null,
+                    totalTokens: null,
+                    contextBreakdown: activeContextBreakdown,
+                  },
+                  { force: true }
+                )
                 // Snapshot the EXACT input handed to the provider — the full
                 // system prompt and every resolved message with injected
                 // memories / runtime / attachment context already inlined — so

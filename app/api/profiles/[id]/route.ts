@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 
+import { closeDatabaseForProfile } from "@/lib/db"
 import {
   adminProfileView,
   profileStore,
@@ -71,8 +72,12 @@ export async function DELETE(
       )
     }
 
+    const deleteState = parsed.deleteState === true
+    // A deleted profile can no longer use its connection, even when its files
+    // are intentionally retained for manual recovery.
+    closeDatabaseForProfile(id)
     const deleted = profileStore.deleteProfile(id, current.profile.id, {
-      deleteState: parsed.deleteState === true,
+      deleteState,
     })
     return NextResponse.json({ success: deleted })
   } catch (error) {

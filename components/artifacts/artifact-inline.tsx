@@ -1,26 +1,56 @@
 "use client"
 
 import * as React from "react"
+import dynamic from "next/dynamic"
 
 import { cn } from "@/lib/utils"
 import type { ArtifactRow } from "@/lib/artifacts/schema"
 import { AppLinkRenderer } from "./renderers/app-link-renderer"
-import { CadRenderer } from "./renderers/cad-renderer"
 import { CodeRenderer } from "./renderers/code-renderer"
 import { CsvRenderer } from "./renderers/csv-renderer"
-import { DevPreviewRenderer } from "./renderers/dev-preview-renderer"
 import { HtmlSandboxRenderer } from "./renderers/html-sandbox-renderer"
 import { JsonRenderer } from "./renderers/json-renderer"
 import { LatexRenderer } from "./renderers/latex-renderer"
-import { MapRenderer } from "./renderers/map-renderer"
 import { MarkdownArtifactRenderer } from "./renderers/markdown-artifact-renderer"
 import { MermaidRenderer } from "./renderers/mermaid-renderer"
 import { QuestionRenderer } from "./renderers/question-renderer"
 import { ReactSandboxRenderer } from "./renderers/react-sandbox-renderer"
-import { RecipeRenderer } from "./renderers/recipe-renderer"
 import { SvgRenderer } from "./renderers/svg-renderer"
-import { WeatherRenderer } from "./renderers/weather-renderer"
-import { WorkoutRenderer } from "./renderers/workout-renderer"
+
+const MapRenderer = dynamic(
+    () => import("./renderers/map-renderer").then((mod) => mod.MapRenderer),
+    { loading: ArtifactRendererLoading }
+)
+const WeatherRenderer = dynamic(
+    () => import("./renderers/weather-renderer").then((mod) => mod.WeatherRenderer),
+    { loading: ArtifactRendererLoading }
+)
+const RecipeRenderer = dynamic(
+    () => import("./renderers/recipe-renderer").then((mod) => mod.RecipeRenderer),
+    { loading: ArtifactRendererLoading }
+)
+const WorkoutRenderer = dynamic(
+    () => import("./renderers/workout-renderer").then((mod) => mod.WorkoutRenderer),
+    { loading: ArtifactRendererLoading }
+)
+const CadRenderer = dynamic(
+    () => import("./renderers/cad-renderer").then((mod) => mod.CadRenderer),
+    { loading: ArtifactRendererLoading }
+)
+const DevPreviewRenderer = dynamic(
+    () => import("./renderers/dev-preview-renderer").then((mod) => mod.DevPreviewRenderer),
+    { loading: ArtifactRendererLoading }
+)
+
+function ArtifactRendererLoading() {
+    return (
+        <div
+            className="min-h-24 animate-pulse rounded-xl border border-border/60 bg-muted/30"
+            role="status"
+            aria-label="Loading artifact"
+        />
+    )
+}
 
 /**
  * Inline artifact placement.

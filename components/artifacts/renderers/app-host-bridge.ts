@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { useAppEvent } from "@/hooks/use-app-events"
+import { LruCache } from "@/lib/cache/lru-cache"
 
 // ---------------------------------------------------------------------------
 // AppHost bridge — connects a sandboxed artifact iframe to the per-app JSON
@@ -83,7 +84,7 @@ export const APP_HOST_SCRIPT = `
 // Module-scoped resolve cache: artifactId → binding (or null when the
 // artifact is not app code). Cleared on apps.changed so an artifact emitted
 // just before AppSave binds as soon as the registration lands.
-const bindingCache = new Map<string, AppBinding | null>()
+const bindingCache = new LruCache<string, AppBinding | null>({ maxEntries: 500 })
 const bindingInFlight = new Map<string, Promise<AppBinding | null>>()
 
 function resolveBinding(artifactId: string): Promise<AppBinding | null> {
@@ -91,7 +92,11 @@ function resolveBinding(artifactId: string): Promise<AppBinding | null> {
     if (cached !== undefined) return Promise.resolve(cached)
     const inFlight = bindingInFlight.get(artifactId)
     if (inFlight) return inFlight
-    const promise = fetch(`/api/apps/resolve?artifactId=${encodeURIComponent(artifactId)}`)
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), 10_000)
+    const promise = fetch(`/api/apps/resolve?artifactId=${encodeURIComponent(artifactId)}`, {
+        signal: controller.signal,
+    })
         .then(async (res) => {
             if (!res.ok) return null
             const json = await res.json() as { app: AppBinding | null }
@@ -100,8 +105,11 @@ function resolveBinding(artifactId: string): Promise<AppBinding | null> {
         .catch(() => null)
         .then((app) => {
             bindingCache.set(artifactId, app)
-            bindingInFlight.delete(artifactId)
             return app
+        })
+        .finally(() => {
+            window.clearTimeout(timeout)
+            bindingInFlight.delete(artifactId)
         })
     bindingInFlight.set(artifactId, promise)
     return promise

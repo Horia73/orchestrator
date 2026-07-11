@@ -31,7 +31,13 @@ async function main(): Promise<void> {
   try {
     Date.now = () => base
 
-    const { createScheduledTask, getScheduledTask, claimForRun, setTaskState } =
+    const {
+      createScheduledTask,
+      getScheduledTask,
+      claimForRun,
+      deferClaimedRun,
+      setTaskState,
+    } =
       await import("@/lib/scheduling/store")
     const { executeRescheduleTask } = await import("@/lib/ai/tools/schedule")
     const { updateConfig } = await import("@/lib/config")
@@ -60,6 +66,13 @@ async function main(): Promise<void> {
       "late tick advances from anchor, not claim time",
       advanced?.nextRunAt === base + 2 * hourMs,
       { nextRunAt: advanced?.nextRunAt, expected: base + 2 * hourMs }
+    )
+    if (claimed) deferClaimedRun(claimed.task, base + hourMs + 24_000)
+    const deferred = getScheduledTask(recurring.id)
+    check(
+      "update deferral restores the claimed schedule without consuming it",
+      deferred?.status === "scheduled" && deferred.nextRunAt === base + hourMs,
+      { status: deferred?.status, nextRunAt: deferred?.nextRunAt }
     )
 
     Date.now = () => base + 60_000

@@ -487,6 +487,7 @@ export function ChatInput({
                                     draftValue={draft.value}
                                     attachments={draft.attachments}
                                     contextUsage={activeConversation?.contextUsage}
+                                    conversationId={activeConversationId}
                                     side={isChat ? "top" : "bottom"}
                                 />
                                 {fallbackOne && (

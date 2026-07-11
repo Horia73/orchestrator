@@ -134,6 +134,7 @@ async function parseBody(
 }
 
 async function continueInboxReply(args: {
+  runId: string
   id: string
   inboxTitle: string
   messages: Message[]
@@ -141,13 +142,6 @@ async function continueInboxReply(args: {
   attachments?: Attachment[]
   appOrigin: string
 }): Promise<void> {
-  const runId = `inbox_run_${randomUUID()}`
-  registerAgentRun({
-    id: runId,
-    kind: "inbox",
-    conversationId: args.id,
-    startedAt: Date.now(),
-  })
   try {
     const agent = getAgent("inbox-agent") ?? getAgent("orchestrator")
     if (!agent) {
@@ -292,7 +286,7 @@ async function continueInboxReply(args: {
       timestamp: Date.now(),
     })
   } finally {
-    clearAgentRun(runId)
+    clearAgentRun(args.runId)
   }
 }
 
@@ -317,6 +311,20 @@ export async function POST(
               { status: 404 }
             )
 
+          const runId = `inbox_run_${randomUUID()}`
+          const registered = registerAgentRun({
+            id: runId,
+            kind: "inbox",
+            conversationId: id,
+            startedAt: Date.now(),
+          })
+          if (!registered) {
+            return NextResponse.json(
+              { error: "Update in progress. Please retry after reconnect.", code: "update_in_progress" },
+              { status: 503, headers: { "Retry-After": "30" } }
+            )
+          }
+
           const userMsg: Message = {
             id: `msg_${randomUUID()}`,
             role: "user",
@@ -325,6 +333,7 @@ export async function POST(
             attachments: body.attachments.length > 0 ? body.attachments : undefined,
           }
           if (!appendInboxMessage(id, userMsg)) {
+            clearAgentRun(runId)
             return NextResponse.json(
               { error: "Inbox item not found" },
               { status: 404 }
@@ -332,6 +341,7 @@ export async function POST(
           }
 
           void continueInboxReply({
+            runId,
             id,
             inboxTitle: inbox.title,
             messages: [...inbox.messages, userMsg],

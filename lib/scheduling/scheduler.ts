@@ -1,6 +1,7 @@
 import type { ScheduledTask } from './schema'
 import {
     claimForRun,
+    deferClaimedRun,
     finishRun,
     getDueCandidates,
     getScheduledTask,
@@ -17,6 +18,7 @@ import {
     storageRetentionChanged,
 } from '@/lib/storage/retention'
 import { runFilesystemRetentionProcess } from '@/lib/storage/filesystem-retention-runner'
+import { getAiRunAdmissionBlock } from '@/lib/ai/run-admission'
 
 // ---------------------------------------------------------------------------
 // The scheduler tick. This is the ONLY long-lived background loop in the app.
@@ -85,6 +87,11 @@ async function executeAndFinish(profileId: string, task: ScheduledTask, isOnce: 
                 trigger: 'schedule',
                 suppressAutoErrorSurface: escalateOnError,
             })
+            if (result.deferred) {
+                deferClaimedRun(task, Date.now())
+                log(`deferred "${task.title}" (${task.id}, ${profileId}) for managed update`)
+                return
+            }
             finishRun(task.id, {
                 ok: result.ok,
                 isOnce,
@@ -198,6 +205,9 @@ async function tick(): Promise<void> {
 }
 
 async function tickProfile(profileId: string): Promise<void> {
+    // Do not claim/advance schedules while an update is rebuilding the app.
+    // A registration-level check still covers the race after this guard.
+    if (getAiRunAdmissionBlock()) return
     const now = Date.now()
     const due = getDueCandidates(now)
     for (const task of due) {
@@ -323,6 +333,9 @@ export async function runTaskNow(id: string): Promise<{ ok: boolean; conversatio
         const now = Date.now()
         const { runScheduledTask } = await import('./run')
         const result = await runScheduledTask(task, now, { trigger: 'manual' })
+        if (result.deferred) {
+            return { ok: false, conversationId: null, error: 'Update in progress.' }
+        }
         recordManualRun(id, {
             ok: result.ok,
             conversationId: result.conversationId,

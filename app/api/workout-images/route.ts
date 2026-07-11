@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 
+import { SlidingWindowRateLimiter } from '@/lib/api/sliding-window-rate-limit'
 import { searchWorkoutImages } from '@/lib/workout/image-search'
 import { resolveExerciseImage } from '@/lib/workout/exercise-image-db'
 import { resolveExerciseGif } from '@/lib/workout/exercise-gif-search'
@@ -14,7 +15,7 @@ const SUCCESS_HEADERS = { 'Cache-Control': 'public, max-age=3600, s-maxage=86400
 
 const RATE_WINDOW_MS = 60_000
 const RATE_MAX_REQUESTS = 30
-const rateBucket = new Map<string, number[]>()
+const rateLimiter = new SlidingWindowRateLimiter(RATE_WINDOW_MS, 500)
 
 export async function GET(request: Request) {
   return runWithRequestProfile(request, async () => {
@@ -115,20 +116,5 @@ function extractClientKey(request: Request): string {
 }
 
 function withinRateLimit(key: string): boolean {
-    const now = Date.now()
-    const window = (rateBucket.get(key) ?? []).filter((t) => now - t < RATE_WINDOW_MS)
-    if (window.length >= RATE_MAX_REQUESTS) {
-        rateBucket.set(key, window)
-        return false
-    }
-    window.push(now)
-    rateBucket.set(key, window)
-    if (rateBucket.size > 200) {
-        for (const [k, ts] of rateBucket) {
-            if (ts.length === 0 || now - ts[ts.length - 1] >= RATE_WINDOW_MS) {
-                rateBucket.delete(k)
-            }
-        }
-    }
-    return true
+    return rateLimiter.check(key, RATE_MAX_REQUESTS).allowed
 }

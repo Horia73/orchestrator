@@ -1,4 +1,5 @@
 import type { ToolDef, ToolExecutionContext, ToolResult } from '@/lib/ai/agents/types'
+import { LruCache } from '@/lib/cache/lru-cache'
 import { listVersionsForIdentifier } from '@/lib/artifacts/store'
 import {
     geocodeAddresses,
@@ -634,7 +635,9 @@ interface PendingWeatherArtifact {
     targetDate?: string
 }
 
-const pendingWeatherArtifacts = new Map<string, PendingWeatherArtifact>()
+const pendingWeatherArtifacts = new LruCache<string, PendingWeatherArtifact>({
+    maxEntries: 200,
+})
 const PENDING_WEATHER_TTL_MS = 10 * 60 * 1000
 
 /** Smart guidance (instant card + Outfit/Why "Working…" placeholders the

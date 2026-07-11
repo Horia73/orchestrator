@@ -25,6 +25,16 @@ const ORPHAN_UPLOAD_GRACE_MS = 7 * 24 * 60 * 60 * 1000
 const dbConnections = new Map<string, Database.Database>()
 const capturedSchemaExecSql: string[] = []
 
+/** Close and forget a profile DB before its state directory is removed. */
+export function closeDatabaseForProfile(profileId: string): boolean {
+  if (isProductionBuild) return false
+  const database = dbConnections.get(profileId)
+  if (!database) return false
+  database.close()
+  dbConnections.delete(profileId)
+  return true
+}
+
 function databasePathForProfile(profileId: string): string {
   if (isProductionBuild) {
     return path.join(os.tmpdir(), `orchestrator-build-${process.pid}.db`)
