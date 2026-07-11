@@ -193,6 +193,31 @@ export class ClaudeCodeProvider implements AIProvider {
             // and project-level .mcp.json. Otherwise stale entries from the
             // user's own dev environment leak into agent runs.
             args.push('--strict-mcp-config')
+
+            // Native Bash run_in_background dies seconds after a headless
+            // turn's final message; the durable path is the bridged
+            // start_background_job tool. The system prompt says so, but the
+            // native param sits directly in the model's tool schema while
+            // the MCP tool hides behind ToolSearch — so enforce it with a
+            // PreToolUse hook that denies background Bash calls and points
+            // at the tracked-job tool. jq ships in the runtime image; where
+            // it is missing the hook fails open (only exit code 2 blocks).
+            if (tools.some(tool => tool.name === 'start_background_job')) {
+                const hookMessage = 'Native Bash run_in_background is disabled here: the task would be killed as soon as this turn ends. Use the tracked background job tool instead - load it with ToolSearch (select:mcp__orch-tools__start_background_job), then call start_background_job; it survives the turn and wakes this conversation with a completion notice when it exits.'
+                const hookCommand = `if jq -e '.tool_input.run_in_background == true' >/dev/null 2>&1; then echo '${hookMessage}' >&2; exit 2; fi`
+                const settingsDir = mkdtempSync(join(tmpdir(), 'orch-cc-settings-'))
+                const settingsPath = join(settingsDir, 'settings.json')
+                writeFileSync(settingsPath, JSON.stringify({
+                    hooks: {
+                        PreToolUse: [{
+                            matcher: 'Bash',
+                            hooks: [{ type: 'command', command: hookCommand }],
+                        }],
+                    },
+                }), 'utf-8')
+                args.push('--settings', settingsPath)
+                cleanups.push(() => { try { rmSync(settingsDir, { recursive: true, force: true }) } catch { /* fine */ } })
+            }
             args.push('--allowedTools', [...nativeToolsForRun, `mcp__${ORCH_TOOLS_MCP_SERVER_NAME}`].join(','))
             // No human in the loop — accept whatever tools we expose.
             args.push('--permission-mode', 'bypassPermissions')

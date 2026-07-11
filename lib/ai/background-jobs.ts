@@ -4,7 +4,7 @@ import { spawn as spawnProcess } from 'child_process'
 
 import db, { addMessage, getConversation } from '@/lib/db'
 import type { Message } from '@/lib/types'
-import { augmentedEnv } from '@/lib/cli/resolve-bin'
+import { augmentedEnv, resolveCommandShell } from '@/lib/cli/resolve-bin'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { getActiveProfileId, runWithProfileContext } from '@/lib/profiles/context'
 import { getActiveChatStream } from '@/lib/chat-streams'
@@ -35,6 +35,9 @@ import {
  *
  * Restart resilience: the spawned shell writes its exit code to a marker file,
  * and a boot-armed poll reconciles rows whose watcher died with the server.
+ * Secret-free jobs log through their own file descriptor (not a pipe into
+ * this process), so on non-container installs they keep running AND logging
+ * across a server restart; the poll then finalizes them from the marker.
  */
 
 export interface BackgroundJobRow {
@@ -46,7 +49,7 @@ export interface BackgroundJobRow {
     pid: number | null
     logPath: string
     exitMarkerPath: string | null
-    status: 'running' | 'exited' | 'killed' | 'lost'
+    status: 'running' | 'exited' | 'failed' | 'killed' | 'lost'
     exitCode: number | null
     wakeOnExit: number
     startedAt: number
@@ -129,7 +132,7 @@ function insertBackgroundJob(row: BackgroundJobRow): void {
 
 function finalizeBackgroundJob(
     id: string,
-    status: 'exited' | 'killed' | 'lost',
+    status: 'exited' | 'failed' | 'killed' | 'lost',
     exitCode: number | null,
 ): BackgroundJobRow | null {
     db.prepare(
@@ -183,13 +186,16 @@ export function startTrackedBackgroundJob(args: StartBackgroundJobArgs): StartBa
     const exitMarkerPath = path.join(jobsDir, `${id}.exit`)
     fs.mkdirSync(/* turbopackIgnore: true */ jobsDir, { recursive: true })
 
-    const logStream = fs.createWriteStream(/* turbopackIgnore: true */ logPath, { flags: 'a' })
-    const logRedactor = createSecretStreamRedactor(args.injection.redactions)
-    logStream.write(redactSecretText(`$ ${args.command}\n`, args.injection.redactions))
-    if (args.injection.keys.length > 0) {
-        logStream.write(`[orchestrator] injected env keys: ${args.injection.keys.join(', ')}\n`)
-    }
-    logStream.write('\n')
+    const header = [
+        redactSecretText(`$ ${args.command}\n`, args.injection.redactions),
+        ...(args.injection.keys.length > 0
+            ? [`[orchestrator] injected env keys: ${args.injection.keys.join(', ')}\n`]
+            : []),
+        '\n',
+    ].join('')
+    try {
+        fs.appendFileSync(/* turbopackIgnore: true */ logPath, header)
+    } catch { /* the log is best-effort; the job itself matters more */ }
 
     // Run the command in a subshell and persist its exit code to a marker
     // file — that is what lets a restarted server reconcile jobs whose
@@ -208,20 +214,51 @@ export function startTrackedBackgroundJob(args: StartBackgroundJobArgs): StartBa
         ORCHESTRATOR_PROFILE_STATE_DIR: paths.stateDir,
         ORCHESTRATOR_PROJECT_RUNS_DIR: path.join(process.cwd(), '.orchestrator', 'project-runs'),
     }
+
+    // Secret-free jobs write straight to the log file: the child owns the
+    // fd, so both the job and its output survive a server restart instead of
+    // dying on SIGPIPE the moment the dead parent's pipe reader vanishes.
+    // Jobs with injected secrets keep the in-process pipe so redaction
+    // happens before anything reaches disk.
+    let logFd: number | null = null
+    if (args.injection.redactions.length === 0) {
+        try {
+            logFd = fs.openSync(/* turbopackIgnore: true */ logPath, 'a')
+        } catch { logFd = null }
+    }
+    const pipeOutput = logFd === null
+
     let proc: ReturnType<typeof spawnProcess>
     try {
-        proc = spawnProcess(process.env.SHELL || '/bin/zsh', ['-lc', wrappedCommand], {
+        proc = spawnProcess(resolveCommandShell(), ['-lc', wrappedCommand], {
             cwd: args.cwd,
             env: augmentedEnv({ ...runtimeEnv, ...args.injection.env }),
-            stdio: ['ignore', 'pipe', 'pipe'],
+            stdio: pipeOutput ? ['ignore', 'pipe', 'pipe'] : ['ignore', logFd!, logFd!],
             detached: true,
         })
     } catch (err) {
-        logStream.end()
+        if (logFd !== null) { try { fs.closeSync(logFd) } catch { /* already closed */ } }
         return {
             ok: false,
             error: err instanceof Error ? err.message : `Could not start command in ${displayPath(args.cwd)}`,
         }
+    }
+    // The child holds its own copy of the log fd; release the parent's.
+    if (logFd !== null) { try { fs.closeSync(logFd) } catch { /* already closed */ } }
+
+    const logStream = pipeOutput
+        ? fs.createWriteStream(/* turbopackIgnore: true */ logPath, { flags: 'a' })
+        : null
+    const logRedactor = pipeOutput ? createSecretStreamRedactor(args.injection.redactions) : null
+
+    const writeLogNote = (text: string) => {
+        if (logStream) {
+            logStream.write(text)
+            return
+        }
+        try {
+            fs.appendFileSync(/* turbopackIgnore: true */ logPath, text)
+        } catch { /* best-effort */ }
     }
 
     const timeoutMs = Math.min(
@@ -248,46 +285,74 @@ export function startTrackedBackgroundJob(args: StartBackgroundJobArgs): StartBa
     insertBackgroundJob(row)
     watchedJobs.add(id)
 
+    const killJobProcess = (signal: NodeJS.Signals) => {
+        if (typeof proc.pid !== 'number') return
+        try { process.kill(-proc.pid, signal) } catch { try { proc.kill(signal) } catch { /* gone */ } }
+    }
+
     let timedOut = false
     const timer = setTimeout(() => {
         timedOut = true
-        logStream.write(`\n[orchestrator] Timeout after ${timeoutMs}ms; sending SIGTERM.\n`)
-        try { process.kill(-proc.pid!, 'SIGTERM') } catch { try { proc.kill('SIGTERM') } catch { /* gone */ } }
-        setTimeout(() => {
-            try { process.kill(-proc.pid!, 'SIGKILL') } catch { try { proc.kill('SIGKILL') } catch { /* gone */ } }
-        }, 1500)
+        writeLogNote(`\n[orchestrator] Timeout after ${timeoutMs}ms; sending SIGTERM.\n`)
+        killJobProcess('SIGTERM')
+        setTimeout(() => killJobProcess('SIGKILL'), 1500)
     }, timeoutMs)
 
-    const writeRedacted = (chunk: Buffer | string) => {
-        const text = typeof chunk === 'string' ? chunk : chunk.toString('utf-8')
-        const redacted = logRedactor.push(text)
-        if (redacted) logStream.write(redacted)
-    }
-    proc.stdout?.on('data', writeRedacted)
-    proc.stderr?.on('data', writeRedacted)
-    proc.on('error', err => {
-        logStream.write(`\n[orchestrator] spawn error: ${err.message}\n`)
-    })
-    proc.on('exit', code => {
+    // 'exit' and 'error' can both fire (and spawn failures fire ONLY
+    // 'error'); settle exactly once so the row can never stay 'running'
+    // with a dead in-process watcher.
+    let settled = false
+    const settleJob = (
+        status: 'exited' | 'failed' | 'killed',
+        exitCode: number | null,
+        note: string,
+    ) => {
+        if (settled) return
+        settled = true
         clearTimeout(timer)
-        const tail = logRedactor.flush()
-        if (tail) logStream.write(tail)
-        const durationMs = Date.now() - row.startedAt
-        logStream.write(`\n[orchestrator] exited with code ${code ?? 'unknown'} after ${durationMs}ms\n`)
-        logStream.end()
         watchedJobs.delete(id)
+        if (logStream && logRedactor) {
+            const tail = logRedactor.flush()
+            if (tail) logStream.write(tail)
+            logStream.write(note)
+            logStream.end()
+        } else {
+            writeLogNote(note)
+        }
         try {
             runWithProfileContext({ profileId }, () => {
-                const finalized = finalizeBackgroundJob(
-                    id,
-                    timedOut ? 'killed' : 'exited',
-                    typeof code === 'number' ? code : null,
-                )
+                const finalized = finalizeBackgroundJob(id, status, exitCode)
                 if (finalized) void notifyBackgroundJobCompletion(profileId, finalized)
             })
         } catch (err) {
             console.error(`[background-jobs] failed to finalize ${id}`, err)
         }
+    }
+
+    if (pipeOutput) {
+        const writeRedacted = (chunk: Buffer | string) => {
+            const text = typeof chunk === 'string' ? chunk : chunk.toString('utf-8')
+            const redacted = logRedactor!.push(text)
+            if (redacted) logStream!.write(redacted)
+        }
+        proc.stdout?.on('data', writeRedacted)
+        proc.stderr?.on('data', writeRedacted)
+    }
+    proc.on('error', err => {
+        if (typeof proc.pid === 'number') {
+            // Post-spawn error (e.g. a failed kill); 'exit' still settles.
+            writeLogNote(`\n[orchestrator] process error: ${err.message}\n`)
+            return
+        }
+        settleJob('failed', null, `\n[orchestrator] spawn error: ${err.message}\n`)
+    })
+    proc.on('exit', code => {
+        const durationMs = Date.now() - row.startedAt
+        settleJob(
+            timedOut ? 'killed' : 'exited',
+            typeof code === 'number' ? code : null,
+            `\n[orchestrator] exited with code ${code ?? 'unknown'} after ${durationMs}ms\n`,
+        )
     })
     proc.unref()
 
@@ -348,11 +413,13 @@ export function buildBackgroundJobNotice(job: BackgroundJobRow): string {
     const outcome =
         job.status === 'killed'
             ? 'was killed (timeout or explicit stop)'
-            : job.status === 'lost'
-                ? 'is no longer running (its exit was not observed — likely a server restart)'
-                : job.exitCode === 0
-                    ? 'finished successfully'
-                    : `finished with exit code ${job.exitCode ?? 'unknown'}`
+            : job.status === 'failed'
+                ? 'failed to start (the process could not be spawned — see the log tail)'
+                : job.status === 'lost'
+                    ? 'is no longer running (its exit was not observed — likely a server restart)'
+                    : job.exitCode === 0
+                        ? 'finished successfully'
+                        : `finished with exit code ${job.exitCode ?? 'unknown'}`
     const tail = readBackgroundJobLogTail(job).trim()
     return [
         `<${BACKGROUND_JOB_NOTICE_TAG}>`,
@@ -446,6 +513,26 @@ async function reconcileBackgroundJobsForActiveProfile(profileId: string): Promi
                 console.error(`[background-jobs] completion notice for ${job.id} failed`, err)
             }
         }
+    }
+    pruneExpiredBackgroundJobs()
+}
+
+/** Finished jobs older than the retention window are dropped together with
+ *  their log + exit-marker files, so `.background-jobs/` and the table do
+ *  not grow without bound. */
+export const BACKGROUND_JOB_RETENTION_MS = 14 * 24 * 60 * 60 * 1000
+
+export function pruneExpiredBackgroundJobs(): void {
+    const cutoff = Date.now() - BACKGROUND_JOB_RETENTION_MS
+    const expired = db.prepare(
+        "SELECT * FROM background_jobs WHERE status != 'running' AND endedAt IS NOT NULL AND endedAt < ?"
+    ).all(cutoff) as BackgroundJobRow[]
+    for (const job of expired) {
+        for (const filePath of [job.logPath, job.exitMarkerPath]) {
+            if (!filePath) continue
+            try { fs.rmSync(/* turbopackIgnore: true */ filePath, { force: true }) } catch { /* best-effort */ }
+        }
+        db.prepare('DELETE FROM background_jobs WHERE id = ?').run(job.id)
     }
 }
 

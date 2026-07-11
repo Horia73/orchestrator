@@ -123,6 +123,34 @@ export function augmentedEnv(extra?: Record<string, string | undefined>): NodeJS
     return env
 }
 
+/**
+ * Resolve the shell that runs agent commands (foreground Bash tool and
+ * tracked background jobs). $SHELL is honored when it points at a real
+ * executable (interactive installs); container images often have no SHELL
+ * env and no zsh, so fall through the common system shells instead of
+ * hardcoding one — a bare `SHELL || '/bin/zsh'` fallback made every spawn
+ * fail with `spawn /bin/zsh ENOENT` in the production Docker image.
+ */
+let commandShell: string | null = null
+export function resolveCommandShell(): string {
+    if (commandShell) return commandShell
+    const candidates = [
+        process.env.SHELL?.trim(),
+        '/bin/bash',
+        '/usr/bin/bash',
+        '/bin/zsh',
+        '/bin/sh',
+        '/usr/bin/sh',
+    ]
+    for (const candidate of candidates) {
+        if (candidate && isAbsolute(candidate) && existsSync(/* turbopackIgnore: true */ candidate)) {
+            commandShell = candidate
+            return candidate
+        }
+    }
+    return '/bin/sh'
+}
+
 function npmGlobalPrefix(home: string): string {
     const configured = process.env.NPM_CONFIG_PREFIX?.trim()
     return configured || join(/* turbopackIgnore: true */ home, '.npm-global')

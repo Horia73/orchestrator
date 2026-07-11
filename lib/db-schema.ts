@@ -171,7 +171,7 @@ export function initializeDatabaseSchema(db: SqliteExecutor): void {
           pid INTEGER,
           logPath TEXT NOT NULL,
           exitMarkerPath TEXT,
-          status TEXT NOT NULL DEFAULT 'running', -- running | exited | killed | lost
+          status TEXT NOT NULL DEFAULT 'running', -- running | exited | failed | killed | lost
           exitCode INTEGER,
           wakeOnExit INTEGER NOT NULL DEFAULT 1,
           startedAt INTEGER NOT NULL,

@@ -104,11 +104,6 @@ export const manageBackgroundJobsTool: ToolDef = {
     tags: ['execute', 'background'],
 }
 
-export const BACKGROUND_JOB_TOOL_IDS: string[] = [
-    startBackgroundJobTool.id,
-    manageBackgroundJobsTool.id,
-]
-
 function jobSummary(job: NonNullable<ReturnType<typeof getBackgroundJob>>) {
     return {
         id: job.id,

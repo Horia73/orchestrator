@@ -2,7 +2,7 @@ import path from 'path'
 
 import type { ToolExecutionContext, ToolResult } from '@/lib/ai/agents/types'
 import { MAX_TOOL_DELTA_TEXT_CHARS } from '@/lib/ai/reasoning-limits'
-import { augmentedEnv } from '@/lib/cli/resolve-bin'
+import { augmentedEnv, resolveCommandShell } from '@/lib/cli/resolve-bin'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { startTrackedBackgroundJob } from '@/lib/ai/background-jobs'
 import { displayPath } from './sandbox'
@@ -26,7 +26,6 @@ export async function executeBash(args: Record<string, unknown>, ctx?: ToolExecu
     const cwdResult = resolveCwd(stringArg(args, ['cwd']))
     if (!cwdResult.ok) return { success: false, error: cwdResult.error }
 
-    const timeoutMs = clamp(Math.floor(numberArg(args, ['timeout'], DEFAULT_TIMEOUT_MS)), 1_000, MAX_TIMEOUT_MS)
     const runInBackground = booleanArg(args, ['run_in_background'])
     const envResolution = resolveEnvVarInjection(collectEnvKeys(args))
     if (!envResolution.ok) {
@@ -37,7 +36,17 @@ export async function executeBash(args: Record<string, unknown>, ctx?: ToolExecu
         }
     }
 
-    if (runInBackground) return startBackgroundCommand(command, cwdResult.cwd, timeoutMs, envResolution.injection, ctx)
+    if (runInBackground) {
+        // Background jobs take the BACKGROUND defaults (30 min default, 24 h
+        // cap — applied by startTrackedBackgroundJob), never the foreground
+        // 2-minute default: an omitted timeout must not kill a long build.
+        const explicitTimeout = numberArg(args, ['timeout'], Number.NaN)
+        const backgroundTimeoutMs = Number.isFinite(explicitTimeout)
+            ? Math.floor(explicitTimeout)
+            : undefined
+        return startBackgroundCommand(command, cwdResult.cwd, backgroundTimeoutMs, envResolution.injection, ctx)
+    }
+    const timeoutMs = clamp(Math.floor(numberArg(args, ['timeout'], DEFAULT_TIMEOUT_MS)), 1_000, MAX_TIMEOUT_MS)
     return runForegroundCommand(command, cwdResult.cwd, timeoutMs, envResolution.injection, ctx)
 }
 
@@ -59,7 +68,7 @@ function runtimeCommandEnv(): Record<string, string> {
     }
 }
 
-function startBackgroundCommand(command: string, cwd: string, timeoutMs: number, injection: EnvVarInjection, ctx?: ToolExecutionContext): ToolResult {
+function startBackgroundCommand(command: string, cwd: string, timeoutMs: number | undefined, injection: EnvVarInjection, ctx?: ToolExecutionContext): ToolResult {
     // Background commands run as TRACKED jobs: registered in background_jobs,
     // detached from this turn, and the owning conversation gets a completion
     // notice (steering follow-up or headless wake) when the process exits.
@@ -166,7 +175,7 @@ async function runForegroundCommand(command: string, cwd: string, timeoutMs: num
         signal?.addEventListener('abort', onAbort, { once: true })
 
         try {
-            proc = ptySpawn(process.env.SHELL || '/bin/zsh', ['-lc', command], {
+            proc = ptySpawn(resolveCommandShell(), ['-lc', command], {
                 name: 'xterm-256color',
                 cols: 120,
                 rows: 32,

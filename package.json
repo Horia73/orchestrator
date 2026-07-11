@@ -29,6 +29,7 @@
     "smoke:memory-reflection": "tsx scripts/smoke-memory-reflection.ts",
     "smoke:memory-context": "tsx scripts/smoke-memory-context.ts",
     "smoke:storage-retention": "tsx scripts/smoke-storage-retention.ts",
+    "smoke:background-jobs": "tsx scripts/smoke-background-jobs.ts",
     "smoke:filesystem-retention": "tsx scripts/smoke-filesystem-retention.ts",
     "smoke:codex-runtime-retention": "tsx scripts/smoke-codex-runtime-retention.ts",
     "smoke:capability-audit": "tsx scripts/smoke-capability-audit.ts",

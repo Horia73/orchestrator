@@ -24,7 +24,7 @@ export const bashTool: ToolDef = {
             },
             timeout: {
                 type: 'integer',
-                description: 'Timeout in milliseconds. Defaults to 120000 and is capped at 600000.',
+                description: 'Timeout in milliseconds. Foreground: defaults to 120000, capped at 600000. With run_in_background: defaults to 1800000 (30 minutes), capped at 86400000 (24 hours).',
             },
             run_in_background: {
                 type: 'boolean',
