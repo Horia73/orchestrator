@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Brain, Check, ChevronDown, Copy, CheckCircle2, CircleAlert, CircleStop, Clock, Download, ExternalLink, FileText, Loader2, RefreshCw, Terminal } from "lucide-react"
+import { Brain, Check, ChevronDown, Copy, CheckCircle2, CircleAlert, CircleStop, Clock, Download, ExternalLink, FileText, Loader2, Monitor, RefreshCw, Terminal } from "lucide-react"
 import type { AgentCallReasoningEntry, Attachment, ContentSegment, ContextCompactionReasoningEntry, MemoryRecallReasoningEntry, Message, ReasoningEntry, SteeredMessageReasoningEntry, ToolCallReasoningEntry } from "@/lib/types"
 import { parseSteeredMessage } from "@/lib/steered-message"
 import { cn } from "@/lib/utils"
@@ -14,6 +14,7 @@ import { useConversationArtifacts } from "@/components/artifacts/use-conversatio
 import { downloadArtifact } from "@/components/artifacts/artifact-inline"
 import { InlineToolCallView, InlineWebSearchGroup, TOOL_CALL_CARD_HEIGHT, getToolCallDisplayTitle, isWebSearchToolCall, shouldExpandToolCallByDefault } from "@/components/tool-call-view"
 import { BrowserAgentLiveView } from "@/components/browser-agent-live-view"
+import { useBrowserPanelState } from "@/components/chat/browser-panel-context"
 import { AUDIO_CONTEXT_AGENT_ID, AUDIO_TRANSCRIPT_AGENT_ID, AudioContextAgentCard } from "@/components/chat/audio-context-agent-card"
 import { useMessageSelectionGutter } from "@/components/message-bubble/use-message-selection-gutter"
 import { useTrapWheel } from "@/components/use-trap-wheel"
@@ -1304,10 +1305,32 @@ function BrowserAgentCallBlock({
 }) {
     const awaitingUser = isBrowserAgentAwaitingUser(entry)
     const browserSessionId = browserSessionIdFromContent(entry.content)
+    const { panelRunId } = useBrowserPanelState()
+    // While the desktop side panel hosts this run, collapse the inline block
+    // to a chip so only one live-view (noVNC) connection is mounted at a time.
+    const shownInPanel = panelRunId === entry.runId
     return (
         <div className="relative z-10 flex max-w-full flex-col gap-2 py-1 text-left">
             <div className="ml-7 grid w-[calc(100%_-_1.75rem)] max-w-[760px] gap-2">
-                <BrowserAgentLiveView active={entry.status === "running" || awaitingUser} sessionId={browserSessionId} onOpenDetails={onOpen ? () => onOpen(entry) : undefined} />
+                {shownInPanel ? (
+                    <button
+                        type="button"
+                        onClick={onOpen ? () => onOpen(entry) : undefined}
+                        className="group flex w-full cursor-pointer items-center gap-3 rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-left text-[12px] text-muted-foreground transition-colors hover:border-border hover:bg-muted/35 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                        aria-label="Browser agent is shown in the side panel"
+                        title="Browser agent is shown in the side panel"
+                    >
+                        <Monitor className="size-4 shrink-0" />
+                        <span className="min-w-0 flex-1 truncate">
+                            Browser agent · {formatAgentStatus(entry.status, entry.queued)}
+                        </span>
+                        <span className="shrink-0 rounded bg-sky-500/10 px-1.5 py-0.5 text-sky-700 dark:text-sky-300">
+                            live in side panel
+                        </span>
+                    </button>
+                ) : (
+                    <BrowserAgentLiveView active={entry.status === "running" || awaitingUser} sessionId={browserSessionId} onOpenDetails={onOpen ? () => onOpen(entry) : undefined} />
+                )}
                 {awaitingUser && (
                     <div className="rounded-md border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-800 dark:text-amber-200">
                         Browser is waiting for user input or confirmation.

@@ -4,7 +4,7 @@ import os from 'os'
 import path from 'path'
 
 import type { BrowserEvidenceCapture } from '@/lib/browser-agent-runtime/agent'
-import { createBrowserManager, type BrowserDownloadFile, type BrowserManager, type BrowserPageSession } from '@/lib/browser-agent-runtime/browser'
+import { createBrowserManager, type BrowserDiagnosticsSnapshot, type BrowserDownloadFile, type BrowserManager, type BrowserPageSession } from '@/lib/browser-agent-runtime/browser'
 import type { BrowserLiveViewState } from '@/lib/browser-agent-runtime/display'
 import type { AgentConfig as BrowserRuntimeConfig } from '@/lib/browser-agent-runtime/config'
 import { createAgentRuntime, type AgentRuntime, type AgentRuntimeStatus } from '@/lib/browser-agent-runtime/runtime'
@@ -58,6 +58,13 @@ export interface BrowserLiveViewClientState extends BrowserLiveViewState {
 export interface BrowserLiveClipboardResult {
     text: string | null
     state: BrowserLiveViewClientState
+}
+
+export interface BrowserSessionDiagnosticsResult {
+    sessionId: string | null
+    status: ManagedBrowserSessionStatus | null
+    running: boolean
+    diagnostics: BrowserDiagnosticsSnapshot | null
 }
 
 export interface AcquireBrowserSessionOptions {
@@ -387,6 +394,26 @@ class BrowserSessionManager {
             running: sessionStates.some(session => session.running),
             paused: sessionStates.some(session => session.paused),
             sessions: sessionStates,
+        }
+    }
+
+    async getSessionDiagnostics(sessionId?: string | null): Promise<BrowserSessionDiagnosticsResult> {
+        const session = this.getHumanInteractionSession(sessionId)
+        if (!session) {
+            return { sessionId: null, status: null, running: false, diagnostics: null }
+        }
+        let running = false
+        try {
+            const status = await session.runtime.getStatus()
+            running = status.running
+        } catch {
+            running = false
+        }
+        return {
+            sessionId: session.id,
+            status: session.status,
+            running,
+            diagnostics: session.pageSession.getDiagnostics(),
         }
     }
 

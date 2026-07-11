@@ -1,8 +1,8 @@
-import { chromium, BrowserContext, Page } from 'patchright';
+import { chromium, BrowserContext, ElementHandle, Page } from 'patchright';
 import { spawnSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { DEFAULT_VIEWPORT } from './viewport';
+import { DEFAULT_VIEWPORT, VIEWPORT_PRESETS, type ViewportPreset } from './viewport';
 import { createBrowserDisplayController, type BrowserDisplayController, type BrowserLiveViewState } from './display';
 import {
     clampDurationMs,
@@ -38,12 +38,16 @@ import type {
     BrowserManager,
     BrowserManagerOptions,
     BrowserNetworkEntry,
+    BrowserClickRefResult,
+    BrowserPageElementRef,
     BrowserPageSettleOptions,
     BrowserPageSettleResult,
     BrowserPageSession,
     BrowserPageSessionCapabilities,
     BrowserPageErrorEntry,
     BrowserPageSessionOptions,
+    BrowserReadPageResult,
+    BrowserSetViewportResult,
     BrowserTabInfo,
     BrowserTabOrigin,
     BrowserVideoRecording,
@@ -72,11 +76,15 @@ export type {
     BrowserManager,
     BrowserManagerOptions,
     BrowserNetworkEntry,
+    BrowserClickRefResult,
+    BrowserPageElementRef,
     BrowserPageMetrics,
     BrowserPageSession,
     BrowserPageSessionCapabilities,
     BrowserPageErrorEntry,
     BrowserPageSessionOptions,
+    BrowserReadPageResult,
+    BrowserSetViewportResult,
     BrowserTabInfo,
     BrowserTabOrigin,
     BrowserVideoRecording,
@@ -84,6 +92,7 @@ export type {
 } from './browser-types';
 
 const MAX_DIAGNOSTIC_ENTRIES = 80;
+const MAX_READ_PAGE_ELEMENTS = 150;
 const MAX_FETCH_BODY_CHARS = 12_000;
 const INTERNAL_BROWSER_URL_PREFIXES = [
     'about:',
@@ -314,7 +323,7 @@ async function humanMouseMove(
 ) {
     if (!page) return;
     const viewport = page.viewportSize();
-    const fallbackWidth = viewport?.width || 1980;
+    const fallbackWidth = viewport?.width || 1920;
     const fallbackHeight = viewport?.height || 1080;
     const currentX = typeof startX === 'number' && Number.isFinite(startX)
         ? startX
@@ -506,6 +515,11 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         pageErrors: BrowserPageErrorEntry[];
         failedRequests: BrowserNetworkEntry[];
         httpErrors: BrowserNetworkEntry[];
+        elementRefs: {
+            page: Page;
+            url: string;
+            byRef: Map<string, { handle: ElementHandle; label: string }>;
+        } | null;
     };
 
     type PageOwnership = {
@@ -694,9 +708,19 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             pageErrors: [],
             failedRequests: [],
             httpErrors: [],
+            elementRefs: null,
         };
         sessions.set(id, state);
         return state;
+    };
+
+    const disposeElementRefs = (session: BrowserSessionState) => {
+        const store = session.elementRefs;
+        session.elementRefs = null;
+        if (!store) return;
+        for (const entry of store.byRef.values()) {
+            void entry.handle.dispose().catch(() => {});
+        }
     };
 
     const defaultSessionState = createSessionState('default');
@@ -2598,6 +2622,247 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 };
             },
 
+            async readPage(): Promise<BrowserReadPageResult> {
+                const capturedAt = new Date().toISOString();
+                try {
+                    const activePage = await ensureActivePage(session);
+                    disposeElementRefs(session);
+
+                    // Collect the live elements once, then derive metadata and
+                    // handles from the SAME in-page array so refs cannot skew.
+                    const collectionHandle = await activePage.evaluateHandle(({ maxElements }) => {
+                        const selector = [
+                            'a[href]', 'button', 'input', 'select', 'textarea', 'summary',
+                            '[role="button"]', '[role="link"]', '[role="tab"]', '[role="menuitem"]',
+                            '[role="option"]', '[role="checkbox"]', '[role="radio"]',
+                            '[role="combobox"]', '[role="switch"]', '[role="textbox"]',
+                            '[contenteditable="true"]', '[onclick]',
+                        ].join(', ');
+                        const out: Element[] = [];
+                        let total = 0;
+                        for (const el of Array.from(document.querySelectorAll(selector))) {
+                            const rect = el.getBoundingClientRect();
+                            if (rect.width < 1 || rect.height < 1) continue;
+                            const style = window.getComputedStyle(el);
+                            if (style.visibility === 'hidden' || style.display === 'none') continue;
+                            total += 1;
+                            if (out.length < maxElements) out.push(el);
+                        }
+                        return { elements: out, total };
+                    }, { maxElements: MAX_READ_PAGE_ELEMENTS });
+
+                    const metadata = await activePage.evaluate((collected) => {
+                        const textOf = (el: Element): string => {
+                            const aria = el.getAttribute('aria-label')?.trim();
+                            if (aria) return aria;
+                            const labelledBy = el.getAttribute('aria-labelledby')?.trim();
+                            if (labelledBy) {
+                                const parts = labelledBy.split(/\s+/)
+                                    .map((id) => document.getElementById(id)?.textContent?.trim() || '')
+                                    .filter(Boolean);
+                                if (parts.length) return parts.join(' ');
+                            }
+                            if (el instanceof HTMLInputElement) {
+                                if (el.labels && el.labels.length > 0) {
+                                    const label = Array.from(el.labels).map((l) => l.textContent?.trim() || '').filter(Boolean).join(' ');
+                                    if (label) return label;
+                                }
+                                return el.placeholder || el.name || (el.type === 'submit' || el.type === 'button' ? el.value : '') || '';
+                            }
+                            if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+                                if (el.labels && el.labels.length > 0) {
+                                    const label = Array.from(el.labels).map((l) => l.textContent?.trim() || '').filter(Boolean).join(' ');
+                                    if (label) return label;
+                                }
+                                return (el as HTMLTextAreaElement).placeholder ?? el.name ?? '';
+                            }
+                            const text = (el as HTMLElement).innerText?.trim() || el.textContent?.trim() || '';
+                            if (text) return text;
+                            const img = el.querySelector('img[alt]');
+                            if (img) return img.getAttribute('alt') || '';
+                            return el.getAttribute('title') || '';
+                        };
+                        const roleOf = (el: Element): string => {
+                            const explicit = el.getAttribute('role');
+                            if (explicit) return explicit;
+                            const tag = el.tagName.toLowerCase();
+                            if (tag === 'a') return 'link';
+                            if (tag === 'input') {
+                                const type = (el as HTMLInputElement).type || 'text';
+                                if (type === 'submit' || type === 'button' || type === 'reset') return 'button';
+                                if (type === 'checkbox' || type === 'radio') return type;
+                                return `input:${type}`;
+                            }
+                            if (tag === 'textarea') return 'input:multiline';
+                            if (tag === 'select') return 'select';
+                            if (tag === 'summary') return 'expander';
+                            if (el.getAttribute('contenteditable') === 'true') return 'input:richtext';
+                            return tag === 'button' ? 'button' : `clickable:${tag}`;
+                        };
+                        return collected.elements.map((el) => {
+                            const rect = el.getBoundingClientRect();
+                            const inViewport = rect.bottom > 0 && rect.right > 0
+                                && rect.top < window.innerHeight && rect.left < window.innerWidth;
+                            const entry: {
+                                role: string; name: string; href?: string; value?: string;
+                                checked?: boolean; disabled?: boolean; inViewport: boolean;
+                            } = {
+                                role: roleOf(el),
+                                name: textOf(el).replace(/\s+/g, ' ').slice(0, 80),
+                                inViewport,
+                            };
+                            if (el instanceof HTMLAnchorElement && el.href) entry.href = el.href.slice(0, 200);
+                            if (el instanceof HTMLInputElement) {
+                                if (el.type !== 'password' && el.value && el.type !== 'submit' && el.type !== 'button') {
+                                    entry.value = el.value.slice(0, 60);
+                                }
+                                if (el.type === 'checkbox' || el.type === 'radio') entry.checked = el.checked;
+                                if (el.disabled) entry.disabled = true;
+                            } else if (el instanceof HTMLSelectElement) {
+                                entry.value = (el.selectedOptions[0]?.textContent || '').trim().slice(0, 60);
+                                if (el.disabled) entry.disabled = true;
+                            } else if (el instanceof HTMLTextAreaElement) {
+                                if (el.value) entry.value = el.value.slice(0, 60);
+                                if (el.disabled) entry.disabled = true;
+                            } else if (el instanceof HTMLButtonElement && el.disabled) {
+                                entry.disabled = true;
+                            }
+                            return entry;
+                        });
+                    }, collectionHandle);
+
+                    const collectedTotal = await activePage.evaluate((collected) => collected.total, collectionHandle);
+                    const elementsHandle = await collectionHandle.getProperty('elements');
+                    const properties = await elementsHandle.getProperties();
+                    const byRef = new Map<string, { handle: ElementHandle; label: string }>();
+                    const elements: BrowserPageElementRef[] = [];
+                    for (let index = 0; index < metadata.length; index++) {
+                        const handle = properties.get(String(index))?.asElement();
+                        if (!handle) continue;
+                        const ref = `e${index + 1}`;
+                        const meta = metadata[index];
+                        byRef.set(ref, { handle, label: meta.name || meta.role });
+                        elements.push({ ref, ...meta });
+                    }
+                    void elementsHandle.dispose().catch(() => {});
+                    void collectionHandle.dispose().catch(() => {});
+
+                    session.elementRefs = {
+                        page: activePage,
+                        url: activePage.url(),
+                        byRef,
+                    };
+
+                    return {
+                        supported: true,
+                        url: activePage.url(),
+                        capturedAt,
+                        total: collectedTotal,
+                        truncated: collectedTotal > elements.length,
+                        elements,
+                    };
+                } catch (error) {
+                    return {
+                        supported: false,
+                        url: session.activePage ? pageUrl(session.activePage) : '',
+                        capturedAt,
+                        total: 0,
+                        truncated: false,
+                        elements: [],
+                        error: formatBrowserError(error),
+                    };
+                }
+            },
+
+            async clickRef(ref: string, count: number = 1): Promise<BrowserClickRefResult> {
+                const activePage = await ensureActivePage(session);
+                const store = session.elementRefs;
+                if (!store || store.page !== activePage) {
+                    return {
+                        success: false,
+                        stale: true,
+                        error: 'No element refs captured for the current tab. Run readPage first.',
+                    };
+                }
+                const entry = store.byRef.get(ref);
+                if (!entry) {
+                    return {
+                        success: false,
+                        stale: true,
+                        error: `Unknown element ref "${ref}". Run readPage again to refresh the element list.`,
+                    };
+                }
+
+                try {
+                    await entry.handle.scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => {});
+                    const box = await entry.handle.boundingBox();
+                    if (!box) {
+                        return {
+                            success: false,
+                            stale: true,
+                            label: entry.label,
+                            error: `Element ${ref} ("${entry.label}") is detached or hidden now. Run readPage again.`,
+                        };
+                    }
+                    const centerX = Math.round(box.x + box.width / 2);
+                    const centerY = Math.round(box.y + box.height / 2);
+
+                    if (shouldUseDisplayAutomation()) {
+                        // Translate the viewport-relative center to display coordinates
+                        // (inverse of drawDisplayClickMarker) so the click goes through
+                        // the same xdotool input path as coordinate clicks.
+                        const displayPoint = await activePage.evaluate(({ x, y }) => {
+                            const sideChrome = Math.max(0, Math.round((window.outerWidth - window.innerWidth) / 2));
+                            const topChrome = Math.max(0, Math.round(window.outerHeight - window.innerHeight - sideChrome));
+                            return {
+                                x: Math.round(x + window.screenX + sideChrome),
+                                y: Math.round(y + window.screenY + topChrome),
+                            };
+                        }, { x: centerX, y: centerY });
+                        const clicked = await clickDisplayCoordinate(session, displayPoint.x, displayPoint.y, count);
+                        return clicked
+                            ? { success: true, label: entry.label }
+                            : { success: false, label: entry.label, error: 'Display click failed.' };
+                    }
+
+                    const clicked = await facade.clickCoordinate(centerX, centerY, count);
+                    return clicked
+                        ? { success: true, label: entry.label }
+                        : { success: false, label: entry.label, error: 'Click failed.' };
+                } catch (error) {
+                    return { success: false, label: entry.label, error: formatBrowserError(error) };
+                }
+            },
+
+            async setViewport(preset: ViewportPreset, colorScheme: 'dark' | 'light' | 'auto' = 'auto'): Promise<BrowserSetViewportResult> {
+                if (shouldUseDisplayAutomation()) {
+                    return {
+                        supported: false,
+                        preset,
+                        error: 'Viewport presets are unavailable on the full-display backend; the page always renders in the real browser window.',
+                    };
+                }
+                try {
+                    const activePage = await ensureActivePage(session);
+                    const size = VIEWPORT_PRESETS[preset] ?? DEFAULT_VIEWPORT;
+                    await activePage.setViewportSize({ width: size.width, height: size.height });
+                    if (colorScheme === 'dark' || colorScheme === 'light') {
+                        await activePage.emulateMedia({ colorScheme });
+                    } else {
+                        await activePage.emulateMedia({ colorScheme: null });
+                    }
+                    return {
+                        supported: true,
+                        preset,
+                        width: size.width,
+                        height: size.height,
+                        colorScheme,
+                    };
+                } catch (error) {
+                    return { supported: false, preset, error: formatBrowserError(error) };
+                }
+            },
+
             async fetchUrl(url: string): Promise<BrowserFetchResult> {
                 const activePage = await ensureActivePage(session);
                 const requestedUrl = resolveSameOriginFetchUrl(activePage.url(), url);
@@ -2666,6 +2931,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             },
 
             async closeOwnedPages(): Promise<void> {
+                disposeElementRefs(session);
                 const pages = [...getOpenOwnedPages(session)];
                 await Promise.allSettled(pages.map((ownedPage) => ownedPage.close()));
                 session.pages = [];

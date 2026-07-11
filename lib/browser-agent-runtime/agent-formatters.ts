@@ -27,6 +27,16 @@ export function formatAction(action: AgentAction, coordinateMode: VisionCoordina
         }
         case 'inspectPage':
             return `Inspect Page Context - ${reason(action)}`;
+        case 'readPage':
+            return `Read Page Elements - ${reason(action)}`;
+        case 'clickRef': {
+            const count = action.clickCount && action.clickCount > 1 ? ' (Double Click)' : '';
+            return `Click element ${action.ref || '[?]'}${count} - ${reason(action)}`;
+        }
+        case 'setViewport': {
+            const scheme = action.colorScheme && action.colorScheme !== 'auto' ? `, ${action.colorScheme} mode` : '';
+            return `Set Viewport ${action.viewportPreset || 'desktop'}${scheme} - ${reason(action)}`;
+        }
         case 'findInPage':
             return `Find "${formatBrowserAgentTextForLog(action.text, action.reasoning, 40)}" - ${reason(action)}`;
         case 'inspectDiagnostics':

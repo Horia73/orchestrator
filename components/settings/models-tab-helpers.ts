@@ -91,16 +91,21 @@ export function formatAgentSidebarSummary(
       data,
       data.config.browserAgent.light.provider,
       data.config.browserAgent.light.model
-    ).model
+    )
     if (!data.config.browserAgent.proEnabled) {
-      return light
+      return `${light.provider} · ${light.model}`
     }
     const pro = formatProviderModel(
       data,
       data.config.browserAgent.pro.provider,
       data.config.browserAgent.pro.model
-    ).model
-    return light === pro ? light : `${light} / ${pro}`
+    )
+    if (light.provider === pro.provider) {
+      return light.model === pro.model
+        ? `${light.provider} · ${light.model}`
+        : `${light.provider} · ${light.model} / ${pro.model}`
+    }
+    return `${light.provider} · ${light.model} / ${pro.provider} · ${pro.model}`
   }
 
   const override = data.config.agentOverrides[agent.id]
@@ -174,8 +179,18 @@ export function buildAgentContextDetails(
         value: proEnabled ? "Multi (light + pro)" : "Single (light only)",
       },
       { label: "Light", value: `${light.provider} · ${light.model}` },
+      {
+        label: "Thinking",
+        value: formatContextThinking(data.config.browserAgent.light.thinkingLevel),
+      },
       ...(proEnabled
-        ? [{ label: "Pro", value: `${pro.provider} · ${pro.model}` }]
+        ? [
+            { label: "Pro", value: `${pro.provider} · ${pro.model}` },
+            {
+              label: "Pro thinking",
+              value: formatContextThinking(data.config.browserAgent.pro.thinkingLevel),
+            },
+          ]
         : []),
     ]
   }

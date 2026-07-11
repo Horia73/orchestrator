@@ -48,7 +48,7 @@ export function buildSystemPrompt(
    const timezone = getConfiguredTimezone();
    const dateString = now.toLocaleDateString('ro-RO', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: timezone });
    const localTime = formatDateTimeInTimezone(now, timezone);
-   const baseActions = '"click" | "type" | "key" | "scroll" | "scrollToBottom" | "undo" | "wait" | "navigate" | "hold" | "drag" | "hover" | "inspectPage" | "findInPage" | "inspectDiagnostics" | "fetchUrl" | "screenshot" | "recordVideo" | "closeTab" | "refresh" | "getCurrentUrl" | "getLink" | "pasteLink" | "readClipboard" | "clear" | "goBack" | "goForward" | "listTabs" | "switchTab" | "newTab" | "listDownloads" | "waitForDownloads"';
+   const baseActions = '"click" | "type" | "key" | "scroll" | "scrollToBottom" | "undo" | "wait" | "navigate" | "hold" | "drag" | "hover" | "inspectPage" | "readPage" | "clickRef" | "findInPage" | "inspectDiagnostics" | "fetchUrl" | "screenshot" | "recordVideo" | "setViewport" | "closeTab" | "refresh" | "getCurrentUrl" | "getLink" | "pasteLink" | "readClipboard" | "clear" | "goBack" | "goForward" | "listTabs" | "switchTab" | "newTab" | "listDownloads" | "waitForDownloads"';
    const responseActionList = isAdvancedMode
       ? `${baseActions} | "ask" | "yield_control"`
       : escalationEnabled
@@ -130,6 +130,9 @@ export function buildSystemPrompt(
    const tabListDoc = usesFullDisplayBackend
       ? '- **listTabs**: Limited on the full-display backend. Read the browser tab strip visually; use `newTab`, `closeTab`, and `switchTab` when the visible tab order is clear.'
       : '- **listTabs**: List all open tabs (indexes, titles, URLs). Use this to discover what tabs are available.';
+   const setViewportDoc = usesFullDisplayBackend
+      ? '- **setViewport**: Not available on the full-display backend (the page always renders in the real browser window). Do not use it here.'
+      : '- **setViewport**: Switch the page viewport to a device preset. `viewportPreset`: "mobile" (390x844), "tablet" (820x1180), or "desktop" (1920x1080, the default). Optional `colorScheme`: "dark" | "light" | "auto" to emulate the OS color scheme. Use this when the task asks to check responsive/mobile layout or dark mode; return to "desktop" when done.';
    const inspectPageRule = usesFullDisplayBackend
       ? '13. **When To Use inspectPage**: On the full-display backend, `inspectPage` is only another display capture. For exact text on long pages, prefer `findInPage`; for layout discovery, scroll visually and verify in the current frame.'
       : '13. **When To Use inspectPage**: Use `inspectPage` mainly for orientation on large pages. It is usually more helpful than blind repeated scrolling when the task is about scanning long result pages, comparing many sections, or finding content far away. If you already know where the target area is and need precise details, prefer viewport verification before requesting another overview.';
@@ -170,11 +173,14 @@ ${coordinateInstructions}
 - **drag**: Click and drag from (x, y) to a second coordinate. Specify \`coordinate\` as start and \`coordinateEnd\` as the destination. You may also specify \`durationMs\` to control drag speed. Useful for sliders, drag-and-drop, and resizing. Do not use drag to scroll the page.
 - **hold**: Long press at (x, y) for a specific duration. Specify \`durationMs\`.
 ${inspectPageDoc}
+- **readPage**: List the interactive elements of the current page (buttons, links, inputs, selects) as short refs like \`e12\`, each with its role, visible name, link target, and current value. Use it when precise clicking is hard (small/dense/ambiguous targets), when a coordinate click missed, or when you need an exact inventory of the controls and form fields. The list arrives as an observation in your action history; follow up with \`clickRef\`.
+- **clickRef**: Click an element by its \`ref\` from the latest \`readPage\` (\`{"action":"clickRef","ref":"e12"}\`). This targets the DOM element directly and is more reliable than estimating coordinates for elements that appeared in \`readPage\`. Refs go stale after navigation or big page changes — if told the ref is stale, run \`readPage\` again. Supports \`clickCount\` for double clicks.
 - **findInPage**: Search the page text for the exact text in \`text\`; the runtime scrolls the first match into view, highlights it, and reports how many matches exist (or that there are none). Use this for long pages when you know a word, price, date, label, or phrase to locate. Set \`submit: true\` to advance to the next match.
 - **inspectDiagnostics**: Read captured browser console messages, page errors, failed requests, and HTTP 4xx/5xx responses for the current session. Use this when diagnosing loading, blank, broken, or API-backed pages.
 - **fetchUrl**: Perform a read-only GET from the active page's browser context, with cookies/session included. Use \`url\` as an absolute same-origin URL or path. Use this for same-origin API checks instead of opening a second tab just to inspect JSON/text.
 - **screenshot**: Save the current visible viewport frame as evidence for the parent/user. Use this when the task asks for a screenshot, when visual proof is useful, or before asking for confirmation on a sensitive action. This does NOT interact with the page; use it immediately when the frame you are looking at is the evidence you want to provide.
 - **recordVideo**: Record the current visible viewport as evidence for a specific duration. Specify \`durationMs\` in milliseconds. Use this when the task asks for video or when motion/loading/animation matters. Recording blocks other actions while it captures; keep it short unless the user requested a longer duration.
+${setViewportDoc}
 - **refresh**: Reload the page.
 - **closeTab**: Close a tab. If you provide \`tabIndex\`, it closes that tab even if it is not active. If omitted, it closes the current tab.
 - **getCurrentUrl**: Read and return the current browser URL without navigating. On the full-display backend this tries the visible address bar first, which can recover the original failed URL from Chromium error pages such as OAuth localhost redirects. Use this when the task asks for the exact current/address-bar URL; the result is returned directly, so do not call \`readClipboard\` afterward just to retrieve it.
@@ -236,7 +242,7 @@ Manage tabs like a person would — check OPEN TABS before acting:
 ## 🛑 STOP & THINK: HISTORY CHECK
 ${loopDetectionRule}
 2. **Scroll if needed**: If you don't see what you need, scroll.
-3. **Handle Stuck States**: If an action fails multiple times, try finding unselected fields, check focus, or use **refresh**. If an expected element is visibly unfinished, blank, or stuck loading, do not interact with empty space. Search for a close button, a fallback option, or rethink the approach. If you accidentally opened the same wrong row/card/page more than once while trying to scroll, treat that as a loop: leave it once, then stop clicking inside that list and switch to hover+scroll, search, \`findInPage\`, direct navigation, or report the blocker.
+3. **Handle Stuck States**: If a coordinate click misses or lands on the wrong element twice, switch to \`readPage\` + \`clickRef\` to target the element by DOM ref instead of guessing pixels. If an action fails multiple times, try finding unselected fields, check focus, or use **refresh**. If an expected element is visibly unfinished, blank, or stuck loading, do not interact with empty space. Search for a close button, a fallback option, or rethink the approach. If you accidentally opened the same wrong row/card/page more than once while trying to scroll, treat that as a loop: leave it once, then stop clicking inside that list and switch to hover+scroll, search, \`findInPage\`, direct navigation, or report the blocker.
 4. **Long Task Continuity**: Treat earlier action summaries as completed work. Do not restart from the original checklist just because the task is long; verify the current file/page and continue from the latest unfinished step.
 5. **Learn from Mistakes**: If you correct an error or find a workaround, add a "memory" field to your JSON.
    - Example: "Search boxes on this site need a click before typing."
@@ -271,6 +277,9 @@ Single action:
   "scrollAmount": <number>, // Optional, pixels to scroll. Default is 500 (half page). Use larger values (e.g. 1000) to jump large sections.
   "url": "<url for navigate, newTab, or fetchUrl action>",
   "tabIndex": <number>, // For switchTab or closeTab action
+  "ref": "<element ref from readPage, e.g. e12>", // For clickRef action
+  "viewportPreset": "mobile" | "tablet" | "desktop", // For setViewport action
+  "colorScheme": "dark" | "light" | "auto", // Optional, for setViewport action
   "durationMs": 1000, // Optional, duration in milliseconds for wait, hold, drag, and recordVideo actions
   "expectedFilename": "<optional substring expected in a downloaded filename>",
 ${subObjectiveField}

@@ -4,6 +4,7 @@ import * as React from "react"
 import { ArrowDown, ChevronDown, Loader2 } from "lucide-react"
 import { ArtifactPanel, artifactKey } from "@/components/artifact-panel"
 import { AgentWorkspacePanel } from "@/components/chat/agent-workspace-panel"
+import { BrowserPanelProvider } from "@/components/chat/browser-panel-context"
 import {
   ARTIFACT_PANEL_DEFAULT_WIDTH,
   ARTIFACT_PANEL_MAX_WIDTH,
@@ -2767,6 +2768,47 @@ export function ChatView() {
     ]
   )
 
+  // ── Browser run auto-open ─────────────────────────────────────────────
+  // When a browser_agent run starts, pop the desktop side panel open on its
+  // workspace (live view + console) so the user watches it without hunting
+  // for the inline block. Auto-open fires once per run — closing the panel
+  // mid-run is respected. Mobile keeps the inline live view untouched.
+  const autoOpenedBrowserRunIdsRef = React.useRef<Set<string>>(new Set())
+  React.useEffect(() => {
+    if (isMobile) return
+    const startedRun = agentRuns.find(
+      (run) =>
+        run.agentId === "browser_agent" &&
+        run.status === "running" &&
+        !autoOpenedBrowserRunIdsRef.current.has(run.runId)
+    )
+    if (!startedRun) return
+    autoOpenedBrowserRunIdsRef.current.add(startedRun.runId)
+    const panelAlreadyOpen =
+      artifactOpen || Boolean(genArtifact) || Boolean(activePanelAgentRun)
+    if (!panelAlreadyOpen) {
+      sidebarWasOpenRef.current = sidebarOpen
+    }
+    setActiveAgentRunId(startedRun.runId)
+    setArtifactOpen(false)
+    setGenArtifact(null)
+    setSidebarOpen(false)
+  }, [
+    agentRuns,
+    isMobile,
+    artifactOpen,
+    genArtifact,
+    activePanelAgentRun,
+    sidebarOpen,
+    setSidebarOpen,
+  ])
+
+  // Inline browser blocks collapse to a chip while their run is in the panel.
+  const browserPanelRunId =
+    !isMobile && activePanelAgentRun?.agentId === "browser_agent"
+      ? activePanelAgentRun.runId
+      : null
+
   const handleLoadMessageDetails = React.useCallback(
     (messageId: string) => {
       if (!conversationId) return Promise.resolve()
@@ -3168,6 +3210,7 @@ export function ChatView() {
       <MarkdownImagePreviewProvider
         onPreview={openPreview}
       >
+      <BrowserPanelProvider panelRunId={browserPanelRunId}>
       <div
         ref={layoutContainerRef}
         className={cn(
@@ -3482,6 +3525,7 @@ export function ChatView() {
           onClose={closePreview}
         />
       </div>
+      </BrowserPanelProvider>
       </MarkdownImagePreviewProvider>
     </ConversationArtifactsProvider>
   )
