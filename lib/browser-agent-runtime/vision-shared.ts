@@ -12,7 +12,7 @@ import { redactBrowserAgentText } from './redaction';
 import type { MediaResolutionLevel, ThinkingLevel, VisionProvider } from './config';
 
 export interface AgentAction {
-    action: 'click' | 'type' | 'key' | 'scroll' | 'scrollToBottom' | 'undo' | 'wait' | 'navigate' | 'hold' | 'drag' | 'hover' | 'inspectPage' | 'findInPage' | 'inspectDiagnostics' | 'fetchUrl' | 'screenshot' | 'recordVideo' | 'closeTab' | 'refresh' | 'getCurrentUrl' | 'getLink' | 'pasteLink' | 'readClipboard' | 'clear' | 'done' | 'ask' | 'goBack' | 'goForward' | 'listTabs' | 'switchTab' | 'newTab' | 'listDownloads' | 'waitForDownloads' | 'error' | 'escalate' | 'yield_control';
+    action: 'click' | 'type' | 'key' | 'scroll' | 'scrollToBottom' | 'undo' | 'wait' | 'navigate' | 'hold' | 'drag' | 'hover' | 'inspectPage' | 'readPage' | 'clickRef' | 'findInPage' | 'inspectDiagnostics' | 'fetchUrl' | 'screenshot' | 'recordVideo' | 'setViewport' | 'closeTab' | 'refresh' | 'getCurrentUrl' | 'getLink' | 'pasteLink' | 'readClipboard' | 'clear' | 'done' | 'ask' | 'goBack' | 'goForward' | 'listTabs' | 'switchTab' | 'newTab' | 'listDownloads' | 'waitForDownloads' | 'error' | 'escalate' | 'yield_control';
     sub_objective?: string; // Goal string when escalating task to advanced reasoning model
     coordinate?: [number, number]; // [x, y]
     coordinateEnd?: [number, number]; // [x, y] — end point for drag action
@@ -25,6 +25,9 @@ export interface AgentAction {
     scrollAmount?: number;
     url?: string;
     tabIndex?: number;
+    ref?: string; // Element ref from readPage output (e.g. "e12") for clickRef
+    viewportPreset?: 'mobile' | 'tablet' | 'desktop'; // For setViewport
+    colorScheme?: 'dark' | 'light' | 'auto'; // For setViewport
     reasoning: string;
     memory?: string; // What we learned from this step (e.g. "To clear input, click then Ctrl+A+Backspace")
     durationMs?: number; // Duration in milliseconds for wait, hold, drag, and recordVideo actions
@@ -89,7 +92,7 @@ export type VisionGenerateResponse = { text?: string; usageMetadata?: unknown };
 export const MAX_JSON_PARSE_RETRIES = 3;
 const MAX_MODEL_RESPONSE_LOG_CHARS = 1000;
 
-export const VALID_ACTIONS = ['click', 'type', 'key', 'scroll', 'scrollToBottom', 'undo', 'wait', 'navigate', 'hold', 'drag', 'hover', 'inspectPage', 'findInPage', 'inspectDiagnostics', 'fetchUrl', 'screenshot', 'recordVideo', 'closeTab', 'refresh', 'getCurrentUrl', 'getLink', 'pasteLink', 'readClipboard', 'clear', 'done', 'ask', 'error', 'goBack', 'goForward', 'listTabs', 'switchTab', 'newTab', 'listDownloads', 'waitForDownloads', 'escalate', 'yield_control'] as const satisfies readonly AgentAction['action'][];
+export const VALID_ACTIONS = ['click', 'type', 'key', 'scroll', 'scrollToBottom', 'undo', 'wait', 'navigate', 'hold', 'drag', 'hover', 'inspectPage', 'readPage', 'clickRef', 'findInPage', 'inspectDiagnostics', 'fetchUrl', 'screenshot', 'recordVideo', 'setViewport', 'closeTab', 'refresh', 'getCurrentUrl', 'getLink', 'pasteLink', 'readClipboard', 'clear', 'done', 'ask', 'error', 'goBack', 'goForward', 'listTabs', 'switchTab', 'newTab', 'listDownloads', 'waitForDownloads', 'escalate', 'yield_control'] as const satisfies readonly AgentAction['action'][];
 const VALID_ACTION_SET = new Set<string>(VALID_ACTIONS);
 
 export const COORDINATE_JSON_SCHEMA = {
@@ -116,13 +119,16 @@ export const BROWSER_ACTION_JSON_SCHEMA = {
         scrollAmount: { type: 'integer', minimum: 1 },
         url: { type: 'string' },
         tabIndex: { type: 'integer', minimum: 0 },
+        ref: { type: 'string' },
+        viewportPreset: { type: 'string', enum: ['mobile', 'tablet', 'desktop'] },
+        colorScheme: { type: 'string', enum: ['dark', 'light', 'auto'] },
         reasoning: { type: 'string' },
         memory: { type: 'string' },
         durationMs: { type: 'integer', minimum: 1 },
         expectedFilename: { type: 'string' },
     },
     required: ['action', 'reasoning'],
-    propertyOrdering: ['action', 'coordinate', 'coordinateEnd', 'clickCount', 'text', 'submit', 'clearBefore', 'key', 'scrollDirection', 'scrollAmount', 'url', 'tabIndex', 'durationMs', 'expectedFilename', 'sub_objective', 'reasoning', 'memory'],
+    propertyOrdering: ['action', 'coordinate', 'coordinateEnd', 'clickCount', 'text', 'submit', 'clearBefore', 'key', 'scrollDirection', 'scrollAmount', 'url', 'tabIndex', 'ref', 'viewportPreset', 'colorScheme', 'durationMs', 'expectedFilename', 'sub_objective', 'reasoning', 'memory'],
 } as const;
 
 export const BROWSER_ACTION_RESPONSE_JSON_SCHEMA = {

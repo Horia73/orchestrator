@@ -1,6 +1,7 @@
 import type { Page, BrowserContext } from 'patchright';
 import type { BrowserBackend } from './config';
 import type { BrowserLiveViewState } from './display';
+import type { ViewportPreset } from './viewport';
 
 export interface BrowserManagerOptions {
     backend?: BrowserBackend;
@@ -126,6 +127,44 @@ export interface BrowserDiagnosticsSnapshot {
     httpErrors: BrowserNetworkEntry[];
 }
 
+export interface BrowserPageElementRef {
+    ref: string;
+    role: string;
+    name: string;
+    href?: string;
+    value?: string;
+    checked?: boolean;
+    disabled?: boolean;
+    inViewport: boolean;
+}
+
+export interface BrowserReadPageResult {
+    supported: boolean;
+    url: string;
+    capturedAt: string;
+    total: number;
+    truncated: boolean;
+    elements: BrowserPageElementRef[];
+    error?: string;
+}
+
+export interface BrowserClickRefResult {
+    success: boolean;
+    /** True when the refs no longer match the live DOM and readPage must run again. */
+    stale?: boolean;
+    label?: string;
+    error?: string;
+}
+
+export interface BrowserSetViewportResult {
+    supported: boolean;
+    preset?: ViewportPreset;
+    width?: number;
+    height?: number;
+    colorScheme?: 'dark' | 'light' | 'auto';
+    error?: string;
+}
+
 export interface BrowserFetchResult {
     supported: boolean;
     requestedUrl: string;
@@ -216,6 +255,9 @@ export interface BrowserPageSession {
     waitForDownloads(timeoutMs?: number, options?: BrowserDownloadWaitOptions): Promise<BrowserDownloadFile[]>;
     waitForPageSettled(options?: BrowserPageSettleOptions): Promise<BrowserPageSettleResult>;
     getDiagnostics(): BrowserDiagnosticsSnapshot;
+    readPage(): Promise<BrowserReadPageResult>;
+    clickRef(ref: string, count?: number): Promise<BrowserClickRefResult>;
+    setViewport(preset: ViewportPreset, colorScheme?: 'dark' | 'light' | 'auto'): Promise<BrowserSetViewportResult>;
     fetchUrl(url: string): Promise<BrowserFetchResult>;
     getLatestAgentFrame(): BrowserFrameSnapshot | null;
     getAgentFrameHistory(limit?: number): BrowserFrameSnapshot[];

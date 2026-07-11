@@ -38,6 +38,12 @@ interface BrowserAgentLiveViewProps {
     active?: boolean
     sessionId?: string | null
     onOpenDetails?: () => void
+    /**
+     * "inline" (default) renders in the message thread with a hard height cap.
+     * "panel" renders in the desktop side panel: width-driven 16:9 (or the
+     * stream's real aspect), no 360px cap, so the browser fills the panel.
+     */
+    variant?: "inline" | "panel"
 }
 
 interface BrowserClipboardResponse {
@@ -45,7 +51,7 @@ interface BrowserClipboardResponse {
     state: BrowserAgentLiveState
 }
 
-export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenDetails }: BrowserAgentLiveViewProps) {
+export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenDetails, variant = "inline" }: BrowserAgentLiveViewProps) {
     const liveViewRef = React.useRef<HTMLDivElement>(null)
     const viewportRef = React.useRef<HTMLDivElement>(null)
     const targetRef = React.useRef<HTMLDivElement>(null)
@@ -593,8 +599,12 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
                 style={{
                     aspectRatio: fullscreen ? "auto" : `${viewportWidth} / ${viewportHeight}`,
                     height: fullscreen ? "100%" : undefined,
-                    maxHeight: fullscreen ? "none" : "min(360px, calc(100vh - 320px))",
-                    minHeight: fullscreen ? 0 : "220px",
+                    maxHeight: fullscreen
+                        ? "none"
+                        : variant === "panel"
+                            ? "max(220px, calc(100dvh - 420px))"
+                            : "min(360px, calc(100vh - 320px))",
+                    minHeight: fullscreen ? 0 : variant === "panel" ? "180px" : "220px",
                 }}
                 aria-label={`${connection} browser live view`}
                 onPointerDown={handleViewportPointerDown}

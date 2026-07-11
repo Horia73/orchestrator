@@ -3,7 +3,7 @@
  * Smart automation loop with failure tracking and memory
  */
 
-import { ActionTrace, ActionTraceFrame, BrowserDiagnosticsSnapshot, BrowserFetchResult, BrowserFrameSnapshot, BrowserPageSession, BrowserVideoRecording } from './browser';
+import { ActionTrace, ActionTraceFrame, BrowserDiagnosticsSnapshot, BrowserFetchResult, BrowserFrameSnapshot, BrowserPageSession, BrowserReadPageResult, BrowserVideoRecording } from './browser';
 import { VisionService, AgentAction, VisionConfig, VisionCoordinateMode } from './vision';
 import { ActionHistoryItem, IterationLimitReview } from './prompts';
 import { initializeDefaultLearnings, addLearning } from './memory';
@@ -640,7 +640,7 @@ export function createAgentController(
                             }
                         }
 
-                        if (action.action === 'inspectPage' || action.action === 'findInPage') {
+                        if (action.action === 'inspectPage' || action.action === 'findInPage' || action.action === 'readPage') {
                             shouldRestartLoop = true;
                             break;
                         }
@@ -891,6 +891,7 @@ function actionCanChangeVisualState(action: AgentAction): boolean {
     if (action.action === 'key') return true;
     return [
         'click',
+        'clickRef',
         'clear',
         'pasteLink',
         'scroll',
@@ -900,6 +901,7 @@ function actionCanChangeVisualState(action: AgentAction): boolean {
         'goBack',
         'goForward',
         'refresh',
+        'setViewport',
         'switchTab',
         'newTab',
         'closeTab',
@@ -1000,6 +1002,7 @@ function shouldRedactActionText(action: AgentAction): boolean {
 const PASTE_TEXT_THRESHOLD = 120;
 const MAX_DIAGNOSTIC_LINES = 10;
 const MAX_FETCH_SNIPPET_CHARS = 1800;
+const MAX_READ_PAGE_OBSERVATION_CHARS = 7_000;
 
 function shouldPasteText(text: string): boolean {
     return text.length >= PASTE_TEXT_THRESHOLD || /[\r\n\t]/.test(text);
@@ -1098,6 +1101,34 @@ function normalizeDiagnosticUrl(value: string): string {
     } catch {
         return value.trim();
     }
+}
+
+function summarizeReadPage(result: BrowserReadPageResult): string {
+    if (!result.supported) {
+        return `readPage failed: ${result.error || 'element inspection is unavailable.'}`;
+    }
+    if (result.elements.length === 0) {
+        return 'readPage found no interactive elements on the current page.';
+    }
+
+    const lines = [
+        `Interactive elements on ${formatObservationUrl(result.url) || 'the current page'} (${result.elements.length}${result.truncated ? ` of ${result.total}, list truncated` : ''}). Click one precisely with {"action":"clickRef","ref":"<ref>"}:`,
+    ];
+    for (const element of result.elements) {
+        const parts = [`${element.ref} [${element.role}]`];
+        if (element.name) parts.push(`"${element.name}"`);
+        if (element.href) parts.push(`→ ${formatObservationUrl(element.href)}`);
+        if (element.value) parts.push(`value="${element.value}"`);
+        if (element.checked !== undefined) parts.push(element.checked ? 'checked' : 'unchecked');
+        if (element.disabled) parts.push('disabled');
+        if (!element.inViewport) parts.push('(off-screen)');
+        lines.push(`- ${parts.join(' ')}`);
+    }
+
+    const summary = lines.join('\n');
+    return summary.length > MAX_READ_PAGE_OBSERVATION_CHARS
+        ? `${summary.slice(0, MAX_READ_PAGE_OBSERVATION_CHARS)}\n- ... (list trimmed; refs above remain valid)`
+        : summary;
 }
 
 function summarizeDiagnostics(diagnostics: BrowserDiagnosticsSnapshot): string {
@@ -1271,6 +1302,61 @@ async function executeAction(
                         ? `"${query}" appears ${findResult.count} time(s) in the page text but could not be auto-scrolled to (it may be hidden, collapsed, or inside an iframe). Try scrolling or expanding sections.`
                         : `No match for "${query}" in the current page text. It may be inside a collapsed section, behind a tab, in an iframe, rendered as an image, or not present.`;
                 return { success: true, trace: null, supplementalFrames: [], observation: findObservation };
+            }
+
+            case 'readPage': {
+                onStatusUpdate('🧾 Reading interactive page elements...');
+                const readResult = await browser.readPage();
+                const readObservation = summarizeReadPage(readResult);
+                onStatusUpdate(`🧾 readPage: ${readResult.supported ? `${readResult.elements.length} element(s) captured` : readResult.error || 'failed'}`);
+                return {
+                    success: readResult.supported,
+                    trace: null,
+                    supplementalFrames: [],
+                    observation: readObservation,
+                };
+            }
+
+            case 'clickRef': {
+                const targetRef = String(action.ref || '').trim();
+                if (!targetRef) {
+                    return {
+                        success: false,
+                        trace: null,
+                        supplementalFrames: [],
+                        observation: 'clickRef needs a "ref" from a previous readPage result (e.g. "e12").',
+                    };
+                }
+                const count = action.clickCount || 1;
+                onStatusUpdate(`🖱️  Clicking element ${targetRef}${count > 1 ? ` (x${count})` : ''}`);
+                const clickResult = await browser.clickRef(targetRef, count);
+                await sleep(timing.actionSettleDelayMs);
+                if (clickResult.success) {
+                    onStatusUpdate(`🖱️  Clicked ${targetRef}${clickResult.label ? ` ("${clickResult.label}")` : ''}`);
+                    return { success: true, trace: null, supplementalFrames: [] };
+                }
+                return {
+                    success: false,
+                    trace: null,
+                    supplementalFrames: [],
+                    observation: `${clickResult.error || `Could not click ${targetRef}.`}${clickResult.stale ? ' Run readPage again for fresh refs, or click by coordinates.' : ''}`,
+                };
+            }
+
+            case 'setViewport': {
+                const preset = action.viewportPreset || 'desktop';
+                onStatusUpdate(`🖥️  Setting viewport preset: ${preset}${action.colorScheme && action.colorScheme !== 'auto' ? ` (${action.colorScheme} mode)` : ''}`);
+                const viewportResult = await browser.setViewport(preset, action.colorScheme);
+                await sleep(timing.actionSettleDelayMs);
+                const viewportObservation = viewportResult.supported
+                    ? `Viewport set to ${preset} (${viewportResult.width}x${viewportResult.height}${viewportResult.colorScheme && viewportResult.colorScheme !== 'auto' ? `, ${viewportResult.colorScheme} color scheme` : ''}).`
+                    : `setViewport failed: ${viewportResult.error || 'not supported on this backend.'}`;
+                return {
+                    success: viewportResult.supported,
+                    trace: null,
+                    supplementalFrames: [],
+                    observation: viewportObservation,
+                };
             }
 
             case 'inspectDiagnostics': {
