@@ -1,9 +1,10 @@
 "use client"
 
 import * as React from "react"
-import { ArrowDown, ChevronDown, Loader2 } from "lucide-react"
+import { ArrowDown, ChevronDown, Loader2, Monitor } from "lucide-react"
 import { ArtifactPanel, artifactKey } from "@/components/artifact-panel"
 import { AgentWorkspacePanel } from "@/components/chat/agent-workspace-panel"
+import { isBrowserAgentRunAwaitingUser } from "@/components/chat/browser-agent-workspace"
 import { BrowserPanelProvider } from "@/components/chat/browser-panel-context"
 import {
   ARTIFACT_PANEL_DEFAULT_WIDTH,
@@ -2810,6 +2811,20 @@ export function ChatView() {
       ? activePanelAgentRun.runId
       : null
 
+  // While a browser run is live but its workspace is not in the side panel
+  // (user closed it, or another artifact took the panel), surface a reopen
+  // button in the chat header so the live view is always one click away.
+  const reopenBrowserRun = React.useMemo(() => {
+    if (isMobile) return null
+    const liveRuns = agentRuns.filter(
+      (run) =>
+        run.agentId === "browser_agent" &&
+        (run.status === "running" || isBrowserAgentRunAwaitingUser(run))
+    )
+    const run = liveRuns[liveRuns.length - 1] ?? null
+    return run && run.runId !== browserPanelRunId ? run : null
+  }, [agentRuns, isMobile, browserPanelRunId])
+
   const handleLoadMessageDetails = React.useCallback(
     (messageId: string) => {
       if (!conversationId) return Promise.resolve()
@@ -3234,6 +3249,18 @@ export function ChatView() {
                 <span className="truncate">{activeConversation.title}</span>
                 <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
               </button>
+              {reopenBrowserRun && (
+                <button
+                  type="button"
+                  onClick={() => handleAgentOpen(reopenBrowserRun)}
+                  className="relative ml-auto flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  aria-label="Open browser live view"
+                  title="Open browser live view"
+                >
+                  <Monitor className="size-4" />
+                  <span className="absolute top-1 right-1 size-1.5 animate-pulse rounded-full bg-sky-500" aria-hidden="true" />
+                </button>
+              )}
             </div>
             {/* Solid fill faded by an alpha-only mask instead of a color
                 gradient to transparent: gradient stops interpolate through

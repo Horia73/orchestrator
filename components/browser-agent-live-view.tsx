@@ -1,9 +1,10 @@
 "use client"
 
 import * as React from "react"
-import { ClipboardCopy, ClipboardPaste, Loader2, Maximize2, Minimize2, Monitor, WifiOff } from "lucide-react"
+import { ClipboardCopy, ClipboardPaste, Globe, Loader2, Maximize2, Minimize2, Monitor, WifiOff } from "lucide-react"
 
 import { copyTextToClipboard } from "@/lib/clipboard"
+import { cn } from "@/lib/utils"
 
 type LiveMode = "disabled" | "mac-headful" | "linux-vnc"
 type BrowserShortcutEvent = Pick<KeyboardEvent, "altKey" | "ctrlKey" | "key" | "metaKey" | "shiftKey">
@@ -57,7 +58,9 @@ interface BrowserClipboardResponse {
 }
 
 export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenDetails, variant = "inline" }: BrowserAgentLiveViewProps) {
+    const isPanel = variant === "panel"
     const liveViewRef = React.useRef<HTMLDivElement>(null)
+    const fitAreaRef = React.useRef<HTMLDivElement>(null)
     const viewportRef = React.useRef<HTMLDivElement>(null)
     const targetRef = React.useRef<HTMLDivElement>(null)
     const hiddenPasteRef = React.useRef<HTMLTextAreaElement>(null)
@@ -416,6 +419,13 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
         focusRfb()
     }, [focusRfb])
 
+    const viewportWidth = state?.width && state.width > 0 ? state.width : 16
+    const viewportHeight = state?.height && state.height > 0 ? state.height : 9
+    // Panel mode sizes the viewport box itself as a contain-fit of the stream
+    // inside the flexible area, so resizing the panel always keeps the whole
+    // browser visible (shrinking it instead of cropping or overflowing).
+    const panelFit = useContainFit(fitAreaRef, viewportWidth, viewportHeight)
+
     if (!state) {
         return (
             <div className="grid h-[180px] place-items-center rounded-md border border-border/70 bg-muted/20 text-[12px] text-muted-foreground">
@@ -479,9 +489,12 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
         )
     }
 
-    const viewportWidth = state.width && state.width > 0 ? state.width : 16
-    const viewportHeight = state.height && state.height > 0 ? state.height : 9
     const hasRealDimensions = Boolean(state.width && state.width > 0 && state.height && state.height > 0)
+    const selectedSession =
+        state.sessions.find((session) => session.id === (sessionId ?? state.selectedSessionId)) ??
+        state.sessions.find((session) => session.running) ??
+        state.sessions[0]
+    const currentUrl = selectedSession?.currentUrl ?? ""
     const statusLabel = state.paused
         ? "paused"
         : connection === "connected"
@@ -491,7 +504,12 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
     return (
         <div
             ref={liveViewRef}
-            className="browser-agent-live-view grid gap-2 bg-background outline-none [&:fullscreen]:h-screen [&:fullscreen]:grid-rows-[auto_1fr] [&:fullscreen]:p-3"
+            className={cn(
+                "browser-agent-live-view bg-background outline-none [&:fullscreen]:h-screen [&:fullscreen]:p-3",
+                isPanel
+                    ? "flex h-full min-h-0 flex-col gap-2"
+                    : "grid gap-2 [&:fullscreen]:grid-rows-[auto_1fr]"
+            )}
             tabIndex={0}
             onFocus={handleLiveViewFocus}
         >
@@ -558,32 +576,63 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
                     </span>
                 )}
             </div>
-            <div
-                ref={viewportRef}
-                className="browser-agent-live-viewport relative min-h-0 w-full overflow-hidden rounded-md border border-border/70 bg-white shadow-sm [background:white]"
-                style={{
-                    aspectRatio: fullscreen ? "auto" : `${viewportWidth} / ${viewportHeight}`,
-                    height: fullscreen ? "100%" : undefined,
-                    maxHeight: fullscreen
-                        ? "none"
-                        : variant === "panel"
-                            ? "max(220px, calc(100dvh - 420px))"
-                            : "min(360px, calc(100vh - 320px))",
-                    minHeight: fullscreen ? 0 : variant === "panel" ? "180px" : "220px",
-                }}
-                aria-label={`${connection} browser live view`}
-                onPointerDown={handleViewportPointerDown}
-            >
-                <div ref={targetRef} className="size-full bg-white" />
-                {hasRealDimensions && state.cursor && connection === "connected" && (
-                    <BrowserAgentCursorOverlay
-                        cursor={state.cursor}
-                        containerRef={viewportRef}
-                        frameWidth={viewportWidth}
-                        frameHeight={viewportHeight}
-                    />
-                )}
-            </div>
+            {isPanel && (
+                <div className="flex shrink-0 items-center gap-2 rounded-md border border-border/70 bg-muted/25 px-2.5 py-1.5">
+                    <Globe className="size-3 shrink-0 text-muted-foreground/80" aria-hidden="true" />
+                    <span
+                        className="min-w-0 flex-1 truncate text-[11.5px] text-muted-foreground"
+                        title={currentUrl || undefined}
+                    >
+                        {currentUrl || "about:blank"}
+                    </span>
+                </div>
+            )}
+            {isPanel ? (
+                <div ref={fitAreaRef} className="relative min-h-0 flex-1">
+                    <div
+                        ref={viewportRef}
+                        className="browser-agent-live-viewport absolute overflow-hidden rounded-md border border-border/70 bg-white shadow-sm [background:white]"
+                        style={panelFit
+                            ? { left: panelFit.left, top: panelFit.top, width: panelFit.width, height: panelFit.height }
+                            : { inset: 0 }}
+                        aria-label={`${connection} browser live view`}
+                        onPointerDown={handleViewportPointerDown}
+                    >
+                        <div ref={targetRef} className="size-full bg-white" />
+                        {hasRealDimensions && state.cursor && connection === "connected" && (
+                            <BrowserAgentCursorOverlay
+                                cursor={state.cursor}
+                                containerRef={viewportRef}
+                                frameWidth={viewportWidth}
+                                frameHeight={viewportHeight}
+                            />
+                        )}
+                    </div>
+                </div>
+            ) : (
+                <div
+                    ref={viewportRef}
+                    className="browser-agent-live-viewport relative min-h-0 w-full overflow-hidden rounded-md border border-border/70 bg-white shadow-sm [background:white]"
+                    style={{
+                        aspectRatio: fullscreen ? "auto" : `${viewportWidth} / ${viewportHeight}`,
+                        height: fullscreen ? "100%" : undefined,
+                        maxHeight: fullscreen ? "none" : "min(360px, calc(100vh - 320px))",
+                        minHeight: fullscreen ? 0 : "220px",
+                    }}
+                    aria-label={`${connection} browser live view`}
+                    onPointerDown={handleViewportPointerDown}
+                >
+                    <div ref={targetRef} className="size-full bg-white" />
+                    {hasRealDimensions && state.cursor && connection === "connected" && (
+                        <BrowserAgentCursorOverlay
+                            cursor={state.cursor}
+                            containerRef={viewportRef}
+                            frameWidth={viewportWidth}
+                            frameHeight={viewportHeight}
+                        />
+                    )}
+                </div>
+            )}
         </div>
     )
 }

@@ -159,7 +159,12 @@ export function BrowserAgentWorkspace({
         storageKey={`todo-bar:agent:${run.runId}:expanded`}
         hideCompleted={run.status !== "running"}
       />
-      <div className="shrink-0">
+      {/* The live view contain-fits inside its flexible share of the column,
+          so resizing the panel always keeps the whole browser visible; the
+          tabs box takes the rest. Before the stream is ready the live view is
+          just a status chip (no .browser-agent-live-viewport inside), so the
+          wrapper stays collapsed instead of reserving empty space. */}
+      <div className="min-h-0 min-w-0 shrink-0 has-[.browser-agent-live-viewport]:min-h-[200px] has-[.browser-agent-live-viewport]:flex-[3_2_0%]">
         <BrowserAgentLiveView
           variant="panel"
           active={active}
@@ -189,7 +194,7 @@ function BrowserAgentDiagnosticsTabs({
   active: boolean
   onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
 }) {
-  const [tab, setTab] = React.useState<BrowserPanelTab>("console")
+  const [tab, setTab] = React.useState<BrowserPanelTab>("transcript")
   const data = useBrowserDiagnostics(sessionId, active)
   const diagnostics = data?.diagnostics ?? null
 
@@ -199,8 +204,13 @@ function BrowserAgentDiagnosticsTabs({
     (diagnostics?.failedRequests.length ?? 0) + (diagnostics?.httpErrors.length ?? 0)
 
   return (
-    <div className="flex min-h-[140px] min-w-0 flex-1 flex-col overflow-hidden rounded-md border border-[#24242a] bg-[#0c0c0e] shadow-sm">
+    <div className="flex min-h-[140px] min-w-0 flex-[2_3_0%] flex-col overflow-hidden rounded-md border border-[#24242a] bg-[#0c0c0e] shadow-sm">
       <div className="flex shrink-0 items-center gap-1 border-b border-white/10 px-2 py-1.5">
+        <BrowserPanelTabButton
+          label="Transcript"
+          active={tab === "transcript"}
+          onClick={() => setTab("transcript")}
+        />
         <BrowserPanelTabButton
           label="Console"
           count={consoleCount}
@@ -213,19 +223,6 @@ function BrowserAgentDiagnosticsTabs({
           active={tab === "network"}
           onClick={() => setTab("network")}
         />
-        <BrowserPanelTabButton
-          label="Transcript"
-          active={tab === "transcript"}
-          onClick={() => setTab("transcript")}
-        />
-        {diagnostics?.currentUrl && (
-          <span
-            className="ml-auto min-w-0 truncate pl-2 text-[11px] text-zinc-500"
-            title={diagnostics.currentUrl}
-          >
-            {diagnostics.currentUrl}
-          </span>
-        )}
       </div>
       {tab === "transcript" ? (
         <BrowserAgentOutputTerminal
