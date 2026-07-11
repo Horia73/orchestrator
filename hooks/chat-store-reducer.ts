@@ -551,11 +551,28 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const existingConversation = state.conversations.find(
         (conversation) => conversation.id === action.id
       )
+      const existingPage = state.conversationMessagePages[action.id]
       const mergedMessages = mergeMessagesById(
         existingConversation?.messages ?? [],
         action.messages
       )
-      const nextLoadState: ConversationLoadState = action.hasMore
+      // A tail reconciliation must not throw away the cursor for older pages
+      // the user already loaded. "replace" refreshes the newest window while
+      // merging by id; "prepend" is the only operation that advances the
+      // oldest-page cursor.
+      const preserveLoadedHistoryWindow = Boolean(
+        action.mode === "replace" &&
+          existingPage &&
+          (existingPage.nextCursor !== null ||
+            existingPage.loadedCount > action.messages.length)
+      )
+      const hasMore = preserveLoadedHistoryWindow
+        ? existingPage!.hasMore
+        : action.hasMore
+      const nextCursor = preserveLoadedHistoryWindow
+        ? existingPage!.nextCursor
+        : action.nextCursor
+      const nextLoadState: ConversationLoadState = hasMore
         ? "partial"
         : "full"
 
@@ -589,8 +606,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           [action.id]: {
             total: action.total,
             loadedCount: mergedMessages.length,
-            hasMore: action.hasMore,
-            nextCursor: action.nextCursor,
+            hasMore,
+            nextCursor,
             isLoadingOlder: false,
           },
         },
@@ -1397,28 +1414,28 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
               )
             : state.pendingFollowUps,
         conversations: sortConversationsByActivity(
-          state.conversations.map((conv) =>
-            conv.id === action.conversationId
-              ? {
-                  ...conv,
-                  updatedAt: action.message.timestamp,
-                  messageCount:
-                    (conv.messageCount ?? conv.messages.length) +
-                    (conv.messages.some((m) => m.id === action.message.id)
-                      ? 0
-                      : 1),
-                  lastMessagePreview: action.message.content,
-                  lastMessageAt: action.message.timestamp,
-                  messages: conv.messages.some(
-                    (m) => m.id === action.message.id
-                  )
-                    ? conv.messages.map((m) =>
-                        m.id === action.message.id ? action.message : m
-                      )
-                    : [...conv.messages, action.message],
-                }
-              : conv
-          )
+          state.conversations.map((conv) => {
+            if (conv.id !== action.conversationId) return conv
+
+            const messages = mergeMessagesById(conv.messages, [action.message])
+            const resolvedMessage =
+              messages.find((message) => message.id === action.message.id) ??
+              action.message
+
+            return {
+              ...conv,
+              updatedAt: Math.max(conv.updatedAt ?? 0, resolvedMessage.timestamp),
+              messageCount:
+                (conv.messageCount ?? conv.messages.length) +
+                (conv.messages.some((m) => m.id === action.message.id) ? 0 : 1),
+              lastMessagePreview: resolvedMessage.content,
+              lastMessageAt: Math.max(
+                conv.lastMessageAt ?? 0,
+                resolvedMessage.timestamp
+              ),
+              messages,
+            }
+          })
         ),
         conversationMessagePages:
           page && isNewMessage

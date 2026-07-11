@@ -248,6 +248,19 @@ function mergeMessagePreservingDetails(
   existing: Message,
   incoming: Message
 ): Message {
+  // Assistant rows are updated in place throughout a turn. A tail refresh or
+  // delayed sync event can therefore arrive out of order: once the terminal
+  // row is in memory, an older progress snapshot must never replace it and
+  // bring back a half-finished tool trace until reload.
+  const existingIsTerminal = isTerminalAssistantMessage(existing)
+  const incomingIsTerminal = isTerminalAssistantMessage(incoming)
+  if (
+    existingIsTerminal &&
+    (!incomingIsTerminal || existing.timestamp > incoming.timestamp)
+  ) {
+    return existing
+  }
+
   if (!incoming.deferred) return incoming
 
   const reasoning = existing.reasoning ?? incoming.reasoning
@@ -441,6 +454,26 @@ export function isTerminalAssistantMessage(message: Message | null | undefined) 
   return Boolean(
     message?.role === "assistant" &&
     (message.status || typeof message.thinkingDuration === "number")
+  )
+}
+
+/**
+ * The direct /api/chat reader owns only its exact assistant row. Global sync
+ * must keep applying assistant updates from every other conversation while a
+ * local turn streams; treating `ownsStream` as a global gate drops unrelated
+ * background completions and leaves their last progress snapshot on screen.
+ */
+export function isOwnedAssistantStreamMessage(args: {
+  ownsStream: boolean
+  ownedConversationId: string | null
+  ownedMessageId: string | null
+  eventConversationId: string
+  eventMessageId: string
+}): boolean {
+  return Boolean(
+    args.ownsStream &&
+      args.ownedConversationId === args.eventConversationId &&
+      args.ownedMessageId === args.eventMessageId
   )
 }
 

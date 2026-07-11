@@ -331,8 +331,7 @@ export function ChatView() {
     : undefined
   const isInitialMessagesLoading = Boolean(
     conversationId &&
-    state.conversationLoadState[conversationId] === "loading" &&
-    messageCount === 0
+    state.conversationLoadState[conversationId] === "loading"
   )
   const hasOlderMessages = Boolean(messagePage?.hasMore)
   const isLoadingOlderMessages = Boolean(messagePage?.isLoadingOlder)

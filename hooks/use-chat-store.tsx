@@ -64,6 +64,7 @@ import {
   deriveUnreadConversationIds,
   errorMessageFromUnknown,
   isConversationUnread,
+  isOwnedAssistantStreamMessage,
   isLikelyStreamInterruption,
   isTerminalAssistantMessage,
   markReasoningStopped,
@@ -284,6 +285,27 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   >({})
   const profileSessionGenerationRef = React.useRef(0)
   const initialMessageLoadsRef = React.useRef<Map<string, Promise<void>>>(
+    new Map()
+  )
+  // Opening a conversation is stronger than hover-prefetch: it always
+  // reconciles the visible tail against the DB, even when the local page is
+  // marked "full". Keep those loads separate so an older prefetch cannot make
+  // the click join a snapshot captured before the agent finalized.
+  const openMessageLoadsRef = React.useRef<Map<string, Promise<void>>>(new Map())
+  // `selectConversation` starts the authoritative load during the outgoing
+  // fade. The active-id effect that runs when the delayed selection commits
+  // consumes this marker instead of immediately launching a second refresh.
+  const selectionReconcileConversationRef = React.useRef<string | null>(null)
+  // Tail requests may overlap (prefetch, click, stream-ended, reconnect). Only
+  // the newest response for a conversation may commit, otherwise a slow
+  // mid-stream response can overwrite a faster terminal one.
+  const messageTailRefreshGenerationRef = React.useRef<Map<string, number>>(
+    new Map()
+  )
+  // Detect a stream ending while recovery is hydrating a progress snapshot.
+  // Without this epoch, the stale recovery continuation can re-introduce
+  // isStreaming=true after chat_stream_ended already cleared it.
+  const chatStreamLifecycleGenerationRef = React.useRef<Map<string, number>>(
     new Map()
   )
   const messageDetailLoadsRef = React.useRef<Map<string, Promise<void>>>(
@@ -705,6 +727,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       activeChatStreamsRef.current = {}
       conversationLoadStateRef.current = {}
       initialMessageLoadsRef.current.clear()
+      openMessageLoadsRef.current.clear()
+      selectionReconcileConversationRef.current = null
+      messageTailRefreshGenerationRef.current.clear()
+      chatStreamLifecycleGenerationRef.current.clear()
       messageDetailLoadsRef.current.clear()
       summaryRefreshPromiseRef.current = null
       try {
@@ -841,39 +867,81 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [refreshConversationSummaries])
 
+  const reconcileConversationTail = React.useCallback(
+    async (conversationId: string): Promise<Message[] | null> => {
+      const generation =
+        (messageTailRefreshGenerationRef.current.get(conversationId) ?? 0) + 1
+      messageTailRefreshGenerationRef.current.set(conversationId, generation)
+
+      try {
+        const page = await fetchConversationMessagePage(
+          conversationId,
+          INITIAL_MESSAGE_PAGE_SIZE,
+          undefined,
+          "mixed",
+          INITIAL_MESSAGE_FULL_TAIL_SIZE
+        )
+        if (
+          messageTailRefreshGenerationRef.current.get(conversationId) !==
+          generation
+        ) {
+          return null
+        }
+        dispatch({
+          type: "LOAD_MESSAGE_PAGE_SUCCESS",
+          id: conversationId,
+          messages: page.messages,
+          total: page.total,
+          hasMore: page.hasMore,
+          nextCursor: page.nextCursor,
+          mode: "replace",
+        })
+        return page.messages
+      } catch (error) {
+        // A newer reconciliation superseded this request; its result/error is
+        // the only one allowed to affect the visible conversation.
+        if (
+          messageTailRefreshGenerationRef.current.get(conversationId) !==
+          generation
+        ) {
+          return null
+        }
+        throw error
+      }
+    },
+    []
+  )
+
   const loadInitialMessages = React.useCallback(
-    async (conversationId: string) => {
+    async (
+      conversationId: string,
+      options?: { reconcileOnOpen?: boolean }
+    ): Promise<void> => {
+      const reconcileOnOpen = options?.reconcileOnOpen === true
       const status = conversationLoadStateRef.current[conversationId]
       if (
-        status === "partial" ||
-        status === "full" ||
-        status === "loading" ||
-        status === "error"
+        !reconcileOnOpen &&
+        (status === "partial" ||
+          status === "full" ||
+          status === "loading" ||
+          status === "error")
       )
         return
 
-      const existingLoad = initialMessageLoadsRef.current.get(conversationId)
+      const loads = reconcileOnOpen
+        ? openMessageLoadsRef.current
+        : initialMessageLoadsRef.current
+      const existingLoad = loads.get(conversationId)
       if (existingLoad) return existingLoad
 
       const load = (async () => {
         dispatch({ type: "LOAD_CONVERSATION_START", id: conversationId })
+        conversationLoadStateRef.current = {
+          ...conversationLoadStateRef.current,
+          [conversationId]: "loading",
+        }
         try {
-          const page = await fetchConversationMessagePage(
-            conversationId,
-            INITIAL_MESSAGE_PAGE_SIZE,
-            undefined,
-            "mixed",
-            INITIAL_MESSAGE_FULL_TAIL_SIZE
-          )
-          dispatch({
-            type: "LOAD_MESSAGE_PAGE_SUCCESS",
-            id: conversationId,
-            messages: page.messages,
-            total: page.total,
-            hasMore: page.hasMore,
-            nextCursor: page.nextCursor,
-            mode: "replace",
-          })
+          await reconcileConversationTail(conversationId)
         } catch (err) {
           dispatch({
             type: "LOAD_CONVERSATION_ERROR",
@@ -881,14 +949,14 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             error: err instanceof Error ? err.message : "Failed to load chat",
           })
         } finally {
-          initialMessageLoadsRef.current.delete(conversationId)
+          loads.delete(conversationId)
         }
       })()
 
-      initialMessageLoadsRef.current.set(conversationId, load)
+      loads.set(conversationId, load)
       return load
     },
-    []
+    [reconcileConversationTail]
   )
 
   const loadMessageDetails = React.useCallback(
@@ -926,30 +994,25 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   )
 
   const refreshConversationMessages = React.useCallback(
-    async (conversationId: string): Promise<Message[]> => {
-      const page = await fetchConversationMessagePage(
-        conversationId,
-        INITIAL_MESSAGE_PAGE_SIZE
-      )
-      dispatch({
-        type: "LOAD_MESSAGE_PAGE_SUCCESS",
-        id: conversationId,
-        messages: page.messages,
-        total: page.total,
-        hasMore: page.hasMore,
-        nextCursor: page.nextCursor,
-        mode: "replace",
-      })
-      return page.messages
-    },
-    []
+    (conversationId: string): Promise<Message[] | null> =>
+      reconcileConversationTail(conversationId),
+    [reconcileConversationTail]
   )
 
   React.useEffect(() => {
     if (pathname?.startsWith("/profiles")) return
     const conversationId = state.activeConversationId
     if (!conversationId) return
-    void loadInitialMessages(conversationId)
+    if (selectionReconcileConversationRef.current === conversationId) {
+      selectionReconcileConversationRef.current = null
+      if (pathname === "/") return
+    }
+    // Selecting from an embedded chat surface already started its load above.
+    // The strong open reconciliation belongs to the main chat route; running
+    // it while navigating away would add a needless request and briefly mark
+    // the hidden conversation as loading.
+    if (pathname !== "/") return
+    void loadInitialMessages(conversationId, { reconcileOnOpen: true })
   }, [loadInitialMessages, pathname, state.activeConversationId])
 
   const checkServerStreaming = React.useCallback(
@@ -1016,6 +1079,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       // early so the send path can re-send instead of polling out the budget.
       let confirmedMissingTurn = 0
       while (true) {
+        const lifecycleGeneration =
+          chatStreamLifecycleGenerationRef.current.get(conversationId) ?? 0
         // Fetch BEFORE touching streaming state. Flipping isStreaming on up
         // front would re-light the "..." cursor and auto-open every reasoning/
         // tool card on a conversation that already finished — exactly the
@@ -1032,7 +1097,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         // running" and recovery marked live runs as aborted.
         const serverReachable = messagesResult.status === "fulfilled"
         const messages =
-          messagesResult.status === "fulfilled" ? messagesResult.value : []
+          messagesResult.status === "fulfilled" &&
+          Array.isArray(messagesResult.value)
+            ? messagesResult.value
+            : []
         // When the caller knows which assistant message this turn owns, only
         // that row counts. Falling back to "the last assistant message" here
         // used to resurface the PREVIOUS turn's reply as this turn's result
@@ -1064,6 +1132,15 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             activeMessage,
             activeStream.messageId
           )
+          if (
+            (chatStreamLifecycleGenerationRef.current.get(conversationId) ??
+              0) !== lifecycleGeneration
+          ) {
+            // A start/end event landed while the snapshot request was in
+            // flight. Loop against current server state instead of reviving
+            // the now-stale stream frame after its terminal event.
+            continue
+          }
           if (snapshot) {
             dispatch({
               type: "ADD_ASSISTANT_MESSAGE",
@@ -1499,41 +1576,54 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           })
         } else if (data.type === "add_message") {
           const msg = data.payload.message
+          const eventConversationId = data.payload.conversationId
           reconcileUnknownConversation(
-            data.payload.conversationId,
+            eventConversationId,
             "after message for unknown conversation"
           )
           if (msg.role === "user") {
             dispatch({
               type: "ADD_USER_MESSAGE",
-              conversationId: data.payload.conversationId,
+              conversationId: eventConversationId,
               message: msg,
             })
           } else if (msg.role === "assistant") {
-            // Only add if we're NOT the tab that's streaming it
-            if (!streamingRef.current) {
-              const isFinalChunk =
-                typeof msg.thinkingDuration === "number" ||
-                msg.status === "ok" ||
-                msg.status === "error" ||
-                msg.status === "aborted"
+            // The direct reader owns only its exact row. Keep applying sync
+            // updates for other conversations while a local turn streams;
+            // globally suppressing them is how background completions were
+            // lost until refresh.
+            const isOwnedStreamMessage = isOwnedAssistantStreamMessage({
+              ownsStream: streamingRef.current,
+              ownedConversationId: streamingConversationIdRef.current,
+              ownedMessageId: clientStreamMessageIdRef.current,
+              eventConversationId,
+              eventMessageId: msg.id,
+            })
+            if (!isOwnedStreamMessage) {
+              const isFinalChunk = isTerminalAssistantMessage(msg)
+              const existingMessage = conversationsRef.current
+                .find((conversation) => conversation.id === eventConversationId)
+                ?.messages.find((message) => message.id === msg.id)
+              const alreadyHasTerminalMessage =
+                isTerminalAssistantMessage(existingMessage)
               dispatch({
                 type: "ADD_ASSISTANT_MESSAGE",
-                conversationId: data.payload.conversationId,
+                conversationId: eventConversationId,
                 message: msg,
                 stopStreaming: isFinalChunk,
               })
               if (isFinalChunk) {
-                handleAssistantFinished(data.payload.conversationId, msg)
+                handleAssistantFinished(eventConversationId, msg)
               }
               if (
                 !isFinalChunk &&
-                data.payload.conversationId === activeConversationIdRef.current
+                !alreadyHasTerminalMessage &&
+                eventConversationId === activeConversationIdRef.current
               ) {
                 dispatch({
                   type: "SET_STREAMING",
                   isStreaming: true,
-                  conversationId: data.payload.conversationId,
+                  conversationId: eventConversationId,
                   status: recoveryStreamingStatus(),
                 })
               }
@@ -1604,6 +1694,12 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             messageId: data.payload.messageId,
             startedAt: data.payload.startedAt,
           }
+          chatStreamLifecycleGenerationRef.current.set(
+            stream.conversationId,
+            (chatStreamLifecycleGenerationRef.current.get(
+              stream.conversationId
+            ) ?? 0) + 1
+          )
           activeChatStreamsRef.current = {
             ...activeChatStreamsRef.current,
             [stream.conversationId]: stream,
@@ -1614,6 +1710,12 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             conversationId: stream.conversationId,
           })
         } else if (data.type === "chat_stream_ended") {
+          chatStreamLifecycleGenerationRef.current.set(
+            data.payload.conversationId,
+            (chatStreamLifecycleGenerationRef.current.get(
+              data.payload.conversationId
+            ) ?? 0) + 1
+          )
           const current =
             activeChatStreamsRef.current[data.payload.conversationId]
           if (
@@ -1631,16 +1733,34 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             messageId: data.payload.messageId,
           })
           reconcileConversationSummaries("after stream end")
+          const ownsEndedStream = isOwnedAssistantStreamMessage({
+            ownsStream: streamingRef.current,
+            ownedConversationId: streamingConversationIdRef.current,
+            ownedMessageId: clientStreamMessageIdRef.current,
+            eventConversationId: data.payload.conversationId,
+            eventMessageId:
+              typeof data.payload.messageId === "string"
+                ? data.payload.messageId
+                : "",
+          })
           if (
             document.visibilityState === "visible" &&
             data.payload.conversationId === activeConversationIdRef.current &&
-            !streamingRef.current
+            !ownsEndedStream
           ) {
             void recoverInterruptedStream(
               data.payload.conversationId,
               typeof data.payload.messageId === "string"
                 ? data.payload.messageId
                 : undefined
+            )
+          } else if (!ownsEndedStream) {
+            // Stream-end is an invalidation boundary. Reconcile inactive
+            // conversations too, so the final DB row replaces whatever
+            // progress snapshot happened to arrive last before the user opens
+            // the chat.
+            void refreshConversationMessages(data.payload.conversationId).catch(
+              () => {}
             )
           }
           window.setTimeout(
@@ -1741,6 +1861,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event(CHAT_VIEW_SAVE_STATE_EVENT))
     }
+    selectionReconcileConversationRef.current = null
     detachStreaming()
     const focusInput = () => {
       if (typeof window === "undefined") return
@@ -1803,7 +1924,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       activeConversationIdRef.current = id
       detachStreaming()
       markConversationRead(id)
-      void loadInitialMessages(id)
+      selectionReconcileConversationRef.current = id
+      void loadInitialMessages(id, { reconcileOnOpen: true })
       if (pendingSwitchTimeoutRef.current !== null) {
         window.clearTimeout(pendingSwitchTimeoutRef.current)
         pendingSwitchTimeoutRef.current = null
@@ -2266,6 +2388,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       const assistantMsgId = generateId()
       clientStreamMessageIdRef.current = assistantMsgId
       streamingRef.current = true
+      streamingConversationIdRef.current = conversationId
       streamDoneRef.current = false
       streamPageWasHiddenRef.current = document.visibilityState !== "visible"
       streamStallRequestedRef.current = false

@@ -4,7 +4,11 @@ import {
   chatReducer,
   createInitialChatState,
 } from "../hooks/chat-store-reducer"
-import { shouldSendAsSteering } from "../hooks/chat-store-utils"
+import {
+  isOwnedAssistantStreamMessage,
+  mergeMessagesById,
+  shouldSendAsSteering,
+} from "../hooks/chat-store-utils"
 import { findActiveInProgressAssistantMessage } from "../components/chat/chat-view-helpers"
 import { clearChatStream, registerChatStream } from "../lib/chat-streams"
 import type { Conversation, Message } from "../lib/types"
@@ -152,5 +156,173 @@ assert.equal(
 )
 assert.equal(firstController.signal.aborted, false)
 clearChatStream(streamConversationId, "assistant_first")
+
+// A local reader suppresses only its exact sync echo. Assistant snapshots
+// from another conversation must still land while that reader is active.
+assert.equal(
+  isOwnedAssistantStreamMessage({
+    ownsStream: true,
+    ownedConversationId: "conversation_a",
+    ownedMessageId: "assistant_a",
+    eventConversationId: "conversation_a",
+    eventMessageId: "assistant_a",
+  }),
+  true
+)
+assert.equal(
+  isOwnedAssistantStreamMessage({
+    ownsStream: true,
+    ownedConversationId: "conversation_a",
+    ownedMessageId: "assistant_a",
+    eventConversationId: "conversation_b",
+    eventMessageId: "assistant_b",
+  }),
+  false
+)
+
+// Once the DB-backed terminal row has landed, an out-of-order progress page
+// cannot roll the UI back to a lone tool summary (the refresh-only bug).
+const terminal: Message = {
+  id: "assistant_reconciled",
+  role: "assistant",
+  content: "Final answer",
+  status: "ok",
+  durationMs: 12_000,
+  reasoning: [],
+  timestamp: 20_000,
+}
+const staleProgress: Message = {
+  id: terminal.id,
+  role: "assistant",
+  content: "",
+  reasoning: [
+    {
+      type: "tool_call",
+      id: "tool_list",
+      phase: 0,
+      toolCallId: "tool_list",
+      title: "listed dir",
+      content: "",
+      status: "ok",
+    },
+  ],
+  timestamp: 10_000,
+}
+assert.deepEqual(mergeMessagesById([terminal], [staleProgress]), [terminal])
+
+const reconciledReducerState = chatReducer(
+  {
+    ...createInitialChatState(false),
+    conversations: [
+      {
+        id: "reconciled_conversation",
+        title: "Reconciled conversation",
+        messages: [terminal],
+        messageCount: 1,
+        createdAt: terminal.timestamp,
+      },
+    ],
+  },
+  {
+    type: "ADD_ASSISTANT_MESSAGE",
+    conversationId: "reconciled_conversation",
+    message: staleProgress,
+    stopStreaming: false,
+  }
+)
+assert.equal(
+  reconciledReducerState.conversations[0]?.messages[0]?.content,
+  "Final answer"
+)
+
+const historyCursor = "1000:older_message"
+const historyPreserved = chatReducer(
+  {
+    ...createInitialChatState(false),
+    conversations: [
+      {
+        id: "history_conversation",
+        title: "History conversation",
+        messages: [
+          { id: "older_message", role: "user", content: "Old", timestamp: 1 },
+          terminal,
+        ],
+        messageCount: 3,
+        createdAt: 1,
+      },
+    ],
+    conversationLoadState: { history_conversation: "loading" },
+    conversationMessagePages: {
+      history_conversation: {
+        total: 3,
+        loadedCount: 2,
+        hasMore: true,
+        nextCursor: historyCursor,
+        isLoadingOlder: false,
+      },
+    },
+  },
+  {
+    type: "LOAD_MESSAGE_PAGE_SUCCESS",
+    id: "history_conversation",
+    messages: [terminal],
+    total: 3,
+    hasMore: true,
+    nextCursor: "20000:new_tail_cursor",
+    mode: "replace",
+  }
+)
+assert.equal(
+  historyPreserved.conversationMessagePages.history_conversation?.nextCursor,
+  historyCursor
+)
+
+const fullHistoryPreserved = chatReducer(
+  {
+    ...createInitialChatState(false),
+    conversations: [
+      {
+        id: "full_history_conversation",
+        title: "Full history conversation",
+        messages: [
+          { id: "oldest", role: "user", content: "Oldest", timestamp: 1 },
+          { id: "middle", role: "assistant", content: "Middle", timestamp: 2 },
+          terminal,
+        ],
+        messageCount: 3,
+        createdAt: 1,
+      },
+    ],
+    conversationLoadState: { full_history_conversation: "loading" },
+    conversationMessagePages: {
+      full_history_conversation: {
+        total: 3,
+        loadedCount: 3,
+        hasMore: false,
+        nextCursor: null,
+        isLoadingOlder: false,
+      },
+    },
+  },
+  {
+    type: "LOAD_MESSAGE_PAGE_SUCCESS",
+    id: "full_history_conversation",
+    messages: [terminal],
+    total: 3,
+    hasMore: true,
+    nextCursor: "20000:tail_cursor",
+    mode: "replace",
+  }
+)
+assert.equal(
+  fullHistoryPreserved.conversationMessagePages.full_history_conversation
+    ?.hasMore,
+  false
+)
+assert.equal(
+  fullHistoryPreserved.conversationMessagePages.full_history_conversation
+    ?.nextCursor,
+  null
+)
 
 console.log("chat steering smoke passed")
