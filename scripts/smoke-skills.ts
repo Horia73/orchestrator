@@ -83,6 +83,34 @@ const EXPECTED_SKILLS = [
     runtimeNeedle: "Orchestrator UI",
     includeFile: "SKILL.md",
   },
+  {
+    id: "data-analytics",
+    query: "analyze business metrics and data quality",
+    expectedSearchTerm: "structured data",
+    requiredFiles: [
+      "references/data-quality.md",
+      "references/metric-diagnostics.md",
+      "references/visualization-and-reporting.md",
+    ],
+    runtimeNeedle: "application/vnd.ant.react",
+    includeFile: "references/data-quality.md",
+  },
+  {
+    id: "incident-investigation",
+    query: "debug a stuck failed runtime flow",
+    expectedSearchTerm: "stuck",
+    requiredFiles: ["references/diagnostic-ladder.md"],
+    runtimeNeedle: 'ActivateIntegrationTools("observability")',
+    includeFile: "references/diagnostic-ladder.md",
+  },
+  {
+    id: "product-design-audit",
+    query: "audit ux product flow screenshots",
+    expectedSearchTerm: "product flow",
+    requiredFiles: ["references/audit-framework.md"],
+    runtimeNeedle: "browser_agent",
+    includeFile: "references/audit-framework.md",
+  },
 ]
 
 async function main() {
@@ -175,6 +203,23 @@ async function main() {
   const commsRead = await executeReadSkillFile({ skill: "internal-comms", path: "examples/general-comms.md" })
   assert.strictEqual(commsRead.success, true, "ReadSkillFile should succeed for internal comms examples")
   assert.ok(JSON.stringify(commsRead.data).includes("communication"), "ReadSkillFile should return internal comms content")
+
+  const frontendSkill = findSkill("frontend-design")
+  assert.ok(frontendSkill, "frontend-design skill should be installed")
+  const frontendSkillMd = readSkillFile(frontendSkill!, "SKILL.md")
+  for (const needle of [
+    'ActivateIntegrationTools("media")',
+    "exactly three",
+    "image_generator",
+    "unavailable or fails",
+    "selection",
+    "browser_agent",
+  ]) {
+    assert.ok(
+      frontendSkillMd.content.includes(needle),
+      `frontend-design should include visual-first workflow clause: ${needle}`
+    )
+  }
 
   const pptx = findSkill("pptx")
   assert.ok(pptx, "pptx skill should be installed")

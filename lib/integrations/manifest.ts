@@ -12,6 +12,7 @@ import {
   WEATHER_TOOL_IDS,
   WHATSAPP_TOOL_IDS,
 } from "@/lib/ai/agents/builtins"
+import { GOOGLE_CALENDAR_DOCTRINE } from "@/lib/integrations/doctrines/google-calendar"
 import { GOOGLE_WORKSPACE_DOCTRINE } from "@/lib/integrations/doctrines/google-workspace"
 import { MAPS_DOCTRINE } from "@/lib/integrations/doctrines/maps"
 import { WEATHER_DOCTRINE } from "@/lib/integrations/doctrines/weather"
@@ -132,7 +133,7 @@ export const INTEGRATION_MANIFEST: IntegrationManifestEntry[] = [
     id: "google-calendar",
     label: "Google Calendar",
     capability:
-      "Calendar: list/search events, check free/busy and availability, create/update/move/delete events, respond to invites.",
+      "Calendar: list/search events, build daily briefs and meeting prep, find group slots or focus blocks, create/update/move/delete events, respond to invites.",
     runbookId: "google-calendar",
     statusKind: "google-calendar",
     setupToolIds: GOOGLE_CALENDAR_SETUP,
@@ -140,6 +141,7 @@ export const INTEGRATION_MANIFEST: IntegrationManifestEntry[] = [
       GOOGLE_CALENDAR_TOOL_IDS,
       GOOGLE_CALENDAR_SETUP
     ),
+    doctrine: GOOGLE_CALENDAR_DOCTRINE,
   },
   {
     id: "google-workspace",

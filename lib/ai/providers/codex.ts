@@ -2,6 +2,8 @@ import { spawn } from 'child_process'
 
 import type {
     AIProvider,
+    ImageGenOptions,
+    ImageGenResult,
     ProviderCapabilities,
     ProviderBuiltin,
     ProviderSendOptions,
@@ -22,6 +24,7 @@ import { attachBillingMetadata } from '@/lib/observability/billing-metadata'
 import type { BillingUsageEntry } from '@/lib/observability/schema'
 import { estimateCodexApiEquivalentCall } from '@/lib/observability/api-equivalent'
 import { latestUserPromptWithPortableHistory } from './history'
+import { generateCodexImage } from './codex-image'
 import {
     codexContextUsageSnapshot,
     codexUsageForBillingUpdate,
@@ -53,7 +56,7 @@ export class CodexProvider implements AIProvider {
     readonly id = 'codex'
     readonly name = 'Codex CLI'
     readonly capabilities: ProviderCapabilities = {
-        kinds: ['text'],
+        kinds: ['text', 'image'],
         nativeBuiltins: [
             'read',
             'write',
@@ -105,6 +108,10 @@ export class CodexProvider implements AIProvider {
             signal: options.signal,
             callbacks: cb,
         })
+    }
+
+    async generateImage(options: ImageGenOptions): Promise<ImageGenResult> {
+        return generateCodexImage(options)
     }
 }
 

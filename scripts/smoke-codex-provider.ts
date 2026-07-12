@@ -1,11 +1,35 @@
 import assert from "node:assert/strict"
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { isTransientCodexAppServerError, mapEffortForCodex } from "@/lib/ai/providers/codex"
+import { CodexProvider, isTransientCodexAppServerError, mapEffortForCodex } from "@/lib/ai/providers/codex"
+import { codexImageTestHooks, generateCodexImage } from "@/lib/ai/providers/codex-image"
+import { imageGenerator } from "@/lib/ai/agents/image-generator"
+import { migrateLegacyAgentModelSelection } from "@/lib/config"
 import { clearCodexAuthFiles, codexAuthRejectedByBoth } from "@/lib/cli/codex-env"
 import { codexModelsToLiveEntries, type CodexListedModel } from "@/lib/cli/codex-model-probe"
+import { getEffectiveModel } from "@/lib/models/registry"
+
+assert.ok(
+  new CodexProvider("").capabilities.kinds.includes("image"),
+  "Codex provider should advertise image generation"
+)
+assert.equal(imageGenerator.provider, "codex", "Image Generator should default to the Codex subscription route")
+assert.equal(imageGenerator.model, "imagegen")
+assert.deepEqual(
+  migrateLegacyAgentModelSelection("image_generator", "google", "gemini-3.1-flash-image"),
+  { provider: "codex", model: "imagegen", migrated: true },
+  "The retired per-profile Gemini image override should move to Codex ImageGen"
+)
+assert.deepEqual(
+  migrateLegacyAgentModelSelection("image_generator", "google", "gemini-3.1-flash-image-preview"),
+  { provider: "google", model: "gemini-3.1-flash-image-preview", migrated: false },
+  "The current Google image route must remain an explicit selectable alternative"
+)
+const imagegenModel = getEffectiveModel("codex", "imagegen")
+assert.ok(imagegenModel?.kinds.includes("image"), "Codex ImageGen should be a selectable image model")
+assert.deepEqual(imagegenModel?.pricing, { kind: "subscription" })
 
 assert.equal(
   isTransientCodexAppServerError("Reconnecting... 2/5"),
@@ -99,6 +123,108 @@ try {
   assert.equal(existsSync(sourceAuth), false, "Codex logout must remove the source credentials that seed the runtime")
 } finally {
   rmSync(authFixtureRoot, { recursive: true, force: true })
+}
+
+const imageFixtureRoot = mkdtempSync(join(tmpdir(), "orchestrator-codex-image-smoke-"))
+try {
+  const fakeCodex = join(imageFixtureRoot, "fake-codex.mjs")
+  const capturePath = join(imageFixtureRoot, "capture.json")
+  const tinyPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+  writeFileSync(fakeCodex, `#!/usr/bin/env node
+import readline from "node:readline"
+import path from "node:path"
+import { existsSync, writeFileSync } from "node:fs"
+
+const send = value => process.stdout.write(JSON.stringify(value) + "\\n")
+const rl = readline.createInterface({ input: process.stdin })
+rl.on("line", line => {
+  const message = JSON.parse(line)
+  if (message.method === "initialize") {
+    send({ id: message.id, result: { userAgent: "fake" } })
+    return
+  }
+  if (message.method === "modelProvider/capabilities/read") {
+    send({ id: message.id, result: {
+      imageGeneration: process.env.FAKE_IMAGE_CAPABILITY !== "false",
+      namespaceTools: true,
+      webSearch: false,
+    } })
+    return
+  }
+  if (message.method === "thread/start") {
+    send({ id: message.id, result: { thread: { id: "fake-image-thread" } } })
+    return
+  }
+  if (message.method === "turn/start") {
+    writeFileSync(process.env.FAKE_CAPTURE_PATH, JSON.stringify({
+      args: process.argv.slice(2),
+      cwd: process.cwd(),
+      turn: message.params,
+      referenceExists: existsSync(message.params.input[1]?.path ?? ""),
+    }))
+    const savedPath = path.join(process.cwd(), "fake-output.png")
+    writeFileSync(savedPath, Buffer.from("${tinyPngBase64}", "base64"))
+    send({ id: message.id, result: { turn: { id: "fake-turn" } } })
+    send({ method: "item/completed", params: { item: {
+      id: "fake-image-item",
+      type: "imageGeneration",
+      status: "completed",
+      result: "",
+      revisedPrompt: "revised smoke prompt",
+      savedPath,
+    } } })
+    send({ method: "thread/tokenUsage/updated", params: { tokenUsage: { totalTokens: 7 } } })
+    send({ method: "turn/completed", params: { turn: { id: "fake-turn", status: "completed" } } })
+  }
+})
+`)
+  chmodSync(fakeCodex, 0o755)
+
+  const generated = await generateCodexImage({
+    model: "imagegen",
+    prompt: "Create a polished blue dashboard mockup.",
+    aspectRatio: "16:9",
+    referenceImages: [{ mimeType: "image/png", data: Buffer.from(tinyPngBase64, "base64") }],
+  }, {
+    bin: fakeCodex,
+    env: { ...process.env, FAKE_CAPTURE_PATH: capturePath },
+    timeoutMs: 5_000,
+  })
+
+  assert.equal(generated.images.length, 1)
+  assert.equal(generated.images[0].mimeType, "image/png")
+  assert.equal(generated.images[0].revisedPrompt, "revised smoke prompt")
+  assert.deepEqual(generated.usage, { totalTokens: 7 })
+  const capture = JSON.parse(readFileSync(capturePath, "utf8")) as {
+    args: string[]
+    cwd: string
+    turn: { input: Array<{ type: string; text?: string; path?: string }> }
+    referenceExists: boolean
+  }
+  assert.ok(capture.args.includes("features.image_generation=true"))
+  assert.ok(capture.turn.input[0]?.text?.includes("Target aspect ratio: 16:9."))
+  assert.equal(capture.turn.input[1]?.type, "localImage")
+  assert.equal(capture.referenceExists, true, "Codex should receive a readable localImage path")
+  assert.equal(existsSync(capture.cwd), false, "Codex ImageGen temp workspace should be cleaned")
+
+  await assert.rejects(
+    generateCodexImage({ model: "imagegen", prompt: "A blocked image." }, {
+      bin: fakeCodex,
+      env: {
+        ...process.env,
+        FAKE_CAPTURE_PATH: capturePath,
+        FAKE_IMAGE_CAPABILITY: "false",
+      },
+      timeoutMs: 5_000,
+    }),
+    /does not expose image generation/
+  )
+
+  const inline = codexImageTestHooks.parseInlineImage(`data:image/png;base64,${tinyPngBase64}`)
+  assert.equal(inline?.mimeType, "image/png")
+  assert.ok(inline?.data.length)
+} finally {
+  rmSync(imageFixtureRoot, { recursive: true, force: true })
 }
 
 console.log("smoke-codex-provider: ok")

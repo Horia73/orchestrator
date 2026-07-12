@@ -1,9 +1,9 @@
 import type { AgentConfig } from './types'
 
 /**
- * Image generation agent. The user picks the active model in Settings. GPT
- * Image 2 (OpenAI) and Nano Banana 2 (Google) are first-class routes; neither
- * provider is treated as a fallback for the other.
+ * Image generation agent. Codex ImageGen is the default subscription-backed
+ * route; direct OpenAI API and Google image models remain selectable in
+ * Settings and are never treated as silent fallbacks for one another.
  *
  * No buildPrompt: image agents don't take a free-form system prompt. The
  * chat route invokes provider.generateImage() directly with the user prompt.
@@ -13,8 +13,8 @@ export const imageGenerator: AgentConfig = {
     name: 'Image generator',
     description: 'Generates images from text prompts.',
     kind: 'image',
-    provider: 'openai',
-    model: 'gpt-image-2',
+    provider: 'codex',
+    model: 'imagegen',
     tools: [],
     canCallAgents: [],
 }

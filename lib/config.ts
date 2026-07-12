@@ -673,16 +673,22 @@ function normalizeAgentOverrides(
     }
 
     const raw = rawOverride as Record<string, unknown>
-    const provider = normalizeOptionalString(raw.provider, 96)
-    const model = normalizeOptionalString(raw.model, 160)
-    if (!provider || !model) continue
+    const rawProvider = normalizeOptionalString(raw.provider, 96)
+    const rawModel = normalizeOptionalString(raw.model, 160)
+    if (!rawProvider || !rawModel) continue
+    const selection = migrateLegacyAgentModelSelection(
+      agentId,
+      rawProvider,
+      rawModel
+    )
+    const { provider, model } = selection
     if (!effectiveModelExists(provider, model)) continue
 
     const override: AgentOverride = { provider, model }
-    if (typeof raw.thinkingLevel === "string") {
+    if (!selection.migrated && typeof raw.thinkingLevel === "string") {
       override.thinkingLevel = raw.thinkingLevel
     }
-    if (isModelOptionsRecord(raw.modelOptions)) {
+    if (!selection.migrated && isModelOptionsRecord(raw.modelOptions)) {
       override.modelOptions = raw.modelOptions
     }
     const fallbacks = normalizeAgentFallbacks(raw.fallbacks)
@@ -691,6 +697,26 @@ function normalizeAgentOverrides(
   }
 
   return out
+}
+
+/**
+ * The original image-agent rollout persisted this now-legacy Gemini id into
+ * every profile. Treat only that retired selection as the new subscription
+ * default; current Google/OpenAI image models remain explicit alternatives.
+ */
+export function migrateLegacyAgentModelSelection(
+  agentId: string,
+  provider: string,
+  model: string
+): { provider: string; model: string; migrated: boolean } {
+  if (
+    agentId === "image_generator" &&
+    provider === "google" &&
+    model === "gemini-3.1-flash-image"
+  ) {
+    return { provider: "codex", model: "imagegen", migrated: true }
+  }
+  return { provider, model, migrated: false }
 }
 
 function normalizeAgentFallbacks(value: unknown): AgentFallback[] {

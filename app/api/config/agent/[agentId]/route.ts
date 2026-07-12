@@ -36,6 +36,12 @@ function isTextModel(provider: string, model: string): boolean {
     return (modelDef.kinds ?? []).includes('text') || (modelDef.capabilities ?? []).includes('text')
 }
 
+function isMediaModelForAgent(agent: AgentConfig, provider: string, model: string): boolean {
+    if (!['image', 'video', 'speech', 'music'].includes(agent.kind)) return true
+    const modelDef = getEffectiveModel(provider, model)
+    return Boolean(modelDef?.kinds.includes(agent.kind))
+}
+
 function parseFallbacks(value: unknown, agent: AgentConfig): { ok: true; fallbacks?: AgentFallback[] } | { ok: false; error: string } {
     if (value === undefined) return { ok: true }
     if (!supportsModelFallbacks(agent)) {
@@ -118,6 +124,13 @@ export async function PUT(
         if ((agent.id === AUDIO_CONTEXT_AGENT_ID || agent.id === AUDIO_TRANSCRIPT_AGENT_ID) && !isAudioContextAgentModel(provider, model)) {
             return NextResponse.json(
                 { error: 'Audio agents must use a Google/Gemini text model that can receive audio.' },
+                { status: 400 }
+            )
+        }
+
+        if (!isMediaModelForAgent(agent, provider, model)) {
+            return NextResponse.json(
+                { error: `Agent ${agent.id} requires a ${agent.kind} model.` },
                 { status: 400 }
             )
         }

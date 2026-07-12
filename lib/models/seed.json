@@ -192,6 +192,14 @@
             "name": "Codex CLI",
             "apiKeyEnv": "CODEX_NO_API_KEY_REQUIRED",
             "models": {
+                "imagegen": {
+                    "name": "ImageGen (GPT Image 2, Codex plan)",
+                    "kinds": ["image"],
+                    "pricing": { "kind": "subscription" },
+                    "capabilities": ["image"],
+                    "intelligenceTier": "frontier",
+                    "notes": "Built-in Codex image generation through the authenticated Codex CLI app-server. Uses GPT Image 2 and consumes Codex/ChatGPT plan limits instead of OPENAI_API_KEY billing."
+                },
                 "default": {
                     "name": "Default",
                     "kinds": ["text"],

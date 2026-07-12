@@ -69,6 +69,7 @@ function check(label: string, cond: unknown, detail?: unknown) {
 }
 
 const DOCTRINE_MARKERS: Record<string, string> = {
+    'google-calendar': '<google_calendar_capability>',
     maps: '<maps_capability>',
     weather: '<weather_capability>',
     watchlist: '<watchlist_capability>',
@@ -198,6 +199,27 @@ check(
 check(
     'action-policy <documents_drive_work> stub still references Workspace activation',
     workspacePrompt.includes('<documents_drive_work>') && /ActivateIntegrationTools\("google-workspace"\)/.test(workspacePrompt)
+)
+
+// --- google-calendar doctrine: operating workflows, still lazy ------------
+
+const calendarConvId = `smoke-cap-calendar-${randomUUID()}`
+activateIntegrations(calendarConvId, ['google-calendar'])
+const calendarPrompt = buildPromptFor({ agent: orchestrator, conversationId: calendarConvId })
+
+check(
+    'Activating google-calendar loads its doctrine block',
+    calendarPrompt.includes('<doctrine for="google-calendar">')
+        && calendarPrompt.includes(DOCTRINE_MARKERS['google-calendar'])
+)
+check(
+    'google-calendar doctrine includes daily brief and group scheduling workflows',
+    calendarPrompt.includes('<daily_brief>') && calendarPrompt.includes('<group_scheduling>')
+)
+check(
+    'google-calendar doctrine keeps writes behind explicit confirmation',
+    calendarPrompt.includes('<writes_and_confirmation>')
+        && /explicit confirmation/i.test(calendarPrompt)
 )
 
 // --- sub-agents: no <subsystems>, no BOOT/ONBOARDING --------------------

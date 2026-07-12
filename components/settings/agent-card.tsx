@@ -107,12 +107,18 @@ export function AgentCard({
   const effectiveFallbacks = normalizeUiFallbacks(override?.fallbacks)
   const fallbackCapable = supportsAgentFallbacks(agent)
   const isAudioAgent = agent.id === AUDIO_CONTEXT_AGENT_ID || agent.id === AUDIO_TRANSCRIPT_AGENT_ID
+  const isMediaAgent = agent.kind === "image"
+    || agent.kind === "video"
+    || agent.kind === "speech"
+    || agent.kind === "music"
   const modelFilter =
     isAudioAgent
       ? isAudioContextCompatibleModel
       : fallbackCapable
         ? isToolCapableTextModel
-        : undefined
+        : isMediaAgent
+          ? (option: ModelPickerOption) => option.model.kinds.includes(agent.kind)
+          : undefined
 
   const save = async (next: { provider: string; model: string; thinkingLevel: ThinkingLevel; modelOptions?: Record<string, ModelFeatureValue>; fallbacks?: AgentFallback[] }) => {
     setStatus({ kind: "saving" })

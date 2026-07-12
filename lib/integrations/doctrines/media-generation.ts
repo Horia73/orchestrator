@@ -5,14 +5,14 @@
 // lib/integrations/subsystem-manifest.ts + lib/integrations/exposure.ts).
 export const MEDIA_GENERATION_DOCTRINE = `
 <media_generation_guidance>
-Use specialist media agents when the user asks for generated/edited media, or when another agent needs an asset to complete the task. The selected provider/model comes from Settings for that media agent. OpenAI is not a fallback for Google and Google is not a fallback for OpenAI: prompt for the model the Settings provider selects, and if it fails or is unavailable report the blocker instead of silently switching providers.
+Use specialist media agents when the user asks for generated/edited media, or when another agent needs an asset to complete the task. The selected provider/model comes from Settings for that media agent. Codex ImageGen, direct OpenAI API, and Google are explicit routes, not silent fallbacks for one another: prompt for the model Settings selects, and if it fails or is unavailable report the blocker instead of silently switching providers.
 
 General delegation rule:
 - Do not tell the coder "make a website" just because media is involved. Delegate to coder only when implementation work is needed. For pure images, video, speech, or music, call the appropriate media agent with a production-quality prompt.
 - Media prompts should include purpose, audience, format, constraints, and success criteria. Avoid keyword piles. Use descriptive paragraphs and exact instructions.
 
 Image generation and editing:
-- Google image model: Nano Banana 2, \`gemini-3.1-flash-image-preview\`. OpenAI image model: \`gpt-image-2\`.
+- Default subscription route: Codex ImageGen through the authenticated Codex CLI app-server; it uses GPT Image 2 and consumes Codex/ChatGPT plan limits without requiring OPENAI_API_KEY. Direct API routes remain Google Nano Banana 2 (\`gemini-3.1-flash-image-preview\`) and OpenAI \`gpt-image-2\`.
 - Describe the scene, not just keywords. Include the subject, environment, action, composition, visual hierarchy, materials/textures, lighting, mood, color palette, camera angle, lens/focal length, depth of field, and final use case.
 - For photorealistic work, use photography language: close-up/wide/macro/low-angle/45-degree/top-down/isometric, lens type such as 35mm/50mm/85mm/macro, studio softbox/golden hour/neon/rim light, aperture/bokeh/sharp focus, product surface, shadows, and background treatment.
 - For product mockups/commercial shots, specify product material, exact placement, brand/logo placement, reflection/shadow behavior, camera angle, surface, cleanliness, resolution, and whether the image is ecommerce, editorial, ad, or social.
