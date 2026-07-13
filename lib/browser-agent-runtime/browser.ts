@@ -383,6 +383,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
     const backend = options.backend ?? 'patchright';
 
     let context: BrowserContext | null = null;
+    let launchInFlight: Promise<void> | null = null;
     let sessionSequence = 0;
     let displayController: BrowserDisplayController | null = null;
     let lastLiveViewState: BrowserLiveViewState = {
@@ -765,6 +766,65 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
 
         console.error(message);
     };
+    const resetSessionsAfterContextLoss = () => {
+        for (const session of sessions.values()) {
+            disposeElementRefs(session);
+            session.pages = [];
+            session.activePage = null;
+            session.lastMousePosition = null;
+            session.latestAgentFrame = null;
+            session.agentFrameHistory = [];
+        }
+    };
+    const isContextConnected = (candidate: BrowserContext): boolean => {
+        try {
+            const browser = candidate.browser();
+            return browser === null || browser.isConnected();
+        } catch {
+            return false;
+        }
+    };
+    const isClosedContextError = (error: unknown): boolean => {
+        const message = formatBrowserError(error);
+        return /(?:target page, context or browser has been closed|browser context.*closed|browser has been closed|target closed|browser disconnected)/i.test(message);
+    };
+    const trackContextLifecycle = (candidate: BrowserContext) => {
+        candidate.once('close', () => {
+            if (context !== candidate) return;
+            context = null;
+            resetSessionsAfterContextLoss();
+            log('♻️ Patchright browser context closed; the next browser action will relaunch it with the same persistent profile.');
+        });
+    };
+    const recoverClosedContext = async (candidate: BrowserContext, error: unknown): Promise<void> => {
+        if (context === candidate) {
+            context = null;
+            resetSessionsAfterContextLoss();
+        }
+        try {
+            await candidate.close();
+        } catch {
+            // The browser process may already be gone.
+        }
+        log(`♻️ Relaunching Patchright after a closed browser context: ${formatBrowserError(error)}`);
+        await manager.launch();
+    };
+    const openManagedPage = async (): Promise<Page> => {
+        if (!context || !isContextConnected(context)) {
+            await manager.launch();
+        }
+        if (!context) throw new Error('Browser not launched');
+
+        const candidate = context;
+        try {
+            return await candidate.newPage();
+        } catch (error) {
+            if (!isClosedContextError(error)) throw error;
+            await recoverClosedContext(candidate, error);
+            if (!context) throw new Error('Browser relaunch did not create a context');
+            return context.newPage();
+        }
+    };
     const defaultLaunchArgs = [
         '--start-maximized',
         '--disable-blink-features=AutomationControlled',
@@ -1045,9 +1105,10 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
     };
 
     const ensureActivePage = async (session: BrowserSessionState): Promise<Page> => {
-        if (!context) {
-            throw new Error('Browser not launched');
+        if (!context || !isContextConnected(context)) {
+            await manager.launch();
         }
+        if (!context) throw new Error('Browser not launched');
 
         const pages = getOpenOwnedPages(session);
         const visiblePage = await syncActivePageWithVisibleTab(session, pages);
@@ -1065,7 +1126,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             return session.activePage;
         }
 
-        const newPage = await context.newPage();
+        const newPage = await openManagedPage();
         attachPageToSession(session, newPage, { origin: 'recovered' });
         return newPage;
     };
@@ -1368,11 +1429,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         height: number,
         fps: number,
     ): Promise<Page> => {
-        if (!context) {
-            throw new Error('Browser not launched');
-        }
-
-        const encoderPage = await context.newPage();
+        const encoderPage = await openManagedPage();
         await encoderPage.setViewportSize({ width, height });
         await encoderPage.setContent('<!doctype html><html><body style="margin:0;background:#000"></body></html>');
         await encoderPage.evaluate(({ canvasWidth, canvasHeight, framesPerSecond }) => {
@@ -2552,9 +2609,8 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             },
 
             async newTab(url?: string): Promise<boolean> {
-                if (!context) return false;
                 try {
-                    const newPage = await context.newPage();
+                    const newPage = await openManagedPage();
                     attachPageToSession(session, newPage, { origin: 'newTab' });
                     if (url) {
                         await newPage.goto(url, { waitUntil: 'domcontentloaded' });
@@ -3012,8 +3068,17 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         },
 
         async launch() {
-            if (context) {
+            if (context && isContextConnected(context)) {
                 return;
+            }
+            if (launchInFlight) return launchInFlight;
+
+            const task = (async () => {
+            if (context) {
+                const staleContext = context;
+                context = null;
+                resetSessionsAfterContextLoss();
+                await staleContext.close().catch(() => {});
             }
 
             ensureBrowserProfileDir(userDataDir, log, logError);
@@ -3117,6 +3182,8 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 context = await launchPersistentContext();
             }
 
+            trackContextLifecycle(context);
+
             defaultSessionState.pages = [];
             defaultSessionState.activePage = null;
             defaultSessionState.lastMousePosition = null;
@@ -3134,9 +3201,17 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 log(`🖥️ Patchright display automation enabled (${display.width}x${display.height}); agent frames use normalized coordinates mapped to display pixels.`);
             }
             log('✅ Patchright Browser ready');
+            })();
+            launchInFlight = task;
+            try {
+                await task;
+            } finally {
+                if (launchInFlight === task) launchInFlight = null;
+            }
         },
 
         async close() {
+            if (launchInFlight) await launchInFlight.catch(() => {});
             const closingContext = context;
             context = null;
             if (closingContext) {
@@ -3164,7 +3239,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         },
 
         async createSession(sessionOptions: BrowserPageSessionOptions = {}): Promise<BrowserPageSession> {
-            if (!context) {
+            if (!context || !isContextConnected(context)) {
                 await this.launch();
             }
             if (!context) {
@@ -3172,7 +3247,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             }
 
             const session = createSessionState(sessionOptions.id);
-            const newPage = takeReusableInitialBlankPage() ?? await context.newPage();
+            const newPage = takeReusableInitialBlankPage() ?? await openManagedPage();
             attachPageToSession(session, newPage, { origin: 'initial' });
             if (sessionOptions.startupUrl) {
                 await newPage.goto(sessionOptions.startupUrl, { waitUntil: 'domcontentloaded' });
