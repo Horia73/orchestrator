@@ -45,6 +45,7 @@ async function main(): Promise<void> {
         enqueueWebhookDispatch,
         getWebhookEvent,
         listWebhookDispatches,
+        listPendingWebhookDispatchTargets,
         listWebhookEvents,
         reconcileWebhookEventDispatchStatus,
         toPublicWebhookEndpoint,
@@ -66,6 +67,7 @@ async function main(): Promise<void> {
         executeWebhookSubscriptionCreate,
     } = await import('@/lib/ai/tools/webhooks')
     const db = (await import('@/lib/db')).default
+    const { runWithProfileContext } = await import('@/lib/profiles/context')
 
     let failures = 0
     function check(label: string, cond: unknown, detail?: unknown) {
@@ -80,6 +82,46 @@ async function main(): Promise<void> {
     check('legacy dispatch table migrates queue metadata additively',
         ['queueSequence', 'attemptCount', 'nextAttemptAt', 'claimedAt'].every((name) => dispatchColumns.has(name)),
         [...dispatchColumns],
+    )
+
+    // Feature schema is captured when the store module first loads, then
+    // replayed for profiles opened later. A legacy member DB must receive the
+    // additive columns before the queue index without logging a replay error.
+    const lazyProfileId = 'webhook_lazy_legacy'
+    const lazyStateDir = path.join(tmpRoot, '.orchestrator', 'profiles', lazyProfileId)
+    fs.mkdirSync(lazyStateDir, { recursive: true })
+    const lazyDb = new Database(path.join(lazyStateDir, 'data.db'))
+    lazyDb.exec(`
+        CREATE TABLE webhook_dispatches (
+            id TEXT PRIMARY KEY,
+            eventId TEXT NOT NULL,
+            subscriptionId TEXT,
+            targetKind TEXT NOT NULL,
+            targetId TEXT NOT NULL,
+            status TEXT NOT NULL,
+            error TEXT,
+            runSummary TEXT,
+            conversationId TEXT,
+            startedAt INTEGER NOT NULL,
+            endedAt INTEGER
+        )
+    `)
+    lazyDb.close()
+    const replayErrors: unknown[][] = []
+    const originalConsoleError = console.error
+    console.error = (...args: unknown[]) => { replayErrors.push(args) }
+    try {
+        runWithProfileContext({ profileId: lazyProfileId }, () => listPendingWebhookDispatchTargets())
+    } finally {
+        console.error = originalConsoleError
+    }
+    check('lazy legacy profile replays webhook schema without queueSequence index errors', replayErrors.length === 0, replayErrors)
+    const lazyColumns = runWithProfileContext({ profileId: lazyProfileId }, () => new Set(
+        (db.pragma('table_info(webhook_dispatches)') as Array<{ name: string }>).map((column) => column.name),
+    ))
+    check('lazy legacy profile receives all queue columns before index creation',
+        ['queueSequence', 'attemptCount', 'nextAttemptAt', 'claimedAt'].every((name) => lazyColumns.has(name)),
+        [...lazyColumns],
     )
 
     const secret = 'smoke-webhook-secret-value'

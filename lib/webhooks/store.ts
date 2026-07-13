@@ -132,7 +132,11 @@ function ensureWebhookDispatchQueueSchema(): void {
     for (const [name, definition] of additions) {
         if (!names.has(name)) db.exec(`ALTER TABLE webhook_dispatches ADD COLUMN ${name} ${definition}`)
     }
-    db.exec('CREATE INDEX IF NOT EXISTS idx_webhook_dispatches_queue ON webhook_dispatches(targetKind, targetId, status, queueSequence)')
+    // Use prepare/run instead of db.exec so this migration-only index is not
+    // captured as feature bootstrap SQL. Replaying a captured CREATE INDEX on
+    // a lazily opened legacy profile DB would happen before these ALTERs and
+    // fail because queueSequence did not exist yet.
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_webhook_dispatches_queue ON webhook_dispatches(targetKind, targetId, status, queueSequence)').run()
 }
 
 ensureWebhookDispatchQueueSchema()
