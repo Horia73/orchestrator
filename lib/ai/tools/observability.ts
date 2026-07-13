@@ -94,7 +94,7 @@ export const getAgentLogTool: ToolDef = {
 export const readRuntimeIndexTool: ToolDef = {
     id: 'read_runtime_index',
     name: 'read_runtime_index',
-    description: 'Read the compact runtime index files and code map. Use overview to discover paths, code to read AGENT_INDEX.md, runs/logs to read recent JSONL index entries for a date.',
+    description: 'Read the active profile\'s compact runtime index files and the shared code map. Use overview to discover paths, code to read AGENT_INDEX.md, runs/logs to read recent profile-scoped JSONL index entries for a date.',
     input_schema: {
         type: 'object',
         properties: {

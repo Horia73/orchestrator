@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 
 import type { RequestLogRow } from '@/lib/observability/schema'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 
 const PREVIEW_CHARS = 700
 
@@ -40,7 +41,7 @@ export interface RuntimeRequestLogIndexInput {
 }
 
 export function runtimeIndexRoot(): string {
-    return path.join(process.cwd(), '.orchestrator', 'index')
+    return path.join(activeRuntimePaths().stateDir, 'index')
 }
 
 export function runtimeIndexPath(kind: 'runs' | 'logs', date: string): string {
@@ -109,16 +110,19 @@ export function readRuntimeIndexEntries(kind: 'runs' | 'logs', date: string, lim
 }
 
 export function getRuntimeIndexStatus(): {
+    profile_id: string
     root: string
     database_path: string
     code_map_path: string
     run_index_files: string[]
     log_index_files: string[]
 } {
+    const runtimePaths = activeRuntimePaths()
     const root = runtimeIndexRoot()
     return {
+        profile_id: runtimePaths.profileId,
         root,
-        database_path: path.join(process.cwd(), '.orchestrator', 'data.db'),
+        database_path: path.join(runtimePaths.stateDir, 'data.db'),
         code_map_path: codeMapPath(),
         run_index_files: listJsonlFiles(path.join(root, 'runs')),
         log_index_files: listJsonlFiles(path.join(root, 'logs')),

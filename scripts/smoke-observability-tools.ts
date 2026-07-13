@@ -30,6 +30,11 @@ async function main(): Promise<void> {
         sealInterruptedStreamingRequestLogs,
     } = await import('@/lib/observability/store')
     const { updateConfig } = await import('@/lib/config')
+    const { runWithProfileContext } = await import('@/lib/profiles/context')
+    const {
+        appendRuntimeRequestLogIndex,
+        appendRuntimeRunIndex,
+    } = await import('@/lib/runtime-index')
     const { codexUsageForCurrentTurn } = await import('@/lib/ai/providers/codex-helpers')
     const { default: Database } = await import('better-sqlite3')
     const { initializeDatabaseSchema } = await import('@/lib/db-schema')
@@ -349,6 +354,63 @@ async function main(): Promise<void> {
     const overview = index.data as { run_index_files: string[]; log_index_files: string[] }
     check('run index file was written', overview.run_index_files.length === 1, overview)
     check('log index file was written', overview.log_index_files.length === 1, overview)
+
+    const memberOverviewResult = await runWithProfileContext(
+        { profileId: 'member_smoke', role: 'member' },
+        async () => {
+            appendRuntimeRunIndex({
+                id: 'run_member_only',
+                taskId: 'task_member_only',
+                taskTitle: 'Member-only Smart Monitor',
+                startedAt: now,
+                endedAt: now + 10,
+                status: 'ok',
+                trigger: 'schedule',
+                surfaced: false,
+                conversationId: null,
+                summary: 'Member-only run marker.',
+            })
+            appendRuntimeRequestLogIndex({
+                id: 'request_member_only',
+                conversationId: 'conversation_member_only',
+                agentId: 'smart_monitor',
+                agentThreadId: null,
+                parentRequestId: null,
+                depth: 0,
+                provider: 'openai',
+                model: 'gpt-smoke',
+                status: 'ok',
+                startedAt: now,
+                endedAt: now + 10,
+                durationMs: 10,
+                toolCallCount: 0,
+                interactionId: null,
+                errorMessage: null,
+                inputText: 'Member-only input marker.',
+                outputText: 'Member-only output marker.',
+            })
+            return executeReadRuntimeIndex({ section: 'overview' })
+        }
+    )
+    const memberOverview = memberOverviewResult.data as {
+        profile_id: string
+        root: string
+        database_path: string
+        run_index_files: string[]
+        log_index_files: string[]
+    }
+    check('runtime index overview identifies active member profile', memberOverview.profile_id === 'member_smoke', memberOverview)
+    check(
+        'runtime index paths are isolated under member profile state',
+        memberOverview.root.includes(`${path.sep}profiles${path.sep}member_smoke${path.sep}index`) &&
+        memberOverview.database_path.includes(`${path.sep}profiles${path.sep}member_smoke${path.sep}data.db`),
+        memberOverview
+    )
+    check('member run/log index files were written separately', memberOverview.run_index_files.length === 1 && memberOverview.log_index_files.length === 1, memberOverview)
+    const memberRunText = fs.readFileSync(memberOverview.run_index_files[0], 'utf-8')
+    const adminRunText = fs.readFileSync(overview.run_index_files[0], 'utf-8')
+    check('member runtime index contains its own run', memberRunText.includes('run_member_only'))
+    check('admin runtime index excludes member run', !adminRunText.includes('run_member_only'))
 
     if (failures > 0) process.exit(1)
     console.log('Observability tools smoke passed.')

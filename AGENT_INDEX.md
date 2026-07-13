@@ -8,14 +8,14 @@ This file is a compact map for agents. It points to canonical code and runtime d
 - Scheduling Past runs table: `scheduled_task_runs`
 - Agent/model request logs table: `request_logs`
 - Tool-call logs table: `tool_logs`
-- Compact run index: `.orchestrator/index/runs/YYYY-MM-DD.jsonl`
-- Compact agent-log index: `.orchestrator/index/logs/YYYY-MM-DD.jsonl`
+- Compact run index: `.orchestrator/index/runs/YYYY-MM-DD.jsonl` for admin; member profiles use `.orchestrator/profiles/<profileId>/index/runs/YYYY-MM-DD.jsonl`
+- Compact agent-log index: `.orchestrator/index/logs/YYYY-MM-DD.jsonl` for admin; member profiles use `.orchestrator/profiles/<profileId>/index/logs/YYYY-MM-DD.jsonl`
 
 Use tools first:
 
 - `search_past_runs` and `get_past_run` for scheduled task and Smart Monitor wake history.
 - `search_agent_logs` and `get_agent_log` for orchestrator/sub-agent request history and errors.
-- `read_runtime_index` for index status, recent JSONL entries, and this code map.
+- `read_runtime_index` for the active profile's index status/recent JSONL entries and this shared code map.
 
 ## Scheduling
 
@@ -104,4 +104,4 @@ Use tools first:
 - Lint: `npm run lint`
 - Smart Monitor smoke tests: `npm run smoke:monitor`
 - Runtime history smoke test: `npm run smoke:observability`
-- Rebuild local JSONL runtime index from SQLite: `npm run index:runtime`
+- Rebuild local JSONL runtime index from SQLite: `npm run index:runtime` (admin) or `npm run index:runtime -- --all-profiles`
