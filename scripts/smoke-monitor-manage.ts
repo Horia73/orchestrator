@@ -53,6 +53,7 @@ async function main(): Promise<void> {
         const calendar = sources?.find((s) => s.source === 'google_calendar')
         const weather = sources?.find((s) => s.source === 'weather')
         const custom = sources?.find((s) => s.source === 'custom')
+        const whatsapp = sources?.find((s) => s.source === 'whatsapp')
         check('gmail source has rule kinds', (gmail?.supported_rule_kinds.length ?? 0) >= 4)
         check('gmail source advertises any_of/all_of', gmail?.supported_rule_kinds.includes('any_of') && gmail?.supported_rule_kinds.includes('all_of'))
         check('gmail source has notify_inbox + archive actions', gmail?.supported_action_kinds.includes('notify_inbox') && gmail?.supported_action_kinds.includes('gmail_archive'))
@@ -60,6 +61,12 @@ async function main(): Promise<void> {
         check('calendar source has calendar rules', calendar?.supported_rule_kinds.includes('calendar_event_query') === true)
         check('weather source has weather rules', weather?.supported_rule_kinds.includes('weather_temperature') === true)
         check('custom source has custom_prompt', custom?.supported_rule_kinds.includes('custom_prompt') === true)
+        check('whatsapp source exposes message metadata predicates',
+            whatsapp?.supported_rule_kinds.includes('wa_message_type') === true
+                && whatsapp.supported_rule_kinds.includes('wa_has_text')
+                && whatsapp.supported_rule_kinds.includes('wa_has_media'),
+            whatsapp,
+        )
         const bounds = data?.cadence_bounds_seconds as Record<string, number>
         check('cadence bounds present', bounds?.min === MIN_CADENCE_SECONDS && bounds?.max === 12 * 3600)
     }

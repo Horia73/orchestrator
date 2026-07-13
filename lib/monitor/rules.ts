@@ -94,6 +94,13 @@ export interface WhatsAppCandidate {
     from: string
     fromMe: boolean
     body: string
+    /** Provider-normalized message type (for example chat, image,
+     *  senderkeydistribution, or unknown). Unknown values stay intact so a
+     *  rule must opt into matching them explicitly. */
+    messageType: string
+    /** True only when the body contains non-whitespace user-visible text. */
+    hasText: boolean
+    hasMedia: boolean
     /** Mentioned contact identifiers, if any. */
     mentions: string[]
     timestamp: number
@@ -377,6 +384,15 @@ export function evaluateRule(rule: MonitorRule, candidate: EvalCandidate): boole
             const mentions = candidate.mentions.map((m) => m.toLowerCase())
             return rule.mentions.some((m) => mentions.includes(m.toLowerCase()))
         }
+        case 'wa_message_type': {
+            if (candidate.source !== 'whatsapp') return false
+            const actual = candidate.messageType.trim().toLowerCase()
+            return rule.types.some((type) => type.trim().toLowerCase() === actual)
+        }
+        case 'wa_has_text':
+            return candidate.source === 'whatsapp' && candidate.hasText === rule.value
+        case 'wa_has_media':
+            return candidate.source === 'whatsapp' && candidate.hasMedia === rule.value
 
         // --- home assistant ---
         case 'ha_state_equals':
@@ -508,7 +524,15 @@ export const RULE_KINDS_BY_SOURCE = {
         'calendar_event_starts_within',
         'calendar_event_query',
     ] as const,
-    whatsapp: ['wa_unread', 'wa_from', 'wa_text_contains', 'wa_mention'] as const,
+    whatsapp: [
+        'wa_unread',
+        'wa_from',
+        'wa_text_contains',
+        'wa_mention',
+        'wa_message_type',
+        'wa_has_text',
+        'wa_has_media',
+    ] as const,
     home_assistant: ['ha_state_equals', 'ha_state_changes', 'ha_attribute_changes', 'ha_threshold'] as const,
     web: ['web_status', 'web_json_path', 'web_text_contains'] as const,
     weather: [

@@ -161,7 +161,15 @@ async function guardedWhatsAppRead<T>(
 
 export const whatsappSourceAdapter: SourceAdapter = {
     source: 'whatsapp',
-    supportedRuleKinds: ['wa_unread', 'wa_from', 'wa_text_contains', 'wa_mention'],
+    supportedRuleKinds: [
+        'wa_unread',
+        'wa_from',
+        'wa_text_contains',
+        'wa_mention',
+        'wa_message_type',
+        'wa_has_text',
+        'wa_has_media',
+    ],
     supportedActionKinds: ['notify_inbox', 'wa_send_reply'],
 
     async isAvailable(): Promise<AvailabilityResult> {
@@ -329,6 +337,9 @@ export const whatsappSourceAdapter: SourceAdapter = {
                             from: m.author ?? m.from,
                             fromMe: m.fromMe,
                             body: m.body,
+                            messageType: m.type,
+                            hasText: m.body.trim().length > 0,
+                            hasMedia: m.hasMedia,
                             mentions: extractMentions(m),
                             timestamp: ts || now,
                         }
@@ -344,8 +355,10 @@ export const whatsappSourceAdapter: SourceAdapter = {
                                     chatName: candidate.chatName,
                                     from: candidate.from,
                                     body: m.body,
+                                    messageType: candidate.messageType,
+                                    hasText: candidate.hasText,
                                     timestamp: ts,
-                                    hasMedia: m.hasMedia,
+                                    hasMedia: candidate.hasMedia,
                                 },
                             })
                         }
@@ -432,6 +445,9 @@ async function safeRevalidateWhatsAppPending(input: PendingRevalidationInput): P
             from: message.author ?? message.from,
             fromMe: message.fromMe,
             body: message.body,
+            messageType: message.type,
+            hasText: message.body.trim().length > 0,
+            hasMedia: message.hasMedia,
             mentions: extractMentions(message),
             timestamp: ts || now,
         }
@@ -450,8 +466,10 @@ async function safeRevalidateWhatsAppPending(input: PendingRevalidationInput): P
                 chatName: candidate.chatName,
                 from: candidate.from,
                 body: message.body,
+                messageType: candidate.messageType,
+                hasText: candidate.hasText,
                 timestamp: ts,
-                hasMedia: message.hasMedia,
+                hasMedia: candidate.hasMedia,
             },
         }
     } catch (err) {

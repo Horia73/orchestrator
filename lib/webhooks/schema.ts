@@ -166,6 +166,12 @@ export const WebhookDispatchSchema = z.object({
     error: z.string().nullable(),
     runSummary: z.string().nullable(),
     conversationId: z.string().nullable(),
+    /** Stable per-target enqueue order. Dispatches for one Microscript are
+     *  claimed strictly in this order, including across retries/restarts. */
+    queueSequence: z.number().int().nonnegative(),
+    attemptCount: z.number().int().nonnegative(),
+    nextAttemptAt: z.number().int().positive().nullable(),
+    claimedAt: z.number().int().positive().nullable(),
     startedAt: z.number().int().positive(),
     endedAt: z.number().int().positive().nullable(),
 })

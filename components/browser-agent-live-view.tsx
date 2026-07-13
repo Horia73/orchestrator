@@ -57,6 +57,9 @@ interface BrowserClipboardResponse {
     state: BrowserAgentLiveState
 }
 
+const BROWSER_VIEWPORT_CLASS =
+    "browser-agent-live-viewport overflow-hidden rounded-xl border border-white/70 bg-white/55 shadow-[0_14px_36px_rgba(30,25,20,0.14),0_2px_6px_rgba(30,25,20,0.08)] ring-1 ring-black/[0.06] backdrop-blur-[6px] dark:border-white/15 dark:bg-white/[0.08] dark:ring-white/[0.06]"
+
 export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenDetails, variant = "inline" }: BrowserAgentLiveViewProps) {
     const isPanel = variant === "panel"
     const liveViewRef = React.useRef<HTMLDivElement>(null)
@@ -182,6 +185,9 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
         if (!target || !wsUrl || state?.mode !== "linux-vnc") return
 
         let disposed = false
+        let started = false
+        let activeRfb: import("@novnc/novnc").default | null = null
+        let resizeFrame: number | null = null
         setConnection("connecting")
         target.replaceChildren()
 
@@ -194,37 +200,72 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
         }
         target.addEventListener("mousemove", suppressHoverMove, true)
 
-        import("@novnc/novnc")
-            .then(({ default: RFB }) => {
-                if (disposed) return
-                const rfb = new RFB(target, wsUrl)
-                rfb.scaleViewport = true
-                rfb.resizeSession = false
-                rfb.background = "#ffffff"
-                rfb.qualityLevel = 8
-                rfb.compressionLevel = 2
-                rfb.showDotCursor = false
-                rfb.viewOnly = false
-                const handleClipboard = (event: Event) => {
-                    const text = (event as CustomEvent<{ text?: unknown }>).detail?.text
-                    if (typeof text !== "string") return
-                    void syncBrowserClipboardText(text, { silentDuplicate: true })
-                }
-                rfb.addEventListener("connect", () => setConnection("connected"))
-                rfb.addEventListener("disconnect", () => setConnection("disconnected"))
-                rfb.addEventListener("securityfailure", () => setConnection("error"))
-                rfb.addEventListener("clipboard", handleClipboard)
-                rfbRef.current = rfb
+        // The side panel animates from zero width. Creating noVNC during that
+        // transition can leave its flex canvas scaled and centred against the
+        // old box, producing the large white gutter seen until a later resize.
+        // Wait for a real box and explicitly re-apply scaleViewport whenever
+        // this element changes size (not only when the window resizes).
+        const rescaleViewport = () => {
+            if (!activeRfb || disposed) return
+            if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame)
+            resizeFrame = window.requestAnimationFrame(() => {
+                resizeFrame = null
+                if (!activeRfb || disposed) return
+                // The setter recalculates the display scale even when already
+                // true, which is the supported public noVNC recalibration path.
+                activeRfb.scaleViewport = true
             })
-            .catch(() => {
-                if (!disposed) setConnection("error")
-            })
+        }
+
+        const connect = () => {
+            if (started || disposed) return
+            const rect = target.getBoundingClientRect()
+            if (rect.width < 160 || rect.height < 90) return
+            started = true
+
+            import("@novnc/novnc")
+                .then(({ default: RFB }) => {
+                    if (disposed) return
+                    const rfb = new RFB(target, wsUrl)
+                    activeRfb = rfb
+                    rfb.scaleViewport = true
+                    rfb.resizeSession = false
+                    rfb.background = "rgba(255, 255, 255, 0.72)"
+                    rfb.qualityLevel = 8
+                    rfb.compressionLevel = 2
+                    rfb.showDotCursor = false
+                    rfb.viewOnly = false
+                    const handleClipboard = (event: Event) => {
+                        const text = (event as CustomEvent<{ text?: unknown }>).detail?.text
+                        if (typeof text !== "string") return
+                        void syncBrowserClipboardText(text, { silentDuplicate: true })
+                    }
+                    rfb.addEventListener("connect", () => setConnection("connected"))
+                    rfb.addEventListener("disconnect", () => setConnection("disconnected"))
+                    rfb.addEventListener("securityfailure", () => setConnection("error"))
+                    rfb.addEventListener("clipboard", handleClipboard)
+                    rfbRef.current = rfb
+                    rescaleViewport()
+                })
+                .catch(() => {
+                    if (!disposed) setConnection("error")
+                })
+        }
+
+        const resizeObserver = new ResizeObserver(() => {
+            connect()
+            rescaleViewport()
+        })
+        resizeObserver.observe(target)
+        connect()
 
         return () => {
             disposed = true
+            resizeObserver.disconnect()
+            if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame)
             target.removeEventListener("mousemove", suppressHoverMove, true)
-            rfbRef.current?.disconnect()
-            rfbRef.current = null
+            activeRfb?.disconnect()
+            if (rfbRef.current === activeRfb) rfbRef.current = null
         }
     }, [state?.mode, state?.wsUrl, syncBrowserClipboardText])
 
@@ -505,9 +546,9 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
         <div
             ref={liveViewRef}
             className={cn(
-                "browser-agent-live-view bg-background outline-none [&:fullscreen]:h-screen [&:fullscreen]:p-3",
+                "browser-agent-live-view min-w-0 bg-background outline-none [&:fullscreen]:h-screen [&:fullscreen]:p-3",
                 isPanel
-                    ? "flex h-full min-h-0 flex-col gap-2"
+                    ? "flex h-full w-full min-h-0 flex-col gap-2"
                     : "grid gap-2 [&:fullscreen]:grid-rows-[auto_1fr]"
             )}
             tabIndex={0}
@@ -588,10 +629,10 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
                 </div>
             )}
             {isPanel ? (
-                <div ref={fitAreaRef} className="relative min-h-0 flex-1">
+                <div ref={fitAreaRef} className="relative min-h-0 min-w-0 flex-1">
                     <div
                         ref={viewportRef}
-                        className="browser-agent-live-viewport absolute overflow-hidden rounded-md border border-border/70 bg-white shadow-sm [background:white]"
+                        className={cn(BROWSER_VIEWPORT_CLASS, "absolute")}
                         style={panelFit
                             ? { left: panelFit.left, top: panelFit.top, width: panelFit.width, height: panelFit.height }
                             : { inset: 0 }}
@@ -612,7 +653,7 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
             ) : (
                 <div
                     ref={viewportRef}
-                    className="browser-agent-live-viewport relative min-h-0 w-full overflow-hidden rounded-md border border-border/70 bg-white shadow-sm [background:white]"
+                    className={cn(BROWSER_VIEWPORT_CLASS, "relative min-h-0 w-full")}
                     style={{
                         aspectRatio: fullscreen ? "auto" : `${viewportWidth} / ${viewportHeight}`,
                         height: fullscreen ? "100%" : undefined,
@@ -660,9 +701,16 @@ function BrowserAgentCursorOverlay({
     const clampedY = Math.max(0, Math.min(cursor.y, frameHeight))
     const left = fit.left + (clampedX / frameWidth) * fit.width
     const top = fit.top + (clampedY / frameHeight) * fit.height
+    // Match the cursor to the displayed framebuffer scale. Keeping the SVG at
+    // a fixed CSS size made it loom over controls in a narrow side panel.
+    const cursorScale = Math.max(0.55, Math.min(1, fit.width / frameWidth))
 
     return (
-        <div className="browser-agent-cursor" style={{ left, top }} aria-hidden="true">
+        <div
+            className="browser-agent-cursor"
+            style={{ left, top, transform: `scale(${cursorScale})`, transformOrigin: "0 0" }}
+            aria-hidden="true"
+        >
             {cursor.kind === "click" && <span key={cursor.at} className="browser-agent-cursor-pulse" />}
             <svg width="19" height="22" viewBox="0 0 12.5 19.5" style={{ overflow: "visible" }}>
                 <path

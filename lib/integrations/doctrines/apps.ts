@@ -15,6 +15,7 @@ You can build the user reusable mini-apps — self-contained interactive tools t
 **Runtime bridge — write your app against this API.** Inside the sandboxed iframe every app gets \`window.AppHost\`:
 - \`AppHost.getData(): Promise<object>\` — resolves the app's current data document ({} when empty).
 - \`AppHost.setData(doc): Promise<void>\` — FULL REPLACE of the document. Read-modify-write: spread the current doc and overwrite what changed.
+- \`AppHost.ai({ prompt, systemPrompt?, responseFormat?, files? }): Promise<{ text, data?, provider, model }>\` — runs a tool-free request through the configured Orchestrator model. The app authors the prompt. Use \`responseFormat: "json"\` for structured output (also returned as \`data\`). \`files\` accepts a FileList/array: common photos are sent as vision input, while PDFs and text/data files are safely extracted as bounded context.
 - \`AppHost.onChange(cb): () => void\` — cb(newDoc) fires when the data changes server-side (e.g. you updated it from another conversation while the app is open). Returns an unsubscribe function.
 Calls reject when the artifact is not (yet) a registered app — ALWAYS catch and fall back to sensible defaults/empty states so the app still renders before registration or after deletion. Persist user actions that should survive reloads (entries, selections, logs) via setData; don't use localStorage for anything that matters.
 
@@ -23,6 +24,8 @@ Calls reject when the artifact is not (yet) a registered app — ALWAYS catch an
 - NETWORK: \`fetch()\` to external APIs works only where the endpoint allows cross-origin requests from a null origin (public/CORS-open APIs). Treat it as best-effort enhancement — never make core functionality depend on it, always degrade gracefully offline.
 - CANNOT: no cookies, no real localStorage/sessionStorage (no-op shims — AppHost is the ONLY persistence), no access to the parent page, to other apps' data, or to Orchestrator's own APIs beyond the AppHost bridge.
 - NEVER embed secrets/API keys in app code — the source is plainly visible. When a flow needs credentials, private APIs, scraping, or heavy computation, YOU do that part with your own tools (in chat, scheduled tasks, or Smart Monitor) and write the results into the data doc via AppDataSet; the app just renders the doc. This agent+app split is the pattern that makes apps feel limitless despite the sandbox.
+- AI: call \`AppHost.ai\` only from an explicit user action, show a busy state, catch/display errors, and avoid background loops. It has no tools, browser, secrets, or persistent memory. Uploaded bytes are transient; persist only the useful model result with \`AppHost.setData\` when the user expects it to survive reloads.
+- External/public apps need their own explicitly requested deployment and backend/auth design. They cannot reuse Orchestrator's session, model credentials, or AppHost bridge outside the registered internal-app sandbox.
 - Data doc cap: 1 MiB serialized.
 
 **Creation flow:**

@@ -16,6 +16,7 @@ import { createInboxConversation } from '@/lib/scheduling/store'
 import { sendInboxPushNotification } from '@/lib/push-notifications'
 import { addMessage, getConversation } from '@/lib/db'
 import type { Message } from '@/lib/types'
+import { isAdminProfileId } from '@/lib/profiles/context'
 
 type UpdatePhase = 'idle' | 'queued' | 'updating' | 'restarting' | 'completed' | 'failed'
 type UpdateTargetKind = 'release' | 'branch'
@@ -1301,6 +1302,16 @@ export function getCachedPendingUpdate(): CachedPendingUpdate | null {
         notes: latest.body,
         fallback: Boolean(latest.fallback),
     }
+}
+
+/** Pending release hints are operational information for the admin profile.
+ * Member agents must not learn about or proactively advertise app updates. */
+export function getCachedPendingUpdateForProfile(profileId: string): CachedPendingUpdate | null {
+    return canProfileReceivePendingUpdate(profileId) ? getCachedPendingUpdate() : null
+}
+
+export function canProfileReceivePendingUpdate(profileId: string): boolean {
+    return isAdminProfileId(profileId)
 }
 
 /**

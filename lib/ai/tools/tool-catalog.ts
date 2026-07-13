@@ -6,6 +6,7 @@ import { readTool } from "./read"
 import { writeTool } from "./write"
 import { editTool } from "./edit"
 import { bashTool } from "./bash-def"
+import { remoteSudoTool } from "./remote-sudo"
 import {
   manageBackgroundJobsTool,
   startBackgroundJobTool,
@@ -96,6 +97,7 @@ export const ALL_TOOL_DEFS: ToolDef[] = [
   writeTool,
   editTool,
   bashTool,
+  remoteSudoTool,
   startBackgroundJobTool,
   manageBackgroundJobsTool,
   globTool,

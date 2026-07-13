@@ -55,7 +55,7 @@ import {
 import { clearTurnSteering, registerTurnSteering } from "@/lib/chat-steering"
 import { wrapSteeredMessage } from "@/lib/steered-message"
 import {
-  getCachedPendingUpdate,
+  getCachedPendingUpdateForProfile,
   isUpdateMaintenanceActive,
 } from "@/lib/update/manager"
 import {
@@ -137,6 +137,7 @@ import { runTextSubAgent } from "@/lib/ai/agents/runner"
 import { getAiRunAdmissionBlock } from "@/lib/ai/run-admission"
 import { buildArtifactRepairRuntimeAgent } from "@/lib/ai/agents/artifact-repair"
 import { runWithRequestProfile } from "@/lib/profiles/server"
+import { getActiveProfileId } from "@/lib/profiles/context"
 
 /** Persist in-progress assistant output periodically so reloads can catch up */
 const STREAM_PROGRESS_PERSIST_INTERVAL_MS = 250
@@ -473,7 +474,7 @@ export async function POST(request: Request) {
         .filter((a): a is AgentConfig => a !== undefined)
       const declaredTools = getToolsForAgent(orchestrator.tools)
 
-      const pendingUpdate = getCachedPendingUpdate()
+      const pendingUpdate = getCachedPendingUpdateForProfile(getActiveProfileId())
 
       type ChatModelAttempt = {
         provider: string

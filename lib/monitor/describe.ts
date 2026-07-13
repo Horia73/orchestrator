@@ -43,6 +43,12 @@ export function describeRule(rule: MonitorRule): string {
             return `WhatsApp body contains: ${rule.substrings.join(' OR ')}`
         case 'wa_mention':
             return `WhatsApp mentions: ${rule.mentions.join(' OR ')}`
+        case 'wa_message_type':
+            return `WhatsApp message type is: ${rule.types.join(' OR ')}`
+        case 'wa_has_text':
+            return `WhatsApp ${rule.value ? 'has user-visible text' : 'has no user-visible text'}`
+        case 'wa_has_media':
+            return `WhatsApp ${rule.value ? 'has media' : 'has no media'}`
 
         case 'ha_state_equals':
             return `HA ${rule.entityId} state = "${rule.state}" (fires only on transition INTO that state)`

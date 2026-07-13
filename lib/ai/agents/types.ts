@@ -600,7 +600,7 @@ export interface ProviderCapabilities {
   /** Prompt caching strategy. `auto` = provider handles, `manual` = caller marks blocks. */
   promptCaching: "auto" | "manual" | "none"
   /** How attachments are conveyed to the model. */
-  attachmentMode: "files-api" | "inline-base64" | "file-id-or-url" | "none"
+  attachmentMode: "files-api" | "inline-base64" | "file-id-or-url" | "local-path" | "none"
   /** Whether the provider exposes thinking-level controls. */
   thinkingSupport: boolean
   /**

@@ -103,6 +103,10 @@ db.exec(`
         error TEXT,
         runSummary TEXT,
         conversationId TEXT,
+        queueSequence INTEGER NOT NULL DEFAULT 0,
+        attemptCount INTEGER NOT NULL DEFAULT 0,
+        nextAttemptAt INTEGER,
+        claimedAt INTEGER,
         startedAt INTEGER NOT NULL,
         endedAt INTEGER,
         FOREIGN KEY (eventId) REFERENCES webhook_events(id) ON DELETE CASCADE,
@@ -111,6 +115,27 @@ db.exec(`
     CREATE INDEX IF NOT EXISTS idx_webhook_dispatches_event ON webhook_dispatches(eventId, startedAt DESC);
     CREATE INDEX IF NOT EXISTS idx_webhook_dispatches_target ON webhook_dispatches(targetKind, targetId, startedAt DESC);
 `)
+
+/** Additive compatibility migration for databases created before dispatches
+ * became a durable queue. This is invoked on every active profile before a
+ * queue operation because feature modules are cached while profile DBs are
+ * opened lazily. */
+function ensureWebhookDispatchQueueSchema(): void {
+    const columns = db.pragma('table_info(webhook_dispatches)') as Array<{ name: string }>
+    const names = new Set(columns.map((column) => column.name))
+    const additions = [
+        ['queueSequence', 'INTEGER NOT NULL DEFAULT 0'],
+        ['attemptCount', 'INTEGER NOT NULL DEFAULT 0'],
+        ['nextAttemptAt', 'INTEGER'],
+        ['claimedAt', 'INTEGER'],
+    ] as const
+    for (const [name, definition] of additions) {
+        if (!names.has(name)) db.exec(`ALTER TABLE webhook_dispatches ADD COLUMN ${name} ${definition}`)
+    }
+    db.exec('CREATE INDEX IF NOT EXISTS idx_webhook_dispatches_queue ON webhook_dispatches(targetKind, targetId, status, queueSequence)')
+}
+
+ensureWebhookDispatchQueueSchema()
 
 const RESERVED_SLUGS = new Set(['subscriptions'])
 
@@ -171,6 +196,10 @@ interface WebhookDispatchRow {
     error: string | null
     runSummary: string | null
     conversationId: string | null
+    queueSequence: number
+    attemptCount: number
+    nextAttemptAt: number | null
+    claimedAt: number | null
     startedAt: number
     endedAt: number | null
 }
@@ -240,6 +269,10 @@ function dispatchFromRow(row: WebhookDispatchRow): WebhookDispatch {
         error: row.error ?? null,
         runSummary: row.runSummary ?? null,
         conversationId: row.conversationId ?? null,
+        queueSequence: row.queueSequence ?? 0,
+        attemptCount: row.attemptCount ?? 0,
+        nextAttemptAt: row.nextAttemptAt ?? null,
+        claimedAt: row.claimedAt ?? null,
         endedAt: row.endedAt ?? null,
     }
 }
@@ -722,6 +755,8 @@ export function recordWebhookDispatchStart(input: {
     targetId: string
     status?: WebhookDispatch['status']
 }): WebhookDispatch {
+    ensureWebhookDispatchQueueSchema()
+    const queueSequence = nextWebhookDispatchQueueSequence(input.targetKind, input.targetId)
     const dispatch: WebhookDispatch = {
         id: `whd_${randomUUID()}`,
         eventId: input.eventId,
@@ -732,6 +767,10 @@ export function recordWebhookDispatchStart(input: {
         error: null,
         runSummary: null,
         conversationId: null,
+        queueSequence,
+        attemptCount: input.status === 'queued' ? 0 : 1,
+        nextAttemptAt: input.status === 'queued' ? Date.now() : null,
+        claimedAt: input.status === 'queued' ? null : Date.now(),
         startedAt: Date.now(),
         endedAt: null,
     }
@@ -739,14 +778,140 @@ export function recordWebhookDispatchStart(input: {
         `
         INSERT INTO webhook_dispatches (
             id, eventId, subscriptionId, targetKind, targetId, status,
-            error, runSummary, conversationId, startedAt, endedAt
+            error, runSummary, conversationId, queueSequence, attemptCount,
+            nextAttemptAt, claimedAt, startedAt, endedAt
         ) VALUES (
             @id, @eventId, @subscriptionId, @targetKind, @targetId, @status,
-            NULL, NULL, NULL, @startedAt, NULL
+            NULL, NULL, NULL, @queueSequence, @attemptCount,
+            @nextAttemptAt, @claimedAt, @startedAt, NULL
         )
         `,
     ).run(dispatch)
     return dispatch
+}
+
+function nextWebhookDispatchQueueSequence(targetKind: WebhookDispatch['targetKind'], targetId: string): number {
+    ensureWebhookDispatchQueueSchema()
+    const row = db.prepare(
+        'SELECT COALESCE(MAX(queueSequence), 0) AS maxSequence FROM webhook_dispatches WHERE targetKind = ? AND targetId = ?',
+    ).get(targetKind, targetId) as { maxSequence: number } | undefined
+    return (row?.maxSequence ?? 0) + 1
+}
+
+/** Idempotently enqueue one event/subscription delivery. Repeated dispatch of
+ * the same persisted event reuses its original row and can never execute the
+ * Microscript twice. */
+export function enqueueWebhookDispatch(input: {
+    eventId: string
+    subscriptionId: string | null
+    targetKind: WebhookDispatch['targetKind']
+    targetId: string
+}): { dispatch: WebhookDispatch; created: boolean } {
+    ensureWebhookDispatchQueueSchema()
+    const tx = db.transaction((): { dispatch: WebhookDispatch; created: boolean } => {
+        const existing = db.prepare(
+            `SELECT * FROM webhook_dispatches
+             WHERE eventId = @eventId
+               AND subscriptionId IS @subscriptionId
+               AND targetKind = @targetKind
+               AND targetId = @targetId
+             ORDER BY startedAt ASC, id ASC
+             LIMIT 1`,
+        ).get(input) as WebhookDispatchRow | undefined
+        if (existing) return { dispatch: dispatchFromRow(existing), created: false }
+        return {
+            dispatch: recordWebhookDispatchStart({ ...input, status: 'queued' }),
+            created: true,
+        }
+    })
+    return tx()
+}
+
+export type WebhookDispatchClaim =
+    | { kind: 'claimed'; dispatch: WebhookDispatch }
+    | { kind: 'waiting'; dispatch: WebhookDispatch; waitMs: number }
+    | { kind: 'empty' }
+
+/** Claim the oldest delivery for one target. A delayed retry remains at the
+ * head of line so later webhook events cannot overtake it. */
+export function claimNextQueuedWebhookDispatch(
+    targetKind: WebhookDispatch['targetKind'],
+    targetId: string,
+    now = Date.now(),
+): WebhookDispatchClaim {
+    ensureWebhookDispatchQueueSchema()
+    const tx = db.transaction((): WebhookDispatchClaim => {
+        const row = db.prepare(
+            `SELECT * FROM webhook_dispatches
+             WHERE targetKind = @targetKind AND targetId = @targetId AND status = 'queued'
+             ORDER BY queueSequence ASC, startedAt ASC, id ASC
+             LIMIT 1`,
+        ).get({ targetKind, targetId }) as WebhookDispatchRow | undefined
+        if (!row) return { kind: 'empty' }
+        const dispatch = dispatchFromRow(row)
+        if (dispatch.nextAttemptAt !== null && dispatch.nextAttemptAt > now) {
+            return { kind: 'waiting', dispatch, waitMs: dispatch.nextAttemptAt - now }
+        }
+        const result = db.prepare(
+            `UPDATE webhook_dispatches
+             SET status = 'running', attemptCount = attemptCount + 1,
+                 claimedAt = @now, nextAttemptAt = NULL, error = NULL, endedAt = NULL
+             WHERE id = @id AND status = 'queued'`,
+        ).run({ id: dispatch.id, now })
+        if (result.changes === 0) return { kind: 'empty' }
+        const claimed = getWebhookDispatch(dispatch.id)
+        return claimed ? { kind: 'claimed', dispatch: claimed } : { kind: 'empty' }
+    })
+    return tx()
+}
+
+export function requeueWebhookDispatch(id: string, input: {
+    error: string
+    nextAttemptAt: number
+}): WebhookDispatch | null {
+    ensureWebhookDispatchQueueSchema()
+    db.prepare(
+        `UPDATE webhook_dispatches
+         SET status = 'queued', error = @error, nextAttemptAt = @nextAttemptAt,
+             claimedAt = NULL, endedAt = NULL
+         WHERE id = @id AND status = 'running'`,
+    ).run({ id, error: input.error, nextAttemptAt: input.nextAttemptAt })
+    return getWebhookDispatch(id)
+}
+
+/** Requeue deliveries interrupted by a process restart. Microscript boot
+ * recovery runs first, turning its stale `running` row back into `error`, then
+ * this queue resumes the same event without creating another delivery row. */
+export function recoverInterruptedWebhookDispatches(now = Date.now()): WebhookDispatch[] {
+    ensureWebhookDispatchQueueSchema()
+    const rows = db.prepare("SELECT * FROM webhook_dispatches WHERE status = 'running'").all() as WebhookDispatchRow[]
+    if (rows.length === 0) return []
+    db.prepare(
+        `UPDATE webhook_dispatches
+         SET status = 'queued', error = 'Interrupted by process restart; queued for retry.',
+             nextAttemptAt = @now, claimedAt = NULL, endedAt = NULL
+         WHERE status = 'running'`,
+    ).run({ now })
+    for (const row of rows) {
+        const event = getWebhookEvent(row.eventId)
+        if (event) emitWebhookEventsChanged(event.endpointId, event.id)
+    }
+    return rows.map((row) => getWebhookDispatch(row.id)).filter((item): item is WebhookDispatch => item !== null)
+}
+
+export function listPendingWebhookDispatchTargets(): Array<{
+    targetKind: WebhookDispatch['targetKind']
+    targetId: string
+}> {
+    ensureWebhookDispatchQueueSchema()
+    const rows = db.prepare(
+        `SELECT targetKind, targetId, MIN(queueSequence) AS firstSequence
+         FROM webhook_dispatches
+         WHERE status = 'queued'
+         GROUP BY targetKind, targetId
+         ORDER BY firstSequence ASC, targetKind ASC, targetId ASC`,
+    ).all() as Array<{ targetKind: WebhookDispatch['targetKind']; targetId: string }>
+    return rows.map(({ targetKind, targetId }) => ({ targetKind, targetId }))
 }
 
 export function finishWebhookDispatch(
@@ -758,6 +923,7 @@ export function finishWebhookDispatch(
         conversationId?: string | null
     },
 ): WebhookDispatch | null {
+    ensureWebhookDispatchQueueSchema()
     db.prepare(
         `
         UPDATE webhook_dispatches
@@ -765,6 +931,7 @@ export function finishWebhookDispatch(
             error = @error,
             runSummary = @runSummary,
             conversationId = @conversationId,
+            nextAttemptAt = NULL,
             endedAt = @endedAt
         WHERE id = @id
         `,
@@ -780,6 +947,7 @@ export function finishWebhookDispatch(
 }
 
 export function getWebhookDispatch(id: string): WebhookDispatch | null {
+    ensureWebhookDispatchQueueSchema()
     const row = db
         .prepare('SELECT * FROM webhook_dispatches WHERE id = ?')
         .get(id) as WebhookDispatchRow | undefined
@@ -787,6 +955,7 @@ export function getWebhookDispatch(id: string): WebhookDispatch | null {
 }
 
 export function listWebhookDispatches(eventId: string): WebhookDispatch[] {
+    ensureWebhookDispatchQueueSchema()
     const rows = db
         .prepare(
             `
@@ -797,4 +966,26 @@ export function listWebhookDispatches(eventId: string): WebhookDispatch[] {
         )
         .all(eventId) as WebhookDispatchRow[]
     return rows.map(dispatchFromRow)
+}
+
+/** Derive the parent event status from its durable delivery rows. This keeps
+ * GET .../events?dispatches=1 trustworthy while work is queued, retrying,
+ * recovered, or terminal. */
+export function reconcileWebhookEventDispatchStatus(eventId: string): WebhookEvent | null {
+    const event = getWebhookEvent(eventId)
+    if (!event) return null
+    const dispatches = listWebhookDispatches(eventId)
+    if (dispatches.length === 0) return setWebhookEventStatus(eventId, 'processed')
+    if (dispatches.some((dispatch) => dispatch.status === 'queued' || dispatch.status === 'running')) {
+        return setWebhookEventStatus(eventId, 'processing')
+    }
+    const failures = dispatches.filter((dispatch) => dispatch.status === 'error')
+    if (failures.length > 0) {
+        return setWebhookEventStatus(
+            eventId,
+            'error',
+            `${failures.length} webhook dispatch(es) failed: ${failures.map((dispatch) => dispatch.error ?? dispatch.id).join('; ')}`.slice(0, 2_000),
+        )
+    }
+    return setWebhookEventStatus(eventId, 'processed')
 }

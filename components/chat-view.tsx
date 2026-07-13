@@ -28,6 +28,7 @@ import {
   TAIL_SPACER_UPDATE_THRESHOLD_PX,
   artifactPanelArtifactWidthKey,
   artifactPanelConversationWidthKey,
+  browserAgentPanelDefaultWidth,
   clampArtifactPanelWidth,
   collectAgentRuns,
   findActiveInProgressAssistantMessage,
@@ -2837,7 +2838,14 @@ export function ChatView() {
     (artifactOpen && !!artifact) ||
     !!genArtifact ||
     !!activePanelAgentRun
+  const isBrowserAgentPanel =
+    activePanelAgentRun?.agentId === "browser_agent"
   const activeArtifactResizeKey = React.useMemo(() => {
+    // Keep browser width separate from generic artifacts and reuse it across
+    // browser runs in this conversation. A fresh browser should not inherit a
+    // narrow code/text artifact width.
+    if (activePanelAgentRun?.agentId === "browser_agent")
+      return "agent:browser_agent"
     if (activePanelAgentRun) return `agent:${activePanelAgentRun.runId}`
     if (genArtifact) return `generated:${genArtifact.identifier}`
     if (artifactOpen && artifact) return `legacy:${artifactKey(artifact)}`
@@ -2909,11 +2917,12 @@ export function ChatView() {
       layoutContainerRef.current?.getBoundingClientRect().width
     const nextWidth =
       artifactStoredWidth ??
-      conversationStoredWidth ??
-      ARTIFACT_PANEL_DEFAULT_WIDTH
+      (isBrowserAgentPanel
+        ? browserAgentPanelDefaultWidth(containerWidth)
+        : conversationStoredWidth ?? ARTIFACT_PANEL_DEFAULT_WIDTH)
 
     setArtifactPanelWidth(clampArtifactPanelWidth(nextWidth, containerWidth))
-  }, [activeArtifactResizeKey, conversationId, hasArtifact])
+  }, [activeArtifactResizeKey, conversationId, hasArtifact, isBrowserAgentPanel])
 
   React.useEffect(() => {
     const element = layoutContainerRef.current

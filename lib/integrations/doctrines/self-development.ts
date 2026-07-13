@@ -26,8 +26,10 @@ Before preparing code work, inspect git state for the source checkout: current b
 If a requested Orchestrator behavior depends on a capability that is missing from the codebase, explain the gap and propose a scoped codebase change with acceptance criteria. Start a self-development implementation only after the user asks for the code change or confirms the proposal. Routine inspection, diagnosis, and proposal drafting do not require extra confirmation.
 
 Use the repo helper:
-\`npm run self-dev:prepare -- --task "<short task>" --json\`.
+\`npm run self-dev:prepare -- --task "<short task>" --conversation-id "<current conversation id>" --json\`.
 It creates the worktree, reserves a safe port, writes \`SELF_DEV_INSTRUCTIONS.md\`, prepares tokened \`/dev-preview/<run-id>/\` URLs including \`publicUrl\` and \`lanUrl\` when available, and returns the exact coder prompt. Use its output as the handoff contract for Orchestrator self-development. Docker installs run the app from \`/app\` without \`.git\`; that is expected because production images exclude git metadata. Do not check for or require \`/app/.git\`. The helper resolves the source checkout from \`ORCHESTRATOR_SELF_DEV_SOURCE_DIR\`, the default Docker mount \`/orchestrator-source\`, or an explicit \`--source-dir\` while keeping run state under the running app's \`.orchestrator\`.
+
+The helper records the owning profile and conversation in run state. If the host or container restarts while a dirty self-development preview is still marked running, Orchestrator can restart that preview and wake the owning conversation to continue the same gate. Never remove or replace that recovered worktree merely because its old preview PID died.
 
 If the helper cannot prepare a worktree because the source checkout is missing, git metadata is unavailable, the source mount is absent, or project locations appear inconsistent, treat that as a self-development infrastructure blocker. Record it with \`ReportAgentNeed\` when available, stop, and tell the user exactly what failed. You may propose an explicit source path or host-mount fix, but do not begin any workaround unless the user explicitly confirms it. Never continue Orchestrator self-development by copying \`/app\` with \`cp\`, \`tar\`, \`rsync\`, or similar filesystem-copy fallbacks.
 

@@ -7,6 +7,7 @@ import type {
     ProviderCapabilities,
     ProviderBuiltin,
     ProviderSendOptions,
+    MessageAttachment,
     StreamCallbacks,
     ToolDef,
 } from '@/lib/ai/agents/types'
@@ -69,7 +70,7 @@ export class CodexProvider implements AIProvider {
         ],
         statefulMode: true,
         promptCaching: 'auto',
-        attachmentMode: 'none',
+        attachmentMode: 'local-path',
         thinkingSupport: true,
         requiresApiKey: false,
     }
@@ -81,6 +82,10 @@ export class CodexProvider implements AIProvider {
     async stream(options: ProviderSendOptions, cb: StreamCallbacks): Promise<void> {
         const prevSessionId = decodeAppServerSessionId(options.prevSession?.id)
         const userPrompt = latestUserPromptWithPortableHistory(options.messages, Boolean(prevSessionId))
+        const latestUserAttachments = [...options.messages]
+            .reverse()
+            .find(message => message.role === 'user')
+            ?.attachments ?? []
         if (!userPrompt.trim()) {
             cb.onError('codex: empty prompt')
             cb.onDone({})
@@ -96,6 +101,7 @@ export class CodexProvider implements AIProvider {
         return runCodexAppServer({
             bin: CLI_SPECS.codex.bin,
             prompt: userPrompt,
+            attachments: latestUserAttachments,
             model: options.model,
             systemPrompt: options.systemPrompt,
             thinkingLevel: options.thinkingLevel,
@@ -122,6 +128,7 @@ export class CodexProvider implements AIProvider {
 interface RunCodexAppServerArgs {
     bin: string
     prompt: string
+    attachments?: MessageAttachment[]
     model: string
     systemPrompt?: string
     thinkingLevel?: string
@@ -147,6 +154,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
     const {
         bin,
         prompt,
+        attachments,
         model,
         systemPrompt,
         thinkingLevel,
@@ -836,7 +844,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
 
                 const turnParams: AnyObj = {
                     threadId: activeThreadId,
-                    input: [{ type: 'text', text: prompt, text_elements: [] }],
+                    input: buildCodexTurnInput(prompt, attachments),
                 }
                 const effort = mapEffortForCodex(thinkingLevel)
                 if (effort) turnParams.effort = effort
@@ -867,6 +875,13 @@ function buildAppServerArgs(nativeCoderRun: boolean, builtins: ProviderBuiltin[]
     if (!nativeCoderRun) {
         const allowWebSearch = builtins.includes('web_search')
         const allowShell = codexAllowsShell(builtins)
+        // Codex CLI 0.144 enabled code_mode_host by default. It wraps dynamic
+        // tools in yieldable JS cells, which lets the parent model resume while
+        // a synchronous delegate_to call is still running. Orchestrator owns
+        // its own tool loop and parent/child lifecycle, so keep dynamic tools
+        // direct and blocking here. Native coder runs have no Orchestrator
+        // dynamic tools and may retain Codex's native code-mode behavior.
+        out.push('-c', 'features.code_mode_host=false')
         out.push('-c', `features.shell_tool=${allowShell ? 'true' : 'false'}`)
         out.push('-c', 'apps._default.enabled=false')
         out.push('-c', allowWebSearch ? 'web_search="live"' : 'web_search="disabled"')
@@ -913,6 +928,7 @@ function buildThreadParams(args: {
         params.sandbox = 'danger-full-access'
         params.config = {
             features: {
+                code_mode_host: false,
                 shell_tool: allowShell,
                 multi_agent: false,
                 apps: false,
@@ -943,6 +959,22 @@ function codexAllowsShell(builtins: ProviderBuiltin[]): boolean {
         builtin === 'glob' ||
         builtin === 'grep'
     ))
+}
+
+function buildCodexTurnInput(prompt: string, attachments: MessageAttachment[] = []): AnyObj[] {
+    const input: AnyObj[] = [{ type: 'text', text: prompt, text_elements: [] }]
+    for (const attachment of attachments) {
+        const mimeType = attachment.mimeType.split(';')[0].trim().toLowerCase()
+        if (!mimeType.startsWith('image/') || !attachment.filePath.trim()) continue
+        input.push({ type: 'localImage', path: attachment.filePath })
+    }
+    return input
+}
+
+export const codexProviderTestHooks = {
+    buildAppServerArgs,
+    buildThreadParams,
+    buildCodexTurnInput,
 }
 
 function encodeAppServerSessionId(threadId: string): string {

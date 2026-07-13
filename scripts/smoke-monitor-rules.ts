@@ -33,6 +33,8 @@ import {
     type WhatsAppCandidate,
 } from '@/lib/monitor/rules'
 import type { MonitorRule } from '@/lib/monitor/schema'
+import { MonitorRuleSchema } from '@/lib/monitor/schema'
+import { describeRule } from '@/lib/monitor/describe'
 import {
     buildGmailQueryFromRule,
     extractCalendarIdsFromRule,
@@ -120,6 +122,9 @@ function wa(partial: Partial<WhatsAppCandidate>): WhatsAppCandidate {
         from: '40123@c.us',
         fromMe: false,
         body: 'Vino acasă',
+        messageType: 'chat',
+        hasText: true,
+        hasMedia: false,
         mentions: [],
         timestamp: 1_700_000_000_000,
         ...partial,
@@ -281,6 +286,50 @@ check('wa_mention hit', evaluateRule(
     { kind: 'wa_mention', mentions: ['40987'] },
     wa({ mentions: ['40987'] }),
 ))
+check('wa_message_type matches case-insensitively', evaluateRule(
+    { kind: 'wa_message_type', types: ['SENDERKEYDISTRIBUTION'] },
+    wa({ messageType: 'senderkeydistribution', body: '', hasText: false }),
+))
+check('wa_has_text false matches only empty text metadata', evaluateRule(
+    { kind: 'wa_has_text', value: false },
+    wa({ body: '', hasText: false }),
+))
+check('wa_has_media matches media metadata', evaluateRule(
+    { kind: 'wa_has_media', value: true },
+    wa({ messageType: 'image', body: '', hasText: false, hasMedia: true }),
+))
+const emptyTechnicalRule: MonitorRule = {
+    kind: 'all_of',
+    rules: [
+        { kind: 'wa_message_type', types: ['senderkeydistribution'] },
+        { kind: 'wa_has_text', value: false },
+        { kind: 'wa_has_media', value: false },
+    ],
+}
+check('composed metadata rule matches empty sender-key technical event', evaluateRule(
+    emptyTechnicalRule,
+    wa({ messageType: 'senderkeydistribution', body: '', hasText: false, hasMedia: false }),
+))
+check('composed metadata rule keeps text messages eligible', !evaluateRule(
+    emptyTechnicalRule,
+    wa({ messageType: 'senderkeydistribution', body: 'visible', hasText: true, hasMedia: false }),
+))
+check('composed metadata rule keeps media messages eligible', !evaluateRule(
+    emptyTechnicalRule,
+    wa({ messageType: 'senderkeydistribution', body: '', hasText: false, hasMedia: true }),
+))
+check('composed metadata rule keeps unknown message types eligible', !evaluateRule(
+    emptyTechnicalRule,
+    wa({ messageType: 'future-provider-type', body: '', hasText: false, hasMedia: false }),
+))
+check('WhatsApp metadata composition validates in persisted rule schema', MonitorRuleSchema.safeParse(emptyTechnicalRule).success)
+const emptyTechnicalDescription = describeRule(emptyTechnicalRule)
+check('rendered rule description exposes all WhatsApp metadata predicates',
+    emptyTechnicalDescription.includes('message type')
+        && emptyTechnicalDescription.includes('no user-visible text')
+        && emptyTechnicalDescription.includes('no media'),
+    emptyTechnicalDescription,
+)
 
 // ============================================================================
 // 4. Home Assistant transition semantics
@@ -614,7 +663,7 @@ check('RULE_KINDS_BY_SOURCE gmail count', RULE_KINDS_BY_SOURCE.gmail.length === 
 check('RULE_KINDS_BY_SOURCE google_calendar count', RULE_KINDS_BY_SOURCE.google_calendar.length === 7)
 check('RULE_KINDS_BY_SOURCE home_assistant count', RULE_KINDS_BY_SOURCE.home_assistant.length === 4)
 check('RULE_KINDS_BY_SOURCE web count', RULE_KINDS_BY_SOURCE.web.length === 3)
-check('RULE_KINDS_BY_SOURCE whatsapp count', RULE_KINDS_BY_SOURCE.whatsapp.length === 4)
+check('RULE_KINDS_BY_SOURCE whatsapp count', RULE_KINDS_BY_SOURCE.whatsapp.length === 7)
 check('RULE_KINDS_BY_SOURCE weather count', RULE_KINDS_BY_SOURCE.weather.length === 6)
 check('RULE_KINDS_BY_SOURCE custom count', RULE_KINDS_BY_SOURCE.custom.length === 1)
 

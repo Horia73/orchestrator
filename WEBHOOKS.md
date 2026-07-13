@@ -40,4 +40,6 @@ Create a subscription with:
 }
 ```
 
+The delivery is persisted before execution. Deliveries to the same Microscript run serially in receive order; an already-running Microscript leaves the event queued and retries with bounded backoff instead of dropping it. Event/subscription delivery is idempotent, and queued or interrupted deliveries resume after server restart. `GET /api/webhooks/:id_or_slug/events?dispatches=1` exposes queue sequence, attempt count, next-attempt/claim timestamps, and terminal run/error history.
+
 The microscript runs with `ctx["trigger"] == "webhook"` and a `ctx["webhook"]` object containing event ids, source, event type, raw payload, and normalized fields. If the script returns `nextCheckAfterMs`, it schedules a follow-up run through the normal microscript heartbeat.

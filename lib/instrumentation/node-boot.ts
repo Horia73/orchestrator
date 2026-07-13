@@ -70,6 +70,15 @@ export async function registerRuntime(): Promise<void> {
     } catch (err) {
         console.error('[background-jobs] failed to arm watcher', err)
     }
+    // A host/container restart kills detached self-development previews but
+    // leaves their isolated worktrees intact. Recover only the newest recent
+    // dirty run, then wake its owning conversation to continue the same gate.
+    try {
+        const { startSelfDevRecovery } = await import('@/lib/self-dev/recovery')
+        startSelfDevRecovery()
+    } catch (err) {
+        console.error('[self-dev] failed to arm interrupted-run recovery', err)
+    }
     // Memory observability + OOM watchdog: periodically logs process memory
     // (rss/heapUsed/external/arrayBuffers) and restarts the process in a
     // controlled way if RSS climbs toward a host OOM. Motivated by the
@@ -143,6 +152,16 @@ export async function registerRuntime(): Promise<void> {
         })
     } catch (err) {
         console.error('[microscripts] failed to wire heartbeat', err)
+    }
+    // Durable webhook → Microscript delivery queue. Microscript recovery must
+    // run first so an interrupted script is claimable before its queued event
+    // resumes. Ingress kicks workers immediately; this hook recovers rows that
+    // were queued/running when the process stopped.
+    try {
+        const { wireWebhookDispatchQueue } = await import('@/lib/webhooks/dispatch')
+        await wireWebhookDispatchQueue()
+    } catch (err) {
+        console.error('[webhooks] failed to wire dispatch queue', err)
     }
     // Arm the nightly Memory reflection system task. Idempotent — creates the
     // single "Memory reflection" agent wake on first boot and reconciles its

@@ -9,7 +9,7 @@ import { LruCache } from "@/lib/cache/lru-cache"
 // data store when the rendered artifact belongs to a registered app.
 //
 // The iframe side (APP_HOST_SCRIPT, injected into every html/react sandbox)
-// exposes `window.AppHost` with promise-based getData/setData/onChange over
+// exposes `window.AppHost` with promise-based getData/setData/ai/onChange over
 // postMessage. The parent side (useAppBinding + useAppHostBridge) resolves
 // which app the artifact belongs to, proxies get/set to /api/apps/[id]/data,
 // and pushes live `changed` notifications into the iframe when the data doc
@@ -43,6 +43,7 @@ export const APP_HOST_SCRIPT = `
             var p = pending[data.requestId]
             if (!p) return
             delete pending[data.requestId]
+            clearTimeout(p.timer)
             if (data.ok) p.resolve(data.data)
             else p.reject(new Error(data.error || 'AppHost request failed'))
         } else if (data.__orchAppHost === 'changed') {
@@ -51,24 +52,37 @@ export const APP_HOST_SCRIPT = `
             }
         }
     })
-    function request(type, payload) {
+    function request(type, payload, timeoutMs) {
         return new Promise(function (resolve, reject) {
             var requestId = 'r' + (++seq)
-            pending[requestId] = { resolve: resolve, reject: reject }
             var msg = { __orchAppHost: type, requestId: requestId }
             if (payload !== undefined) msg.data = payload
-            parent.postMessage(msg, '*')
-            setTimeout(function () {
+            var timer = setTimeout(function () {
                 if (pending[requestId]) {
                     delete pending[requestId]
                     reject(new Error('AppHost request timed out'))
                 }
-            }, 10000)
+            }, timeoutMs || 10000)
+            pending[requestId] = { resolve: resolve, reject: reject, timer: timer }
+            parent.postMessage(msg, '*')
         })
     }
     window.AppHost = {
         getData: function () { return request('get') },
         setData: function (data) { return request('set', data) },
+        ai: function (options) {
+            var input = options && typeof options === 'object' ? options : {}
+            var files = []
+            if (input.files && typeof input.files.length === 'number') {
+                for (var i = 0; i < input.files.length; i++) files.push(input.files[i])
+            }
+            return request('ai', {
+                prompt: typeof input.prompt === 'string' ? input.prompt : '',
+                systemPrompt: typeof input.systemPrompt === 'string' ? input.systemPrompt : '',
+                responseFormat: input.responseFormat === 'json' ? 'json' : 'text',
+                files: files,
+            }, 180000)
+        },
         onChange: function (cb) {
             changeCallbacks.push(cb)
             return function () {
@@ -157,14 +171,21 @@ export function useAppBinding(artifactId?: string): AppBinding | null | undefine
 }
 
 interface BridgeRequest {
-    type: 'get' | 'set'
+    type: 'get' | 'set' | 'ai'
     requestId: string
     data?: unknown
 }
 
+interface AppAiBridgePayload {
+    prompt?: unknown
+    systemPrompt?: unknown
+    responseFormat?: unknown
+    files?: unknown
+}
+
 /**
- * Parent half of the bridge: answers the iframe's get/set requests against
- * /api/apps/[id]/data and pushes `changed` when the doc updates server-side.
+ * Parent half of the bridge: answers the iframe's get/set/ai requests against
+ * the profile-scoped app APIs and pushes `changed` when the doc updates server-side.
  * Requests arriving while the binding is still resolving are queued.
  */
 export function useAppHostBridge(
@@ -202,7 +223,7 @@ export function useAppHostBridge(
             if (request.type === 'get') {
                 const data = await fetchDoc(bound.id)
                 reply(request.requestId, true, { data })
-            } else {
+            } else if (request.type === 'set') {
                 const res = await fetch(`/api/apps/${encodeURIComponent(bound.id)}/data`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
@@ -214,6 +235,25 @@ export function useAppHostBridge(
                 }
                 docRef.current = { appId: bound.id, data: request.data }
                 reply(request.requestId, true, {})
+            } else {
+                const payload = request.data && typeof request.data === 'object'
+                    ? request.data as AppAiBridgePayload
+                    : {}
+                const form = new FormData()
+                form.set('prompt', typeof payload.prompt === 'string' ? payload.prompt : '')
+                form.set('system_prompt', typeof payload.systemPrompt === 'string' ? payload.systemPrompt : '')
+                form.set('response_format', payload.responseFormat === 'json' ? 'json' : 'text')
+                const files = Array.isArray(payload.files) ? payload.files : []
+                for (const file of files) {
+                    if (file instanceof File) form.append('files', file, file.name)
+                }
+                const res = await fetch(`/api/apps/${encodeURIComponent(bound.id)}/ai`, {
+                    method: 'POST',
+                    body: form,
+                })
+                const body = await res.json().catch(() => null) as { error?: string } | null
+                if (!res.ok) throw new Error(body?.error || `App AI request failed (${res.status})`)
+                reply(request.requestId, true, { data: body })
             }
         } catch (error) {
             reply(request.requestId, false, { error: error instanceof Error ? error.message : String(error) })
@@ -238,9 +278,9 @@ export function useAppHostBridge(
         function onMessage(e: MessageEvent) {
             if (e.source !== iframeRef.current?.contentWindow) return
             const data = e.data as { __orchAppHost?: string; requestId?: string; data?: unknown } | undefined
-            if (!data || (data.__orchAppHost !== 'get' && data.__orchAppHost !== 'set')) return
+            if (!data || !['get', 'set', 'ai'].includes(data.__orchAppHost ?? '')) return
             if (typeof data.requestId !== 'string') return
-            const request: BridgeRequest = { type: data.__orchAppHost, requestId: data.requestId, data: data.data }
+            const request: BridgeRequest = { type: data.__orchAppHost as BridgeRequest['type'], requestId: data.requestId, data: data.data }
             if (bindingRef.current === undefined) {
                 queueRef.current.push(request)
             } else {

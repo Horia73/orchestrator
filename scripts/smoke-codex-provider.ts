@@ -3,7 +3,12 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { CodexProvider, isTransientCodexAppServerError, mapEffortForCodex } from "@/lib/ai/providers/codex"
+import {
+  CodexProvider,
+  codexProviderTestHooks,
+  isTransientCodexAppServerError,
+  mapEffortForCodex,
+} from "@/lib/ai/providers/codex"
 import { codexImageTestHooks, generateCodexImage } from "@/lib/ai/providers/codex-image"
 import { imageGenerator } from "@/lib/ai/agents/image-generator"
 import { migrateLegacyAgentModelSelection } from "@/lib/config"
@@ -54,6 +59,53 @@ assert.equal(
 
 assert.equal(mapEffortForCodex("max"), "max", "Codex max effort must not be downgraded")
 assert.equal(mapEffortForCodex("ultra"), "ultra", "New Codex effort ids should pass through")
+
+const managedAppServerArgs = codexProviderTestHooks.buildAppServerArgs(false, ["web_search"])
+assert.ok(
+  managedAppServerArgs.includes("features.code_mode_host=false"),
+  "Managed Codex runs must keep dynamic tools direct and blocking"
+)
+const nativeCoderAppServerArgs = codexProviderTestHooks.buildAppServerArgs(true, [])
+assert.equal(
+  nativeCoderAppServerArgs.includes("features.code_mode_host=false"),
+  false,
+  "Native coder runs may retain Codex code mode because they have no Orchestrator dynamic tools"
+)
+const managedThreadParams = codexProviderTestHooks.buildThreadParams({
+  model: "gpt-5.6-sol",
+  tools: [],
+  builtins: ["web_search"],
+  nativeCoderRun: false,
+  cwd: "/tmp/orchestrator-codex-provider-smoke",
+})
+assert.equal(
+  (managedThreadParams.config as { features?: { code_mode_host?: boolean } }).features?.code_mode_host,
+  false,
+  "Managed thread configuration must also disable the code-mode host"
+)
+const nativeCoderThreadParams = codexProviderTestHooks.buildThreadParams({
+  model: "gpt-5.6-sol",
+  tools: [],
+  builtins: [],
+  nativeCoderRun: true,
+})
+assert.equal(
+  (nativeCoderThreadParams.config as { features?: { code_mode_host?: boolean } }).features?.code_mode_host,
+  undefined,
+  "Native coder thread configuration should not override Codex code mode"
+)
+
+assert.deepEqual(
+  codexProviderTestHooks.buildCodexTurnInput("Inspect these.", [
+    { filePath: "/tmp/photo.jpg", mimeType: "image/jpeg" },
+    { filePath: "/tmp/notes.pdf", mimeType: "application/pdf" },
+  ]),
+  [
+    { type: "text", text: "Inspect these.", text_elements: [] },
+    { type: "localImage", path: "/tmp/photo.jpg" },
+  ],
+  "Codex should receive supported photos as localImage inputs without exposing arbitrary files"
+)
 
 assert.equal(
   codexAuthRejectedByBoth(

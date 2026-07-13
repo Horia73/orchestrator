@@ -295,6 +295,24 @@ interface ProviderFileSupport {
 }
 
 const PROVIDER_FILE_SUPPORT: Record<string, ProviderFileSupport> = {
+  codex: {
+    // Codex app-server accepts localImage turn inputs. Keep this list narrow:
+    // arbitrary local files must never become model-readable paths by accident.
+    supportedMimeTypes: {
+      image: ["image/png", "image/jpeg", "image/webp"],
+      audio: [],
+      video: [],
+      document: [],
+    },
+    limits: {
+      inlineMaxBytes: 20 * 1024 * 1024,
+      pdfMaxBytes: 0,
+      pdfMaxPages: 0,
+      maxImagesPerRequest: 20,
+      maxVideosPerRequest: 0,
+      maxAudioTotalSeconds: 0,
+    },
+  },
   google: {
     supportedMimeTypes: {
       image: [

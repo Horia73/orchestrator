@@ -1193,6 +1193,7 @@ function buildToolTitle(toolName: string, args: Record<string, unknown> | undefi
     if (toolName === 'Write') return pathArg ? `Write ${pathArg}` : 'Write file'
     if (toolName === 'Edit') return pathArg ? `Edit ${pathArg}` : 'Edit file'
     if (toolName === 'Bash' || toolName === 'shell') return typeof args?.command === 'string' ? `Run ${String(args.command).slice(0, 80)}` : 'Run command'
+    if (toolName === 'remote_sudo') return typeof args?.host === 'string' ? `Run privileged command on ${args.host}` : 'Run remote privileged command'
     if (toolName === 'Glob') return typeof args?.pattern === 'string' ? `Glob ${args.pattern}` : 'Glob'
     if (toolName === 'Grep') return typeof args?.pattern === 'string' ? `Grep ${args.pattern}` : 'Grep'
     if (toolName === 'WebFetch') return typeof args?.url === 'string' ? `Fetch ${args.url}` : 'Fetch URL'

@@ -152,6 +152,9 @@ export type MonitorRule =
     | { kind: 'wa_from'; contacts: string[] }
     | { kind: 'wa_text_contains'; substrings: string[]; caseInsensitive?: boolean }
     | { kind: 'wa_mention'; mentions: string[] }
+    | { kind: 'wa_message_type'; types: string[] }
+    | { kind: 'wa_has_text'; value: boolean }
+    | { kind: 'wa_has_media'; value: boolean }
     // home assistant
     | { kind: 'ha_state_equals'; entityId: string; state: string }
     | { kind: 'ha_state_changes'; entityId: string }
@@ -277,6 +280,18 @@ const LeafRuleSchema = z.discriminatedUnion('kind', [
     z.object({
         kind: z.literal('wa_mention'),
         mentions: z.array(z.string().min(1).max(120)).min(1).max(32),
+    }),
+    z.object({
+        kind: z.literal('wa_message_type'),
+        types: z.array(z.string().trim().min(1).max(120)).min(1).max(32),
+    }),
+    z.object({
+        kind: z.literal('wa_has_text'),
+        value: z.boolean(),
+    }),
+    z.object({
+        kind: z.literal('wa_has_media'),
+        value: z.boolean(),
     }),
     // home assistant
     z.object({

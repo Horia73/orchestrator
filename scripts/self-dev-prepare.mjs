@@ -16,6 +16,9 @@ const baseRef = stringArg('base-ref') || `origin/${baseBranch}`
 const runId = sanitizeRunId(stringArg('run-id') || `self-${timestamp()}-${randomUUID().slice(0, 8)}`)
 const branch = sanitizeBranchName(stringArg('branch') || `agent/${runId}`)
 const task = stringArg('task') || 'Orchestrator self-development run.'
+const ownerProfileId = stringArg('profile-id') || process.env.ORCHESTRATOR_SELF_DEV_PROFILE_ID || null
+const ownerConversationId = stringArg('conversation-id') || process.env.ORCHESTRATOR_SELF_DEV_CONVERSATION_ID || null
+const ownerParentRequestId = stringArg('parent-request-id') || process.env.ORCHESTRATOR_SELF_DEV_PARENT_REQUEST_ID || null
 const portStart = intArg('port-start', 3101)
 const portEnd = intArg('port-end', 3199)
 const requestedPort = intArg('port', null)
@@ -116,6 +119,11 @@ try {
     },
     instructionsPath,
     task,
+    owner: {
+      profileId: ownerProfileId,
+      conversationId: ownerConversationId,
+      parentRequestId: ownerParentRequestId,
+    },
     copyEnv,
     status: 'prepared',
     pinned: false,

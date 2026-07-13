@@ -22,6 +22,14 @@ export function redactToolArgs(
         return { ...args, value: '[redacted]' }
     }
 
+    if (toolName === 'remote_sudo') {
+        // The public schema accepts an environment-variable NAME, never a
+        // password. Keep only schema fields so even a malformed/provider-
+        // injected password-like argument cannot land in reasoning/tool logs.
+        const allowed = ['host', 'user', 'port', 'identity_file', 'command', 'password_env_key', 'timeout']
+        return Object.fromEntries(allowed.filter((key) => key in args).map((key) => [key, args[key]]))
+    }
+
     if ((toolName === 'Write' || toolName === 'Edit') && isEnvLocalPath(args)) {
         const redacted = { ...args }
         if ('content' in redacted) redacted.content = '[redacted env content]'

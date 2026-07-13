@@ -135,7 +135,7 @@ export function BrowserAgentWorkspace({
   const active = run.status === "running" || awaitingUser
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 px-4 pt-3 pb-4">
+    <div className="flex h-full min-h-0 flex-col gap-3 px-4 pt-3 pb-4 [container-type:inline-size]">
       <details className="shrink-0 rounded-md border border-border bg-muted/30">
         <summary className="cursor-pointer px-3 py-2 text-[12px] font-medium tracking-wide text-muted-foreground uppercase">
           Prompt
@@ -159,12 +159,12 @@ export function BrowserAgentWorkspace({
         storageKey={`todo-bar:agent:${run.runId}:expanded`}
         hideCompleted={run.status !== "running"}
       />
-      {/* The live view contain-fits inside its flexible share of the column,
-          so resizing the panel always keeps the whole browser visible; the
-          tabs box takes the rest. Before the stream is ready the live view is
-          just a status chip (no .browser-agent-live-viewport inside), so the
-          wrapper stays collapsed instead of reserving empty space. */}
-      <div className="min-h-0 min-w-0 shrink-0 has-[.browser-agent-live-viewport]:min-h-[200px] has-[.browser-agent-live-viewport]:flex-[3_2_0%]">
+      {/* Size the live area from the panel's actual content width, so a 16:9
+          stream occupies the frame instead of floating inside a fixed 60/40
+          vertical split. The viewport-height cap keeps the diagnostics usable
+          on short windows. Before the stream is ready there is no viewport,
+          so the wrapper still collapses to the availability/status chip. */}
+      <div className="min-h-0 min-w-0 shrink-0 has-[.browser-agent-live-viewport]:h-[min(calc(56.25cqw+4.75rem),calc(100dvh-14.5rem))] has-[.browser-agent-live-viewport]:min-h-[200px]">
         <BrowserAgentLiveView
           variant="panel"
           active={active}
@@ -204,7 +204,7 @@ function BrowserAgentDiagnosticsTabs({
     (diagnostics?.failedRequests.length ?? 0) + (diagnostics?.httpErrors.length ?? 0)
 
   return (
-    <div className="flex min-h-[140px] min-w-0 flex-[2_3_0%] flex-col overflow-hidden rounded-md border border-[#24242a] bg-[#0c0c0e] shadow-sm">
+    <div className="flex min-h-[140px] min-w-0 flex-1 flex-col overflow-hidden rounded-md border border-[#24242a] bg-[#0c0c0e] shadow-sm">
       <div className="flex shrink-0 items-center gap-1 border-b border-white/10 px-2 py-1.5">
         <BrowserPanelTabButton
           label="Transcript"

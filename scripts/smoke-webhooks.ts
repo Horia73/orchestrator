@@ -11,32 +11,61 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { createHmac } from 'crypto'
+import Database from 'better-sqlite3'
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'webhooks-smoke-'))
 process.chdir(tmpRoot)
+// Seed the pre-queue dispatch shape so importing the store exercises the
+// additive migration, not only fresh-database CREATE TABLE behavior.
+fs.mkdirSync(path.join(tmpRoot, '.orchestrator'), { recursive: true })
+const legacyDb = new Database(path.join(tmpRoot, '.orchestrator', 'data.db'))
+legacyDb.exec(`
+    CREATE TABLE webhook_dispatches (
+        id TEXT PRIMARY KEY,
+        eventId TEXT NOT NULL,
+        subscriptionId TEXT,
+        targetKind TEXT NOT NULL,
+        targetId TEXT NOT NULL,
+        status TEXT NOT NULL,
+        error TEXT,
+        runSummary TEXT,
+        conversationId TEXT,
+        startedAt INTEGER NOT NULL,
+        endedAt INTEGER
+    )
+`)
+legacyDb.close()
 
 async function main(): Promise<void> {
     const {
         createWebhookEndpoint,
         createWebhookEvent,
         createWebhookSubscription,
+        claimNextQueuedWebhookDispatch,
+        enqueueWebhookDispatch,
+        getWebhookEvent,
         listWebhookDispatches,
         listWebhookEvents,
+        reconcileWebhookEventDispatchStatus,
         toPublicWebhookEndpoint,
     } = await import('@/lib/webhooks/store')
     const { authenticateWebhookRequest } = await import('@/lib/webhooks/auth')
     const { computeWebhookDedupeKey, normalizeWebhookEvent } = await import('@/lib/webhooks/normalize')
-    const { dispatchWebhookEvent } = await import('@/lib/webhooks/dispatch')
+    const { dispatchWebhookEvent, recoverWebhookDispatchQueue } = await import('@/lib/webhooks/dispatch')
     const {
         createMicroscript,
         getMicroscript,
         listMicroscriptRuns,
+        listMicroscriptEvents,
+        claimMicroscriptForWebhook,
+        setMicroscriptStatus,
     } = await import('@/lib/microscripts/store')
     const {
         executeWebhookCreate,
         executeWebhookList,
         executeWebhookSubscriptionCreate,
     } = await import('@/lib/ai/tools/webhooks')
+    const db = (await import('@/lib/db')).default
 
     let failures = 0
     function check(label: string, cond: unknown, detail?: unknown) {
@@ -44,6 +73,14 @@ async function main(): Promise<void> {
         console.log(`${ok ? '✓' : '✗'} ${label}${ok ? '' : ` (${JSON.stringify(detail)})`}`)
         if (!ok) failures++
     }
+
+    const dispatchColumns = new Set(
+        (db.pragma('table_info(webhook_dispatches)') as Array<{ name: string }>).map((column) => column.name),
+    )
+    check('legacy dispatch table migrates queue metadata additively',
+        ['queueSequence', 'attemptCount', 'nextAttemptAt', 'claimedAt'].every((name) => dispatchColumns.has(name)),
+        [...dispatchColumns],
+    )
 
     const secret = 'smoke-webhook-secret-value'
     const { endpoint } = createWebhookEndpoint({
@@ -235,6 +272,120 @@ def run(ctx):
     check('microscript received ctx.webhook payload', afterScript?.state.value === 42 && afterScript.state.event_type === 'smoke.event', afterScript)
     check('microscript run trigger recorded as webhook', runs[0]?.trigger === 'webhook', runs[0])
     check('dispatch row is ok', dispatches[0]?.status === 'ok', dispatches[0])
+
+    // ---------------------------------------------------------------------
+    // Durable serial queue: burst ordering, contention retry, idempotency,
+    // interrupted-row recovery, and queue/history readback.
+    // ---------------------------------------------------------------------
+    const { endpoint: queueEndpoint } = createWebhookEndpoint({
+        slug: 'queue-events',
+        title: 'Queued webhook events',
+        source: 'queue-smoke',
+        defaultEventType: 'queue.event',
+        authMode: 'none',
+        retentionDays: 7,
+    }, 'system')
+    const queueCode = `
+def run(ctx):
+    state = dict(ctx.get("state", {}))
+    order = list(state.get("order", []))
+    webhook = ctx.get("webhook") or {}
+    payload = webhook.get("payload") or {}
+    order.append(payload.get("sequence"))
+    state["order"] = order
+    state["last_event_id"] = webhook.get("eventId")
+    return {"summary": "queued " + str(payload.get("sequence")), "state": state}
+`.trim()
+    const queueScript = createMicroscript({
+        title: 'Queued webhook smoke microscript',
+        code: queueCode,
+        enabled: true,
+        manifest: {
+            description: 'Durable webhook queue test',
+            schedule: { kind: 'manual' },
+            permissions: [],
+            stop: { persistent: true, expiresAt: null },
+            limits: { timeoutMs: 5_000, maxPhases: 4, minIntervalMs: 60_000, maxConsecutiveFailures: 3 },
+        },
+    })
+    const queueSubscription = createWebhookSubscription({
+        endpointId: queueEndpoint.id,
+        targetKind: 'microscript',
+        targetId: queueScript.id,
+        eventType: 'queue.event',
+    })
+
+    let queueEventCounter = 0
+    function queueEvent(sequence: number, suffix = '') {
+        queueEventCounter += 1
+        const now = Date.now()
+        return createWebhookEvent({
+            endpointId: queueEndpoint.id,
+            slug: queueEndpoint.slug,
+            payload: { sequence },
+            dedupeKey: `queue-${sequence}-${suffix}-${queueEventCounter}`,
+            normalized: {
+                source: queueEndpoint.source,
+                eventType: 'queue.event',
+                subject: null,
+                actor: null,
+                occurredAt: now,
+                summary: `queue event ${sequence}`,
+                metadata: {},
+            },
+        }).event
+    }
+
+    const burst = [queueEvent(1, 'burst'), queueEvent(2, 'burst'), queueEvent(3, 'burst')]
+    await Promise.all(burst.map((event) => dispatchWebhookEvent(event.id)))
+    const afterBurst = getMicroscript(queueScript.id)
+    check('burst of 3 events processes fully in stable order', JSON.stringify(afterBurst?.state.order) === JSON.stringify([1, 2, 3]), afterBurst?.state)
+    check('burst creates one webhook-triggered run per event', listMicroscriptRuns(queueScript.id).filter((run) => run.trigger === 'webhook').length === 3)
+    const burstRows = burst.flatMap((event) => listWebhookDispatches(event.id))
+    check('burst dispatch rows all settle ok', burstRows.length === 3 && burstRows.every((row) => row.status === 'ok'), burstRows)
+    check('burst queue sequence is strictly increasing', burstRows.map((row) => row.queueSequence).every((value, index, values) => index === 0 || value > values[index - 1]), burstRows)
+
+    const held = claimMicroscriptForWebhook(queueScript.id, Date.now())
+    check('contention harness claims Microscript as already running', held?.id === queueScript.id)
+    const contentionEvent = queueEvent(4, 'contention')
+    const release = setTimeout(() => {
+        setMicroscriptStatus(queueScript.id, 'active', { reason: 'smoke contention released' })
+    }, 250)
+    await dispatchWebhookEvent(contentionEvent.id)
+    clearTimeout(release)
+    const contentionDispatch = listWebhookDispatches(contentionEvent.id)[0]
+    check('already-running contention eventually processes without loss', contentionDispatch?.status === 'ok' && getMicroscript(queueScript.id)?.state.last_event_id === contentionEvent.id, contentionDispatch)
+    check('already-running contention used persisted retry attempts', (contentionDispatch?.attemptCount ?? 0) >= 2, contentionDispatch)
+    check('Microscript history exposes queued retry', listMicroscriptEvents(queueScript.id).some((event) => event.kind === 'webhook_retry_queued'))
+
+    const duplicateEvent = queueEvent(5, 'duplicate-dispatch')
+    const runsBeforeDuplicate = listMicroscriptRuns(queueScript.id).length
+    await Promise.all([dispatchWebhookEvent(duplicateEvent.id), dispatchWebhookEvent(duplicateEvent.id)])
+    check('duplicate dispatch calls share one persisted row', listWebhookDispatches(duplicateEvent.id).length === 1, listWebhookDispatches(duplicateEvent.id))
+    check('duplicate dispatch calls execute only once', listMicroscriptRuns(queueScript.id).length === runsBeforeDuplicate + 1)
+
+    const restartEvent = queueEvent(6, 'restart')
+    const queuedForRestart = enqueueWebhookDispatch({
+        eventId: restartEvent.id,
+        subscriptionId: queueSubscription.id,
+        targetKind: 'microscript',
+        targetId: queueScript.id,
+    }).dispatch
+    reconcileWebhookEventDispatchStatus(restartEvent.id)
+    const interruptedClaim = claimNextQueuedWebhookDispatch('microscript', queueScript.id, Date.now())
+    check('restart harness leaves persisted dispatch running', interruptedClaim.kind === 'claimed' && interruptedClaim.dispatch.id === queuedForRestart.id, interruptedClaim)
+    const recovered = await recoverWebhookDispatchQueue()
+    const restartDispatch = listWebhookDispatches(restartEvent.id)[0]
+    check('restart recovery finds interrupted delivery', recovered.recovered >= 1, recovered)
+    check('restart recovery resumes and completes queue', restartDispatch?.status === 'ok' && getMicroscript(queueScript.id)?.state.last_event_id === restartEvent.id, restartDispatch)
+    check('event readback is processed after recovery', getWebhookEvent(restartEvent.id)?.status === 'processed', getWebhookEvent(restartEvent.id))
+    check('dispatch readback exposes attempts/order/claim history',
+        typeof restartDispatch?.queueSequence === 'number'
+            && (restartDispatch?.attemptCount ?? 0) >= 2
+            && typeof restartDispatch?.claimedAt === 'number'
+            && restartDispatch?.nextAttemptAt === null,
+        restartDispatch,
+    )
 
     console.log(`\n${failures === 0 ? '✅ ALL OK' : `❌ ${failures} failure(s)`}`)
     process.exit(failures === 0 ? 0 : 1)

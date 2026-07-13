@@ -4,6 +4,7 @@ import type { ToolExecutionContext, ToolResult } from '@/lib/ai/agents/types'
 import { MAX_TOOL_DELTA_TEXT_CHARS } from '@/lib/ai/reasoning-limits'
 import { augmentedEnv, resolveCommandShell } from '@/lib/cli/resolve-bin'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
+import { getActiveProfileId } from '@/lib/profiles/context'
 import { startTrackedBackgroundJob } from '@/lib/ai/background-jobs'
 import { displayPath } from './sandbox'
 import {
@@ -58,13 +59,16 @@ function resolveCwd(cwdArg: string): { ok: true; cwd: string } | { ok: false; er
     return { ok: true, cwd: resolved }
 }
 
-function runtimeCommandEnv(): Record<string, string> {
+function runtimeCommandEnv(ctx?: ToolExecutionContext): Record<string, string> {
     const paths = activeRuntimePaths()
     return {
         ORCHESTRATOR_APP_DIR: process.cwd(),
         ORCHESTRATOR_AGENT_WORKSPACE_DIR: paths.agentWorkspaceDir,
         ORCHESTRATOR_PROFILE_STATE_DIR: paths.stateDir,
         ORCHESTRATOR_PROJECT_RUNS_DIR: path.join(process.cwd(), '.orchestrator', 'project-runs'),
+        ORCHESTRATOR_SELF_DEV_PROFILE_ID: getActiveProfileId(),
+        ORCHESTRATOR_SELF_DEV_CONVERSATION_ID: ctx?.conversationId ?? '',
+        ORCHESTRATOR_SELF_DEV_PARENT_REQUEST_ID: ctx?.parentRequestId ?? '',
     }
 }
 
@@ -181,7 +185,7 @@ async function runForegroundCommand(command: string, cwd: string, timeoutMs: num
                 rows: 32,
                 cwd,
                 env: augmentedEnv({
-                    ...runtimeCommandEnv(),
+                    ...runtimeCommandEnv(ctx),
                     ...injection.env,
                     FORCE_COLOR: process.env.FORCE_COLOR ?? '1',
                     TERM: 'xterm-256color',
@@ -295,4 +299,3 @@ function truncateText(text: string, maxChars: number): { text: string; truncated
         truncated: true,
     }
 }
-

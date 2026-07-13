@@ -9,6 +9,9 @@ export const LAYOUT_TRANSITION =
   "duration-[260ms] ease-[cubic-bezier(0.22,1,0.36,1)]"
 export const STICKY_BOTTOM_THRESHOLD = 80
 export const ARTIFACT_PANEL_DEFAULT_WIDTH = 560
+const BROWSER_AGENT_PANEL_MIN_DEFAULT_WIDTH = 880
+const BROWSER_AGENT_PANEL_MAX_DEFAULT_WIDTH = 1080
+const BROWSER_AGENT_PANEL_DEFAULT_RATIO = 0.58
 export const ARTIFACT_PANEL_MIN_WIDTH = 340
 export const ARTIFACT_PANEL_MAX_WIDTH = 2400
 const ARTIFACT_PANEL_MIN_CHAT_WIDTH = 360
@@ -177,6 +180,30 @@ export function clampArtifactPanelWidth(
       : ARTIFACT_PANEL_MAX_WIDTH
 
   return Math.min(Math.max(rounded, ARTIFACT_PANEL_MIN_WIDTH), maxFromContainer)
+}
+
+/**
+ * Browser workspaces need enough horizontal room for the remote desktop and
+ * its controls. Give them a wider, responsive first open than text/code
+ * artifacts while still preserving the chat column on smaller windows.
+ */
+export function browserAgentPanelDefaultWidth(
+  containerWidth?: number | null
+): number {
+  const preferredWidth =
+    typeof containerWidth === "number" &&
+    Number.isFinite(containerWidth) &&
+    containerWidth > 0
+      ? Math.min(
+          BROWSER_AGENT_PANEL_MAX_DEFAULT_WIDTH,
+          Math.max(
+            BROWSER_AGENT_PANEL_MIN_DEFAULT_WIDTH,
+            Math.round(containerWidth * BROWSER_AGENT_PANEL_DEFAULT_RATIO)
+          )
+        )
+      : BROWSER_AGENT_PANEL_MIN_DEFAULT_WIDTH
+
+  return clampArtifactPanelWidth(preferredWidth, containerWidth)
 }
 
 export function collectAgentRuns(

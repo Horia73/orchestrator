@@ -14,12 +14,16 @@ import {
 } from '@/lib/ai/run-admission'
 import { runWithProfileContext } from '@/lib/profiles/context'
 import { ADMIN_PROFILE_ID } from '@/lib/profiles/constants'
+import { canProfileReceivePendingUpdate } from '@/lib/update/manager'
 
 const stamp = Date.now()
 const adminConversation = `update_admission_admin_${stamp}`
 const memberConversation = `update_admission_member_${stamp}`
 const adminController = new AbortController()
 const memberController = new AbortController()
+
+assert.equal(canProfileReceivePendingUpdate(ADMIN_PROFILE_ID), true, 'admin may receive pending-update hints')
+assert.equal(canProfileReceivePendingUpdate('member_test'), false, 'member agents must not receive pending-update hints')
 
 assert.equal(
     runWithProfileContext({ profileId: ADMIN_PROFILE_ID }, () =>

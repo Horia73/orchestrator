@@ -457,6 +457,7 @@ export function buildRuntimeContext(ctx: PromptContext): string {
         }
     }
     if (ctx.agentThreadId) lines.push(`current_agent_thread_id: ${ctx.agentThreadId}`)
+    if (ctx.conversationId) lines.push(`current_conversation_id: ${ctx.conversationId}`)
     const runtimePaths = activeRuntimePaths()
     lines.push(`workspace_cwd: ${runtimePaths.agentWorkspaceDir}`)
     lines.push(`file_tools_root: ${runtimePaths.agentWorkspaceDir}`)

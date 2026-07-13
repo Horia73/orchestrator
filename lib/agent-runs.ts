@@ -8,7 +8,7 @@ import { getAiRunAdmissionBlock } from '@/lib/ai/run-admission'
 
 export interface ActiveAgentRun {
     id: string
-    kind: 'inbox' | 'scheduled'
+    kind: 'inbox' | 'scheduled' | 'app'
     conversationId: string
     startedAt: number
 }
