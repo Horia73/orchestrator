@@ -1,7 +1,10 @@
 import fs from 'fs'
 import path from 'path'
 
-import { activeRuntimePaths } from '@/lib/runtime-paths'
+import {
+  shouldSyncWorkspaceEnvToProcess,
+  writableWorkspaceEnvPath,
+} from '@/lib/profiles/env-sharing'
 
 /**
  * Env keys the onboarding wizard is allowed to write. Kept to provider API keys
@@ -43,7 +46,7 @@ export function setOnboardingEnvValue(key: string, value: string): void {
     throw new Error(`Key not allowed: ${key}`)
   }
 
-  const envPath = activeRuntimePaths().workspaceEnvPath
+  const envPath = writableWorkspaceEnvPath()
   fs.mkdirSync(path.dirname(envPath), { recursive: true })
   const existing = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf-8') : ''
 
@@ -72,6 +75,8 @@ export function setOnboardingEnvValue(key: string, value: string): void {
     // best-effort on platforms without chmod
   }
 
-  if (trimmed) process.env[key] = trimmed
-  else delete process.env[key]
+  if (shouldSyncWorkspaceEnvToProcess()) {
+    if (trimmed) process.env[key] = trimmed
+    else delete process.env[key]
+  }
 }

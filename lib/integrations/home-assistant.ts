@@ -382,8 +382,9 @@ export async function saveHomeAssistantConfig(input: HomeAssistantConfigInput): 
 
     const normalizedUrl = normalizeBaseUrl(baseUrl)
     // Persist to the active profile's private store, and strip any legacy copies
-    // from the workspace env file so the credentials never ride the shared
-    // provider-key inheritance (allowedProviderApiKeys) into other profiles.
+    // from its old workspace env file. Shared-environment profiles ignore that
+    // file entirely, but cleanup keeps it from resurfacing if sharing is later
+    // disabled.
     writeStoredHomeAssistantConfig(normalizedUrl, token)
     patchWorkspaceEnv({})
     const connection = ensureHomeAssistantConnectionForProfile(getActiveProfileId())
@@ -1417,11 +1418,9 @@ function readOwnWorkspaceHomeAssistantEnv(): Record<string, string> {
 
 // Home Assistant credentials are a per-profile integration secret. They are
 // resolved ONLY from the active profile's private store (or, for backward
-// compatibility, the profile's OWN workspace env file) — never via the shared
-// getEnvValue() path. Reading them through getEnvValue would let member profiles
-// inherit the admin's Home Assistant URL/token through allowedProviderApiKeys
-// ("*"), which is a cross-profile credential leak. Resolution is owner-scoped
-// because callers wrap this in runWithProfileContext(ownerProfileId, ...).
+// compatibility, the profile's OWN legacy workspace env file) — never via the
+// shared getEnvValue() path. Resolution is owner-scoped because callers wrap
+// this in runWithProfileContext(ownerProfileId, ...).
 function getHomeAssistantEnvConfig(): HomeAssistantConfig {
     const stored = readStoredHomeAssistantConfig()
     let rawBaseUrl = cleanConfigValue(stored?.baseUrl)
@@ -1515,6 +1514,7 @@ function parseEnvAssignments(raw: string): Record<string, string> {
 
 function patchWorkspaceEnv(values: Record<string, string>): void {
     const workspaceEnvPath = activeRuntimePaths().workspaceEnvPath
+    if (!fs.existsSync(workspaceEnvPath) && Object.keys(values).length === 0) return
     fs.mkdirSync(path.dirname(workspaceEnvPath), { recursive: true })
     const existing = fs.existsSync(workspaceEnvPath)
         ? fs.readFileSync(workspaceEnvPath, 'utf-8')

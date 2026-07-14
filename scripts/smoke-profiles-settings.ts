@@ -26,6 +26,10 @@ const {
   defaultMemberPermissions,
 } = await import("@/lib/profiles/types")
 const {
+  resolveAppOrigin,
+  resolveOAuthRedirectUri,
+} = await import("@/lib/app-origin")
+const {
   getConfig,
   getEnvValue,
   getEffectiveBrowserAgentSettings,
@@ -42,7 +46,11 @@ const {
 const {
   getWorkspaceFile,
   listWorkspaceFiles,
+  revealWorkspaceEnvValue,
+  writeWorkspaceFile,
 } = await import("@/lib/settings/workspace-files")
+const { executeSetEnv } = await import("@/lib/ai/tools/set-env")
+const { saveGmailOAuthConfig } = await import("@/lib/integrations/gmail")
 
 const defaultPermissions = defaultMemberPermissions()
 check("member Settings surface defaults on", defaultPermissions.surfaces.settings === true)
@@ -217,13 +225,38 @@ check(
   selfServiceConfig.browserAgent.light
 )
 
-const originalResendApiKey = process.env.RESEND_API_KEY
+const originalSharedProcessEnv = {
+  RESEND_API_KEY: process.env.RESEND_API_KEY,
+  ORCHESTRATOR_PUBLIC_URL: process.env.ORCHESTRATOR_PUBLIC_URL,
+  GMAIL_OAUTH_REDIRECT_URI: process.env.GMAIL_OAUTH_REDIRECT_URI,
+}
 delete process.env.RESEND_API_KEY
+delete process.env.ORCHESTRATOR_PUBLIC_URL
+delete process.env.GMAIL_OAUTH_REDIRECT_URI
 const adminEnvPath = runtimePathsForProfile(ADMIN_PROFILE_ID).workspaceEnvPath
+const inheritedMemberEnvPath = runtimePathsForProfile(inheritedEnvMember.id).workspaceEnvPath
 fs.mkdirSync(path.dirname(adminEnvPath), { recursive: true })
 fs.writeFileSync(
   adminEnvPath,
-  "RESEND_API_KEY=admin-resend-smoke\nOPENAI_API_KEY=admin-openai-smoke\n",
+  [
+    "RESEND_API_KEY=admin-resend-smoke",
+    "OPENAI_API_KEY=admin-openai-smoke",
+    "ORCHESTRATOR_PUBLIC_URL=https://admin.example.com",
+    "GMAIL_OAUTH_REDIRECT_URI=https://admin.example.com/api/integrations/gmail/oauth/callback",
+    "",
+  ].join("\n"),
+  "utf-8"
+)
+fs.mkdirSync(path.dirname(inheritedMemberEnvPath), { recursive: true })
+fs.writeFileSync(
+  inheritedMemberEnvPath,
+  [
+    "RESEND_API_KEY=member-resend-must-be-ignored",
+    "MEMBER_ONLY_ENV=must-not-be-visible-while-shared",
+    "ORCHESTRATOR_PUBLIC_URL=http://member.lan",
+    "GMAIL_OAUTH_REDIRECT_URI=http://localhost:3000/api/integrations/gmail/oauth/callback",
+    "",
+  ].join("\n"),
   "utf-8"
 )
 const inheritedEnvValue = await runWithProfileContext(
@@ -242,11 +275,76 @@ const inheritedEnvFile = await runWithProfileContext(
   { profileId: inheritedEnvMember.id, role: "member" },
   () => getWorkspaceFile("env-local")
 )
-if (originalResendApiKey === undefined) delete process.env.RESEND_API_KEY
-else process.env.RESEND_API_KEY = originalResendApiKey
+const inheritedAppOrigin = await runWithProfileContext(
+  { profileId: inheritedEnvMember.id, role: "member" },
+  () => resolveAppOrigin("http://member.lan")
+)
+const inheritedGmailRedirect = await runWithProfileContext(
+  { profileId: inheritedEnvMember.id, role: "member" },
+  () =>
+    resolveOAuthRedirectUri(
+      getEnvValue("GMAIL_OAUTH_REDIRECT_URI"),
+      inheritedAppOrigin,
+      "/api/integrations/gmail/oauth/callback"
+    )
+)
+const sharedSetEnvResult = await runWithProfileContext(
+  { profileId: inheritedEnvMember.id, role: "member" },
+  () => executeSetEnv({ key: "SHARED_WRITE_SMOKE", value: "blocked" })
+)
+let sharedGmailConfigBlocked = false
+await runWithProfileContext(
+  { profileId: inheritedEnvMember.id, role: "member" },
+  async () => {
+    try {
+      await saveGmailOAuthConfig(inheritedAppOrigin, {
+        clientId: "shared-write-smoke.apps.googleusercontent.com",
+        clientSecret: "shared-write-smoke-secret",
+      })
+    } catch (error) {
+      sharedGmailConfigBlocked =
+        error instanceof Error && error.message.includes("uses the admin environment")
+    }
+  }
+)
+let sharedSettingsWriteBlocked = false
+await runWithProfileContext(
+  { profileId: inheritedEnvMember.id, role: "member" },
+  () => {
+    try {
+      writeWorkspaceFile("env-local", "SHARED_WRITE_SMOKE=blocked\n")
+    } catch {
+      sharedSettingsWriteBlocked = true
+    }
+  }
+)
+delete process.env.ISOLATED_WRITE_SMOKE
+const isolatedSetEnvResult = await runWithProfileContext(
+  { profileId: isolatedEnvMember.id, role: "member" },
+  () => executeSetEnv({ key: "ISOLATED_WRITE_SMOKE", value: "profile-only" })
+)
+const isolatedSetEnvValue = await runWithProfileContext(
+  { profileId: isolatedEnvMember.id, role: "member" },
+  () => getEnvValue("ISOLATED_WRITE_SMOKE")
+)
+const adminSawIsolatedSetEnv = await runWithProfileContext(
+  { profileId: ADMIN_PROFILE_ID, role: "admin" },
+  () => getEnvValue("ISOLATED_WRITE_SMOKE")
+)
+let sharedRevealBlocked = false
+await runWithProfileContext(
+  { profileId: inheritedEnvMember.id, role: "member" },
+  () => {
+    try {
+      revealWorkspaceEnvValue("env-local", "RESEND_API_KEY")
+    } catch {
+      sharedRevealBlocked = true
+    }
+  }
+)
 
 check(
-  "member inherits admin workspace env API keys",
+  "shared member ignores its own env and uses admin env",
   inheritedEnvValue === "admin-resend-smoke",
   inheritedEnvValue
 )
@@ -265,9 +363,84 @@ check(
 check(
   "inherited env file redacts inherited API keys",
   inheritedEnvFile?.content.includes("RESEND_API_KEY=__ORCHESTRATOR_SECRET_SET__") === true &&
-    inheritedEnvFile.contentRedacted === true,
+    inheritedEnvFile.contentRedacted === true &&
+    !inheritedEnvFile.content.includes("MEMBER_ONLY_ENV"),
   inheritedEnvFile
 )
+check(
+  "shared member receives admin public URL",
+  inheritedAppOrigin === "https://admin.example.com",
+  inheritedAppOrigin
+)
+check(
+  "shared member receives admin Gmail OAuth redirect URL",
+  inheritedGmailRedirect ===
+    "https://admin.example.com/api/integrations/gmail/oauth/callback",
+  inheritedGmailRedirect
+)
+check(
+  "SetEnv rejects writes while admin environment is shared",
+  sharedSetEnvResult.success === false &&
+    sharedSetEnvResult.error?.includes("uses the admin environment"),
+  sharedSetEnvResult
+)
+check(
+  "Settings rejects env writes while admin environment is shared",
+  sharedSettingsWriteBlocked
+)
+check(
+  "Gmail config rejects env writes while admin environment is shared",
+  sharedGmailConfigBlocked
+)
+check(
+  "member cannot reveal shared admin env values",
+  sharedRevealBlocked
+)
+check(
+  "isolated profile env writes stay profile-local",
+  isolatedSetEnvResult.success === true &&
+    isolatedSetEnvValue === "profile-only" &&
+    process.env.ISOLATED_WRITE_SMOKE === undefined &&
+    adminSawIsolatedSetEnv === null,
+  { isolatedSetEnvResult, isolatedSetEnvValue, adminSawIsolatedSetEnv }
+)
+
+const sharingDisabled = updateProfile(inheritedEnvMember.id, {
+  permissions: {
+    ...inheritedEnvMember.permissions,
+    inheritAdminApiKeys: false,
+  },
+})
+const ownEnvAfterDisable = await runWithProfileContext(
+  { profileId: inheritedEnvMember.id, role: "member" },
+  () => getEnvValue("RESEND_API_KEY")
+)
+const sharingEnabledAgain = updateProfile(inheritedEnvMember.id, {
+  permissions: {
+    ...(sharingDisabled?.permissions ?? inheritedEnvMember.permissions),
+    inheritAdminApiKeys: true,
+  },
+})
+const adminEnvAfterEnable = await runWithProfileContext(
+  { profileId: inheritedEnvMember.id, role: "member" },
+  () => getEnvValue("RESEND_API_KEY")
+)
+check(
+  "turning sharing off immediately restores the profile env",
+  ownEnvAfterDisable === "member-resend-must-be-ignored",
+  ownEnvAfterDisable
+)
+check(
+  "turning sharing on immediately restores the admin env",
+  sharingEnabledAgain?.permissions.allowedProviderApiKeys.join(",") === "*" &&
+    adminEnvAfterEnable === "admin-resend-smoke",
+  { permissions: sharingEnabledAgain?.permissions, adminEnvAfterEnable }
+)
+
+for (const [key, value] of Object.entries(originalSharedProcessEnv)) {
+  if (value === undefined) delete process.env[key]
+  else process.env[key] = value
+}
 
 const normalEffective = await runWithProfileContext(
   { profileId: normalMember.id, role: "member" },

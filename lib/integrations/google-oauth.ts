@@ -4,6 +4,10 @@ import { randomBytes } from 'crypto'
 
 import { resolveOAuthRedirectUri } from '@/lib/app-origin'
 import { getEnvValue } from '@/lib/config'
+import {
+    shouldSyncWorkspaceEnvToProcess,
+    writableWorkspaceEnvPath,
+} from '@/lib/profiles/env-sharing'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
@@ -151,7 +155,9 @@ export function saveGoogleOAuthClientConfig(
     patchWorkspaceEnv(values, {
         keysToReplace: acceptedKeys,
     })
-    for (const [key, value] of Object.entries(values)) process.env[key] = value
+    if (shouldSyncWorkspaceEnvToProcess()) {
+        for (const [key, value] of Object.entries(values)) process.env[key] = value
+    }
 
     return getGoogleOAuthConfig(origin, provider)
 }
@@ -483,7 +489,7 @@ function parseEnvAssignments(raw: string, acceptedKeys: string[]): Record<string
 function patchWorkspaceEnv(args: {
     [key: string]: string
 }, options: { keysToReplace: string[] }): void {
-    const workspaceEnvPath = activeRuntimePaths().workspaceEnvPath
+    const workspaceEnvPath = writableWorkspaceEnvPath()
     fs.mkdirSync(path.dirname(workspaceEnvPath), { recursive: true })
     const existing = fs.existsSync(workspaceEnvPath)
         ? fs.readFileSync(workspaceEnvPath, 'utf-8')

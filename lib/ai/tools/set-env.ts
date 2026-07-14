@@ -7,6 +7,10 @@ import { emitAppEvent } from '@/lib/events'
 import { invalidateMapsConnectionProbe } from '@/lib/integrations/maps'
 import { invalidateWeatherConnectionProbe } from '@/lib/integrations/weather'
 import { invalidateWeatherProviderState } from '@/lib/weather/providers'
+import {
+    shouldSyncWorkspaceEnvToProcess,
+    writableWorkspaceEnvPath,
+} from '@/lib/profiles/env-sharing'
 
 export const setEnvTool: ToolDef = {
     id: 'SetEnv',
@@ -43,6 +47,12 @@ export function executeSetEnv(args: Record<string, unknown>): ToolResult {
     }
     if (typeof value !== 'string') return { success: false, error: 'Missing required string parameter: value' }
 
+    try {
+        writableWorkspaceEnvPath()
+    } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : 'This profile cannot edit the environment.' }
+    }
+
     const sandboxed = resolveSandboxedWritable('.env.local')
     if (!sandboxed.ok) return { success: false, error: sandboxed.error }
 
@@ -72,7 +82,7 @@ export function executeSetEnv(args: Record<string, unknown>): ToolResult {
         } catch {
             // Best effort; some filesystems ignore chmod.
         }
-        process.env[key] = value
+        if (shouldSyncWorkspaceEnvToProcess()) process.env[key] = value
         if (key === 'GOOGLE_MAPS_API_KEY') {
             invalidateMapsConnectionProbe()
             invalidateWeatherConnectionProbe()

@@ -28,6 +28,10 @@ import {
   runWithProfileContext,
 } from "@/lib/profiles/context"
 import { ADMIN_PROFILE_ID } from "@/lib/profiles/constants"
+import {
+  activeProfileCanReadAdminEnvironment,
+  effectiveWorkspaceEnvPath,
+} from "@/lib/profiles/env-sharing"
 import { getProfile, listProfiles } from "@/lib/profiles/store"
 import {
   activeRuntimePaths,
@@ -1185,14 +1189,15 @@ export function getEnvValue(name: string): string | null {
 function getFirstEnvValue(
   names: string[]
 ): { envName: string; value: string } | null {
-  if (canUseSharedEnvSecret(names)) {
+  const readsAdminEnvironment = activeProfileCanReadAdminEnvironment()
+  if (readsAdminEnvironment) {
     for (const name of names) {
       const value = process.env[name]
       if (hasEnvValue(value)) return { envName: name, value }
     }
   }
 
-  const filePaths = canUseSharedEnvSecret(names)
+  const filePaths = readsAdminEnvironment
     ? sharedEnvFilePaths()
     : [activeRuntimePaths().workspaceEnvPath]
   for (const filePath of filePaths) {
@@ -1207,18 +1212,7 @@ function getFirstEnvValue(
 }
 
 function sharedEnvFilePaths(): string[] {
-  const activePath = activeRuntimePaths().workspaceEnvPath
-  const adminPath = runtimePathsForProfile(ADMIN_PROFILE_ID).workspaceEnvPath
-  return uniqueStrings([activePath, adminPath, ...PROJECT_ENV_PATHS])
-}
-
-function canUseSharedEnvSecret(names: string[]): boolean {
-  const profileId = getActiveProfileId()
-  if (isAdminProfileId(profileId)) return true
-  const profile = getProfile(profileId)
-  if (!profile?.permissions.inheritAdminApiKeys) return false
-  const allowed = new Set(profile.permissions.allowedProviderApiKeys)
-  return allowed.has("*") || names.some((name) => allowed.has(name))
+  return uniqueStrings([effectiveWorkspaceEnvPath(), ...PROJECT_ENV_PATHS])
 }
 
 function readEnvFileValues(

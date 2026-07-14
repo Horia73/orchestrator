@@ -4,16 +4,18 @@ import { createHash, randomUUID } from "crypto"
 import { z } from "zod"
 
 import { getConfig } from "@/lib/config"
-import {
-  activeRuntimePaths,
-  runtimePathsForProfile,
-} from "@/lib/runtime-paths"
+import { activeRuntimePaths } from "@/lib/runtime-paths"
 import {
   getActiveProfileId,
   isAdminProfileId,
 } from "@/lib/profiles/context"
-import { ADMIN_PROFILE_ID } from "@/lib/profiles/constants"
 import { getProfile } from "@/lib/profiles/store"
+import {
+  activeProfileUsesAdminEnvironment,
+  effectiveWorkspaceEnvPath,
+  shouldSyncWorkspaceEnvToProcess,
+  writableWorkspaceEnvPath,
+} from "@/lib/profiles/env-sharing"
 import {
   AGENT_NEEDS_DEFAULT_CONTENT,
   AGENT_NEEDS_RELATIVE_PATH,
@@ -708,7 +710,9 @@ export function resetWorkspaceFilesToInitialState(opts?: {
 }): {
   preservedEnvLocal: boolean
 } {
-  const preserveEnvLocal = opts?.preserveEnvLocal ?? true
+  const usesAdminEnvironment = activeProfileUsesAdminEnvironment()
+  const preserveEnvLocal =
+    !usesAdminEnvironment && (opts?.preserveEnvLocal ?? true)
   const envDef = getDefinition("env-local")
   let envContent: string | null = null
 
@@ -739,6 +743,7 @@ export function resetWorkspaceFilesToInitialState(opts?: {
   for (const def of WORKSPACE_FILE_DEFINITIONS) {
     if (def.source === "virtual" || def.surface !== "editor") continue
     if (def.kind === "env") {
+      if (usesAdminEnvironment) continue
       const content = mergeMissingEnvDefaults(
         envContent ?? def.defaultContent ?? "",
         def.defaultContent ?? ""
@@ -799,11 +804,14 @@ export function resetWorkspaceMemoryToInitialState(): { resetFiles: string[] } {
 export function resetWorkspaceEnvToInitialState(): { reset: boolean } {
   const def = getDefinition("env-local")
   if (!def) return { reset: false }
+  const envPath = writableWorkspaceEnvPath()
   const previousContent = readExistingDefinitionContent(def)
   const nextContent = def.defaultContent ?? ""
   validateContent(def, nextContent)
-  writeTextAtomic(resolveDefinitionPath(def), nextContent, 0o600)
-  syncWorkspaceEnvToProcess(previousContent, nextContent)
+  writeTextAtomic(envPath, nextContent, 0o600)
+  if (shouldSyncWorkspaceEnvToProcess()) {
+    syncWorkspaceEnvToProcess(previousContent, nextContent)
+  }
   emitAppEvent({ type: "settings.changed", reason: "env" })
   return { reset: true }
 }
@@ -924,9 +932,6 @@ export function getWorkspaceFile(id: string): WorkspaceFilePayload | null {
       throw new Error(`File is too large to edit here (${stat.size} bytes).`)
     }
     content = fs.readFileSync(/* turbopackIgnore: true */ absolutePath, "utf-8")
-    if (def.id === "env-local" && readSource.filterInheritedEnv) {
-      content = filterInheritedEnvContent(content)
-    }
     if (def.id === "env-local" && !readSource.inherited) {
       const nextContent = mergeMissingEnvDefaults(
         content,
@@ -964,6 +969,7 @@ export function writeWorkspaceFile(
   if (def.readOnly) throw new Error(`${def.label} is read-only.`)
   if (def.source === "virtual")
     throw new Error(`${def.label} is generated and cannot be saved.`)
+  if (def.id === "env-local") writableWorkspaceEnvPath()
 
   const existingContent = readExistingDefinitionContent(def, dailyStamp)
   const contentToWrite =
@@ -977,7 +983,7 @@ export function writeWorkspaceFile(
     contentToWrite,
     def.id === "env-local" ? 0o600 : undefined
   )
-  if (def.id === "env-local")
+  if (def.id === "env-local" && shouldSyncWorkspaceEnvToProcess())
     syncWorkspaceEnvToProcess(existingContent, contentToWrite)
 
   if (def.id === "models-api") {
@@ -1009,7 +1015,17 @@ export function revealWorkspaceEnvValue(
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
     throw new Error("Invalid env var name.")
 
-  const content = readExistingDefinitionContent(def, dailyStamp)
+  const readSource = resolveDefinitionReadSource(def, dailyStamp)
+  if (readSource?.inherited) {
+    throw new Error("Shared admin environment values cannot be revealed from a member profile.")
+  }
+  const content =
+    readSource?.exists
+      ? fs.readFileSync(
+          /* turbopackIgnore: true */ readSource.absolutePath,
+          "utf-8"
+        )
+      : ""
   const requestedOccurrence = Math.max(
     0,
     Math.floor(Number.isFinite(occurrence) ? occurrence : 0)
@@ -1113,12 +1129,6 @@ function canManageSettingsFilesForActiveProfile(): boolean {
   return getProfile(profileId)?.permissions.tools.settings_files === true
 }
 
-function canInheritAdminEnvForActiveProfile(): boolean {
-  const profileId = getActiveProfileId()
-  if (isAdminProfileId(profileId)) return false
-  return getProfile(profileId)?.permissions.inheritAdminApiKeys === true
-}
-
 function resolveDefinitionReadSource(
   def: WorkspaceFileDefinition,
   dailyStamp?: string
@@ -1126,55 +1136,30 @@ function resolveDefinitionReadSource(
   absolutePath: string
   exists: boolean
   inherited: boolean
-  filterInheritedEnv: boolean
 } | null {
   if (def.source === "virtual") return null
+  if (def.id === "env-local" && activeProfileUsesAdminEnvironment()) {
+    const adminPath = effectiveWorkspaceEnvPath()
+    return {
+      absolutePath: adminPath,
+      exists: fs.existsSync(/* turbopackIgnore: true */ adminPath),
+      inherited: true,
+    }
+  }
+
   const activePath = resolveDefinitionPath(def, dailyStamp)
   if (fs.existsSync(/* turbopackIgnore: true */ activePath)) {
     return {
       absolutePath: activePath,
       exists: true,
       inherited: false,
-      filterInheritedEnv: false,
     }
   }
-  if (def.id !== "env-local" || !canInheritAdminEnvForActiveProfile()) {
-    return {
-      absolutePath: activePath,
-      exists: false,
-      inherited: false,
-      filterInheritedEnv: false,
-    }
-  }
-
-  const adminPath = path.join(
-    /* turbopackIgnore: true */ runtimePathsForProfile(ADMIN_PROFILE_ID).workspaceDir,
-    def.relativePath
-  )
   return {
-    absolutePath: adminPath,
-    exists: fs.existsSync(/* turbopackIgnore: true */ adminPath),
-    inherited: true,
-    filterInheritedEnv: true,
+    absolutePath: activePath,
+    exists: false,
+    inherited: false,
   }
-}
-
-function filterInheritedEnvContent(content: string): string {
-  const allowed = allowedInheritedAdminEnvKeys()
-  if (allowed === null) return content
-  const lines = content.replace(/\r\n/g, "\n").split("\n").filter((line) => {
-    const parsed = parseEnvAssignment(line)
-    return Boolean(parsed && allowed.has(parsed.key))
-  })
-  return lines.length > 0 ? `${lines.join("\n")}\n` : ""
-}
-
-function allowedInheritedAdminEnvKeys(): Set<string> | null {
-  const profile = getProfile(getActiveProfileId())
-  if (!profile?.permissions.inheritAdminApiKeys) return new Set()
-  const allowed = profile.permissions.allowedProviderApiKeys
-  if (allowed.includes("*")) return null
-  return new Set(allowed)
 }
 
 function listDailyFileSummaries(

@@ -233,18 +233,19 @@ export function normalizeProfilePermissions(
     }
   }
 
+  const inheritAdminEnvironment =
+    typeof raw.inheritAdminApiKeys === "boolean"
+      ? raw.inheritAdminApiKeys
+      : defaults.inheritAdminApiKeys
+
   return {
     surfaces,
     tools,
     integrations,
-    inheritAdminApiKeys:
-      typeof raw.inheritAdminApiKeys === "boolean"
-        ? raw.inheritAdminApiKeys
-        : defaults.inheritAdminApiKeys,
-    allowedProviderApiKeys: Array.isArray(raw.allowedProviderApiKeys)
-      ? raw.allowedProviderApiKeys.filter(
-          (value): value is string => typeof value === "string"
-        )
-      : [...defaults.allowedProviderApiKeys],
+    inheritAdminApiKeys: inheritAdminEnvironment,
+    // Kept in the persisted shape for backward compatibility. Environment
+    // sharing is now deliberately all-or-nothing: a shared profile reads the
+    // complete admin env, while an isolated profile reads only its own file.
+    allowedProviderApiKeys: inheritAdminEnvironment ? ["*"] : [],
   }
 }

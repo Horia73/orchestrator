@@ -1,12 +1,16 @@
 import { NextResponse } from "next/server"
 
 import { closeDatabaseForProfile } from "@/lib/db"
+import { emitAppEvent } from "@/lib/events"
+import { invalidateMapsConnectionProbe } from "@/lib/integrations/maps"
+import { invalidateWeatherConnectionProbe } from "@/lib/integrations/weather"
 import {
   adminProfileView,
   profileStore,
   requireAdminProfile,
   updateProfileInputFromBody,
 } from "@/lib/profiles/server"
+import { invalidateWeatherProviderState } from "@/lib/weather/providers"
 
 export async function PATCH(
   request: Request,
@@ -17,6 +21,7 @@ export async function PATCH(
   try {
     const { id } = await params
     const body = await request.json()
+    const existing = profileStore.getProfile(id)
     const profile = profileStore.updateProfile(
       id,
       updateProfileInputFromBody(body),
@@ -24,6 +29,16 @@ export async function PATCH(
     )
     if (!profile) {
       return NextResponse.json({ error: "Profile not found" }, { status: 404 })
+    }
+    if (
+      existing &&
+      existing.permissions.inheritAdminApiKeys !==
+        profile.permissions.inheritAdminApiKeys
+    ) {
+      invalidateMapsConnectionProbe()
+      invalidateWeatherConnectionProbe()
+      invalidateWeatherProviderState()
+      emitAppEvent({ type: "settings.changed", reason: "env" })
     }
     return NextResponse.json({ profile: adminProfileView(profile) })
   } catch (error) {

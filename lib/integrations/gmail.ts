@@ -12,6 +12,10 @@ import {
 } from '@/lib/integrations/oauth-connections'
 import type { GoogleOAuthTokenRecord } from '@/lib/integrations/google-oauth'
 import { runIdBatch, type BatchItemResult, type BatchResult } from '@/lib/integrations/batch'
+import {
+    shouldSyncWorkspaceEnvToProcess,
+    writableWorkspaceEnvPath,
+} from '@/lib/profiles/env-sharing'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 import {
     base64UrlDecodeBuffer,
@@ -325,7 +329,9 @@ export async function saveGmailOAuthConfig(origin: string, input: GmailOAuthConf
     }
 
     patchWorkspaceEnv(values)
-    for (const [key, value] of Object.entries(values)) process.env[key] = value
+    if (shouldSyncWorkspaceEnvToProcess()) {
+        for (const [key, value] of Object.entries(values)) process.env[key] = value
+    }
 
     return getGmailIntegrationStatus(origin, false)
 }
@@ -1309,7 +1315,7 @@ function firstStringArrayItem(record: Record<string, unknown>, key: string): str
 }
 
 function patchWorkspaceEnv(values: Record<string, string>): void {
-    const workspaceEnvPath = activeRuntimePaths().workspaceEnvPath
+    const workspaceEnvPath = writableWorkspaceEnvPath()
     fs.mkdirSync(path.dirname(workspaceEnvPath), { recursive: true })
     const existing = fs.existsSync(workspaceEnvPath)
         ? fs.readFileSync(workspaceEnvPath, 'utf-8')

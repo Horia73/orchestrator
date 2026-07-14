@@ -1,7 +1,12 @@
 import fs from 'fs'
 
 import type { ToolDef, ToolResult } from '@/lib/ai/agents/types'
-import { activeRuntimePaths } from '@/lib/runtime-paths'
+import {
+    activeProfileCanReadAdminEnvironment,
+    activeProfileUsesAdminEnvironment,
+    effectiveWorkspaceEnvPath,
+    effectiveWorkspaceEnvSourceLabel,
+} from '@/lib/profiles/env-sharing'
 import { parseEnvAssignment, parseEnvStoredValue } from '@/lib/settings/workspace-files-env'
 import { displayPath } from './sandbox'
 import { booleanArg, numberArg, stringArg } from './helpers'
@@ -78,7 +83,8 @@ export function executeListEnvVars(args: Record<string, unknown> = {}): ToolResu
         upsertListing(rows, entry.key, 'workspace', entry.hasValue, entry.occurrences)
     }
 
-    if (includeProcess) {
+    const processEnvironmentAvailable = activeProfileCanReadAdminEnvironment()
+    if (includeProcess && processEnvironmentAvailable) {
         for (const [key, value] of Object.entries(process.env)) {
             if (!ENV_NAME_RE.test(key)) continue
             upsertListing(rows, key, 'process', hasEnvValue(value))
@@ -98,8 +104,12 @@ export function executeListEnvVars(args: Record<string, unknown> = {}): ToolResu
             total_matches: filtered.length,
             truncated: filtered.length > entries.length,
             sources: {
-                workspace: displayPath(activeRuntimePaths().workspaceEnvPath),
-                process: includeProcess ? 'runtime process environment' : 'not included',
+                workspace: activeProfileUsesAdminEnvironment()
+                    ? effectiveWorkspaceEnvSourceLabel()
+                    : displayPath(effectiveWorkspaceEnvPath()),
+                process: includeProcess
+                    ? (processEnvironmentAvailable ? 'runtime process environment' : 'not available to this profile')
+                    : 'not included',
             },
             note: 'Secret values are intentionally not returned. Pass selected names to Bash env_keys to inject them into a command without exposing them in tool args/results.',
         },
@@ -150,7 +160,9 @@ export function resolveEnvVarInjection(keys: string[]): { ok: true; injection: E
             continue
         }
 
-        const processValue = process.env[key]
+        const processValue = activeProfileCanReadAdminEnvironment()
+            ? process.env[key]
+            : undefined
         if (hasEnvValue(processValue)) {
             env[key] = processValue
             sources[key] = 'process'
@@ -235,7 +247,7 @@ export function createSecretStreamRedactor(redactions: SecretRedaction[]): { pus
 }
 
 function readWorkspaceEnvEntries(): Map<string, WorkspaceEnvEntry> {
-    const filePath = activeRuntimePaths().workspaceEnvPath
+    const filePath = effectiveWorkspaceEnvPath()
     const entries = new Map<string, WorkspaceEnvEntry>()
     let content = ''
     try {

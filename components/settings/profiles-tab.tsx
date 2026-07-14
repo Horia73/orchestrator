@@ -634,6 +634,76 @@ export function ProfilesTab() {
     }
   }
 
+  async function setAdminEnvironmentSharing(
+    profile: AdminProfileView,
+    checked: boolean
+  ) {
+    if (profile.role === "admin" || saving) return
+    const persisted = profiles.find((item) => item.id === profile.id)
+    if (!persisted) return
+    const previous = persisted.permissions.inheritAdminApiKeys
+
+    updateDraft((next) => {
+      next.permissions.inheritAdminApiKeys = checked
+      next.permissions.allowedProviderApiKeys = checked ? ["*"] : []
+    })
+    setSaving(true)
+    setError(null)
+    try {
+      const permissions = normalizeProfilePermissions(
+        {
+          ...persisted.permissions,
+          inheritAdminApiKeys: checked,
+          allowedProviderApiKeys: checked ? ["*"] : [],
+        },
+        persisted.role
+      )
+      const res = await fetch(
+        `/api/profiles/${encodeURIComponent(persisted.id)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ permissions }),
+        }
+      )
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(data.error ?? "Failed to update environment sharing")
+      }
+      const saved = data.profile as AdminProfileView
+      setProfiles((current) =>
+        current.map((item) => (item.id === saved.id ? saved : item))
+      )
+      setDraft((current) => {
+        if (!current || current.id !== saved.id) return current
+        return {
+          ...current,
+          permissions: {
+            ...current.permissions,
+            inheritAdminApiKeys:
+              saved.permissions.inheritAdminApiKeys,
+            allowedProviderApiKeys: [
+              ...saved.permissions.allowedProviderApiKeys,
+            ],
+          },
+          updatedAt: saved.updatedAt,
+        }
+      })
+    } catch (err) {
+      updateDraft((next) => {
+        next.permissions.inheritAdminApiKeys = previous
+        next.permissions.allowedProviderApiKeys = previous ? ["*"] : []
+      })
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to update environment sharing"
+      )
+    } finally {
+      setSaving(false)
+    }
+  }
+
   function updateDraft(mutator: (profile: AdminProfileView) => void) {
     setDraft((current) => {
       if (!current) return current
@@ -1141,13 +1211,12 @@ export function ProfilesTab() {
                     <div className="mt-1 border-t border-border/50 pt-3">
                       <ToggleRow
                         icon={KeyRound}
-                        label="Inherit all admin API keys"
-                        description="Shares key-based setup such as Maps/Weather keys; OAuth and WhatsApp still use explicit shared connections below."
+                        label="Use admin environment"
+                        description="Instant admin env: API keys, app URLs and OAuth redirects. Own .env.local is ignored and read-only."
                         checked={selected.permissions.inheritAdminApiKeys}
+                        disabled={saving}
                         onChange={(checked) =>
-                          updateDraft((p) => {
-                            p.permissions.inheritAdminApiKeys = checked
-                          })
+                          void setAdminEnvironmentSharing(selected, checked)
                         }
                       />
                     </div>

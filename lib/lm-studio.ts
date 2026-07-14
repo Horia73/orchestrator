@@ -2,8 +2,12 @@ import fs from "fs"
 import os from "os"
 import path from "path"
 
+import { getEnvValue } from "@/lib/config"
 import { emitAppEvent } from "@/lib/events"
-import { activeRuntimePaths } from "@/lib/runtime-paths"
+import {
+  shouldSyncWorkspaceEnvToProcess,
+  writableWorkspaceEnvPath,
+} from "@/lib/profiles/env-sharing"
 import {
   parseEnvAssignment,
   syncWorkspaceEnvToProcess,
@@ -11,6 +15,7 @@ import {
 
 export const LM_STUDIO_BASE_URL_ENV = "LM_STUDIO_BASE_URL"
 export const LM_STUDIO_API_KEY_ENV = "LM_STUDIO_API_KEY"
+export const LM_STUDIO_AUTO_UNLOAD_ENV = "LM_STUDIO_AUTO_UNLOAD"
 export const LM_STUDIO_DEFAULT_PORT = 1234
 export const LM_STUDIO_DEFAULT_CONTEXT_TOKENS = 100_000
 
@@ -262,7 +267,8 @@ export async function ensureLMStudioModelLoaded(
   const baseUrl = normalizeLMStudioBaseUrl(rawBaseUrl)
   return enqueueLMStudioLoad(baseUrl, async () => {
     const timeoutMs = options?.timeoutMs ?? 120_000
-    const autoUnload = options?.autoUnload ?? process.env.LM_STUDIO_AUTO_UNLOAD !== "false"
+    const autoUnload =
+      options?.autoUnload ?? getEnvValue(LM_STUDIO_AUTO_UNLOAD_ENV) !== "false"
     const desiredContext = positiveInt(options?.contextLength ?? undefined)
     const listed = await fetchLMStudioNativeModelList(baseUrl, apiKey, Math.min(timeoutMs, 10_000))
     if (!listed.ok) {
@@ -362,7 +368,7 @@ export function clearLMStudioConfig(): void {
 }
 
 function patchWorkspaceEnvValues(values: Record<string, string>): void {
-  const envPath = activeRuntimePaths().workspaceEnvPath
+  const envPath = writableWorkspaceEnvPath()
   fs.mkdirSync(path.dirname(envPath), { recursive: true })
   const existing = fs.existsSync(envPath) ? fs.readFileSync(envPath, "utf-8") : ""
   const keys = new Set(Object.keys(values))
@@ -393,7 +399,9 @@ function patchWorkspaceEnvValues(values: Record<string, string>): void {
   } catch {
     // Best effort on platforms without chmod.
   }
-  syncWorkspaceEnvToProcess(existing, next)
+  if (shouldSyncWorkspaceEnvToProcess()) {
+    syncWorkspaceEnvToProcess(existing, next)
+  }
   emitAppEvent({ type: "settings.changed", reason: "env" })
 }
 

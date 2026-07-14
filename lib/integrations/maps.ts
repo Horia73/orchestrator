@@ -2,7 +2,10 @@ import fs from 'fs'
 import path from 'path'
 
 import { getEnvValue } from '@/lib/config'
-import { activeRuntimePaths } from '@/lib/runtime-paths'
+import {
+    shouldSyncWorkspaceEnvToProcess,
+    writableWorkspaceEnvPath,
+} from '@/lib/profiles/env-sharing'
 import { readGoogleMapsApiKey } from '@/lib/maps/google-session'
 import { invalidateWeatherConnectionProbe } from '@/lib/integrations/weather'
 import { invalidateWeatherProviderState } from '@/lib/weather/providers'
@@ -156,7 +159,9 @@ export async function saveGoogleMapsConfig(input: GoogleMapsConfigInput): Promis
     }
 
     patchWorkspaceEnv(values)
-    for (const [key, value] of Object.entries(values)) process.env[key] = value
+    if (shouldSyncWorkspaceEnvToProcess()) {
+        for (const [key, value] of Object.entries(values)) process.env[key] = value
+    }
     invalidateMapsConnectionProbe()
     invalidateWeatherConnectionProbe()
     invalidateWeatherProviderState()
@@ -233,7 +238,7 @@ function parseEnvAssignments(raw: string): Record<string, string> {
 }
 
 function patchWorkspaceEnv(values: Record<string, string>): void {
-    const workspaceEnvPath = activeRuntimePaths().workspaceEnvPath
+    const workspaceEnvPath = writableWorkspaceEnvPath()
     fs.mkdirSync(path.dirname(workspaceEnvPath), { recursive: true })
     const existing = fs.existsSync(workspaceEnvPath)
         ? fs.readFileSync(workspaceEnvPath, 'utf-8')
