@@ -1,6 +1,6 @@
 ---
 name: step-parts
-description: Find, evaluate, and download common purchasable CAD parts from step.parts, including named off-the-shelf actuators, servos, motors, electronics boards, connectors, screws, bolts, nuts, washers, bearings, standoffs, and other catalog components. Use when Codex needs to search the hosted step.parts catalog before creating simplified placeholder geometry, resolve fuzzy part names, standards, aliases, or dimensions, choose a matching part, fetch a canonical .step file, verify checksums, or use the step.parts API/OpenAPI/catalog endpoints for standard part discovery.
+description: Find, evaluate, download, and verify purchasable CAD components from step.parts. Use before modeling placeholders for named actuators, servos, motors, boards, connectors, fasteners, bearings, standoffs, and other catalog parts, or to resolve aliases/specifications, choose a match, fetch its canonical STEP file, verify checksums, and inspect the step.parts API/catalog.
 ---
 
 # CAD Parts

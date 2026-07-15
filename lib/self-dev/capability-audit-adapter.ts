@@ -27,10 +27,14 @@ const AUDIT_WEEKDAY = 1 // 0 = Sunday .. 6 = Saturday
 const AUDIT_HOUR = 4
 const AUDIT_MINUTE = 0
 
-const CAPABILITY_AUDIT_PROMPT = [
-  'This is the scheduled weekly Capability Audit — admin-only background self-development triage, not a user request. No one is waiting. This run ONLY produces a proposal: it must NOT implement anything, must NOT activate self_dev or project_dev, must NOT prepare a worktree, delegate to coder, push, deploy, or change any code.',
+export const CAPABILITY_AUDIT_PROMPT = [
+  'Role: Run the scheduled weekly, admin-only Capability Audit as background proposal work, not as a user request.',
   '',
-  "Your job: turn the agents' own blocked-needs backlog into a ranked, evidence-backed proposal for the user to approve — with the emphasis on NEW CAPABILITIES / FEATURES the agents found missing, not just bug fixes.",
+  "Goal: Turn the agents' blocked-needs backlog into one ranked, evidence-backed proposal, prioritizing missing capabilities and features over ordinary bug fixes.",
+  '',
+  'Success criteria: every Open need is classified as RESOLVED, DROP, or BUILD from code/log evidence; bookkeeping-only resolutions are closed; each proposed item traces to a need; zero actionable items stays silent; no implementation or code change occurs.',
+  '',
+  'Constraints and workflow:',
   '',
   '1. Read EVERY profile-scoped AGENT_NEEDS.md, not only the admin workspace file. The admin file is `AGENT_NEEDS.md`; member files live at `../profiles/<profileId>/workspace/AGENT_NEEDS.md` relative to the admin workspace. The `## Open` sections across all profiles are your PRIMARY INPUT and source of truth: each entry is something an agent could not complete because a capability, tool, integration, runtime behavior, doc, or repo behavior was missing or broken. Track the source profile_id for each entry; when closing a non-admin entry, call ResolveAgentNeed with that profile_id.',
   '',
@@ -52,7 +56,7 @@ const CAPABILITY_AUDIT_PROMPT = [
   '   Include `actions` buttons (max 8): one "Build: <short>" per top BUILD item, plus "Build all approved", "Drop the flagged needs", and "Dismiss".',
   "   Each Build button's `value` must read like: \"Approved — implement this via self-development: <one-line outcome> (AGENT_NEEDS dedupe_key: <key>). Follow the self_dev gate: worktree + coder + typecheck/build/smoke + managed preview, and ASK ME AGAIN before pushing to master, publishing a release, or deploying to production. When it ships, close the AGENT_NEEDS entry with ResolveAgentNeed.\"",
   '',
-  '7. NEVER in this run: activate self_dev or project_dev, prepare a worktree, delegate to coder, push, deploy, or change any code. Proposing is the whole job. Implementation happens only after the user clicks a Build button, in a fresh Inbox reply.',
+  '7. Stop after the proposal. Do not activate self_dev/project_dev, prepare a worktree, delegate to coder, push, deploy, or change code. Implementation begins only after a user clicks a Build action in a fresh Inbox reply.',
   '',
   '8. Do not paste run narration, tool ids, or internal bookkeeping into the Inbox body — write the clean, user-facing proposal only.',
 ].join('\n')

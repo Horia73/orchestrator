@@ -17,6 +17,17 @@ import type {
 const SKILL_FILE = "SKILL.md"
 const DEFAULT_MAX_READ_CHARS = 60_000
 const MAX_READ_CHARS = 120_000
+const MAX_SKILL_DESCRIPTION_CHARS = 1_024
+const MAX_SKILL_INSTRUCTION_LINES = 500
+const MAX_SKILL_NAME_CHARS = 64
+const ALLOWED_SKILL_FRONTMATTER_KEYS = new Set([
+  "id",
+  "name",
+  "description",
+  "license",
+  "allowed-tools",
+  "metadata",
+])
 
 interface SkillRoot {
   scope: RuntimeSkillScope
@@ -213,8 +224,10 @@ export function createCustomSkill(input: CreateCustomSkillInput): RuntimeSkill {
   ) {
     throw new Error(`A ${input.scope} skill named "${id}" already exists.`)
   }
+  const content = buildCustomSkillTemplate(id, name, description)
+  validateSkillContent(content)
   fs.mkdirSync(skillDir, { recursive: true })
-  fs.writeFileSync(skillFile, customSkillTemplate(id, name, description), "utf8")
+  fs.writeFileSync(skillFile, content, "utf8")
   return readCustomSkill(input.scope, id)
 }
 
@@ -223,7 +236,7 @@ export function createCustomSkillFromContent(
 ): RuntimeSkill {
   const content = input.content.trim()
   if (!content) throw new Error("SKILL.md content is required.")
-  const metadata = parseSkillMetadata(content)
+  const metadata = validateSkillContent(content)
   const id = normalizeSkillId(input.id || metadata.id || metadata.name || "")
   const root = getWritableSkillRoot(input.scope)
   const skillDir = path.join(root.dir, id)
@@ -277,7 +290,7 @@ export function writeCustomSkillFile(
   content: string
 ): RuntimeSkill {
   const skill = readCustomSkill(scope, id)
-  const parsed = parseSkillMetadata(content)
+  const parsed = validateSkillContent(content)
   const resolvedId = normalizeSkillId(parsed.id || parsed.name || skill.id)
   if (resolvedId !== skill.id) {
     throw new Error(
@@ -435,27 +448,107 @@ function cleanSkillMetadataValue(value: string): string {
   return value.replace(/\s+/g, " ").trim()
 }
 
-function customSkillTemplate(
+export function buildCustomSkillTemplate(
   id: string,
   name: string,
   description: string
 ): string {
   return `---
-id: ${id}
-name: ${name}
-description: ${description}
+name: ${id}
+description: ${JSON.stringify(description)}
 ---
 
 # ${name}
 
-Use this skill when ${description}
+## Goal
 
-## Instructions
+Deliver this capability: ${description}
 
-- Describe when the agent should use this skill.
-- Add the workflow steps, constraints, validation commands, and deliverable expectations.
-- Put reusable scripts, templates, or references next to this SKILL.md and link them here.
+## Success criteria
+
+- Complete the requested outcome, not only a plan or explanation.
+- Preserve explicit user constraints and identify consequential assumptions.
+- Validate the result with the strongest practical check available.
+
+## Workflow
+
+1. Inspect the relevant inputs and available evidence.
+2. Choose the smallest reliable workflow that reaches the goal.
+3. Produce the deliverable and validate it before responding.
+
+## Constraints
+
+- Stay within the user's requested scope and authorization.
+- Ask only for missing information that would materially change the result.
+- Put detailed domain references, schemas, and reusable procedures in linked files instead of duplicating them here.
+
+## Output
+
+Lead with the completed result. Include material evidence, caveats, validation, and the next required action only when they help the user act.
+
+## Stop rules
+
+- Stop when the success criteria are met and the result has been checked.
+- If required evidence is unavailable, name the missing fact and use the smallest safe fallback.
+- If a required action exceeds the user's authorization, return the prepared work and the exact approval or input needed.
 `
+}
+
+/**
+ * Enforce the portable SKILL.md contract for newly-created, imported, and
+ * edited custom skills. Bundled skills are release-time validated separately
+ * so legacy custom skills remain readable instead of disappearing at boot.
+ */
+export function validateSkillContent(content: string): Record<string, string> {
+  const normalized = content.trim()
+  if (!normalized.startsWith("---\n")) {
+    throw new Error("SKILL.md must start with YAML frontmatter.")
+  }
+  const end = normalized.indexOf("\n---", 4)
+  if (end === -1) throw new Error("SKILL.md frontmatter is not closed.")
+
+  const frontmatter = normalized.slice(4, end)
+  const keys = [...frontmatter.matchAll(/^([A-Za-z0-9_-]+):/gm)].map(
+    (match) => match[1]
+  )
+  const unexpected = keys.filter(
+    (key) => !ALLOWED_SKILL_FRONTMATTER_KEYS.has(key)
+  )
+  if (unexpected.length) {
+    throw new Error(
+      `Unsupported SKILL.md frontmatter field${unexpected.length === 1 ? "" : "s"}: ${unexpected.join(", ")}.`
+    )
+  }
+
+  const metadata = parseSkillMetadata(normalized)
+  const name = metadata.name?.trim() ?? ""
+  const description = metadata.description?.trim() ?? ""
+  if (!name) throw new Error("SKILL.md frontmatter requires name.")
+  if (!description) throw new Error("SKILL.md frontmatter requires description.")
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) {
+    throw new Error("SKILL.md name must use lowercase hyphen-case.")
+  }
+  if (name.length > MAX_SKILL_NAME_CHARS) {
+    throw new Error(`SKILL.md name must be ${MAX_SKILL_NAME_CHARS} characters or less.`)
+  }
+  if (description.length > MAX_SKILL_DESCRIPTION_CHARS) {
+    throw new Error(
+      `SKILL.md description must be ${MAX_SKILL_DESCRIPTION_CHARS} characters or less.`
+    )
+  }
+  if (/[<>]/.test(description)) {
+    throw new Error("SKILL.md description cannot contain angle brackets.")
+  }
+
+  const body = normalized.slice(end + 4).trim()
+  if (!body) throw new Error("SKILL.md requires an instruction body.")
+  const instructionLines = body.split(/\r?\n/).length
+  if (instructionLines > MAX_SKILL_INSTRUCTION_LINES) {
+    throw new Error(
+      `SKILL.md instruction body must be ${MAX_SKILL_INSTRUCTION_LINES} lines or less; move detailed material into referenced files.`
+    )
+  }
+  return metadata
 }
 
 function parseSkillMetadata(content: string): Record<string, string> {
@@ -518,6 +611,13 @@ function slugify(value: string): string {
 function unquote(value: string): string {
   const quote = value[0]
   if ((quote === '"' || quote === "'") && value[value.length - 1] === quote) {
+    if (quote === '"') {
+      try {
+        return JSON.parse(value) as string
+      } catch {
+        // Fall back to the permissive legacy parser below.
+      }
+    }
     return value.slice(1, -1)
   }
   return value

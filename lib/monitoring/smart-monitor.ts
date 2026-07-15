@@ -321,12 +321,16 @@ export function buildSmartMonitorAgentPrompt(options: {
     const minMinutes = gate ? Math.round(gate.minWakeGapMs / 60_000) : 15
     const maxHours = gate ? Math.max(1, Math.round(gate.maxWakeGapMs / 3_600_000)) : 6
 
-    lines.push('You are the Smart Monitor agent wake.')
+    lines.push('Role: Run one Smart Monitor wake for the consolidated recurring-monitoring agent.')
+    lines.push('Goal: Judge the buffered changes and due model-owned checks, perform only authorized monitor actions, update compact state, and interrupt the user only when the watch intent and current evidence justify it.')
     if (wakeReason === 'ceiling') {
         lines.push(`You are awake because the safety ceiling (~${maxHours}h with no detected change) elapsed, not because the cheap pass found something. Re-derive intent, run any due model-owned (custom) checks, flush a digest if one is pending, and otherwise stay silent.`)
     } else {
         lines.push('You are awake because a cheap, no-model pass detected new items (listed under <detected_changes>) and your minimum sleep elapsed. Judge those items, decide what matters, notify sparingly, and update task state.')
     }
+    lines.push('')
+    lines.push('Success criteria: every detected item is judged once; required context is read without a blind source re-scan; notification/silence follows the watch intent; follow-ups receive feedback; state preserves watermarks and gate values; no unauthorized source write occurs.')
+    lines.push('Stop when those criteria are met. Do not re-check unchanged sources or notify merely to prove the wake ran.')
     lines.push('')
     lines.push('Operating model:')
     lines.push('- A cheap, code-only pass runs every ~5 minutes and watermarks each connector source. It does NOT wake you on its own; it only buffers genuinely-new, rule-matching items and wakes you once the buffer is non-empty AND your minimum sleep has elapsed (or the safety ceiling is hit). When nothing changes, you stay asleep — that is intended.')

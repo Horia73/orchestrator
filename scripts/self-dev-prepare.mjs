@@ -504,7 +504,16 @@ function buildInstructions(values) {
   return [
     '# Self Dev Instructions',
     '',
-    `Task: ${values.task}`,
+    '## Goal',
+    '',
+    values.task,
+    '',
+    '## Success Criteria',
+    '',
+    '- Implement the requested Orchestrator behavior in this isolated worktree.',
+    '- Preserve unrelated work and every workspace/preview/authorization boundary below.',
+    '- Pass the relevant targeted checks plus typecheck and build, or report exact pre-existing failures with a narrower verification.',
+    '- Return a commit-ready diff and a concise engineering report; do not commit, push, release, or deploy.',
     '',
     '## Workspace Boundary',
     '',
@@ -599,7 +608,9 @@ function buildInstructions(values) {
 
 function buildCoderPrompt(values) {
   return [
-    `Task: ${values.task}`,
+    'Role: Implement and verify one Orchestrator self-development change in its prepared isolated worktree.',
+    `Goal: ${values.task}`,
+    'Success criteria: satisfy the instructions file, keep the diff scoped, pass proportionate checks, and return a commit-ready result without committing, pushing, or deploying.',
     '',
     `Work only in this isolated worktree: ${values.repoDir}`,
     '',

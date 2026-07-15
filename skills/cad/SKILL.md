@@ -1,6 +1,6 @@
 ---
 name: cad
-description: Create, modify, inspect, and validate STEP-first parametric CAD parts and assemblies. Use for natural-language CAD specs, reference images, 2D technical drawings, STEP/STP generation or direct inspection, Python CAD source, source-level joints, selector references, geometry facts, measurements, mating deltas, snapshots, and secondary STL/3MF/native GLB outputs from CAD geometry.
+description: Create, modify, inspect, and validate STEP-first parametric CAD parts and assemblies. Use for CAD specs, reference images or technical drawings, build123d source, STEP/STP generation or inspection, selector references, measurements, mating and assemblies, snapshots, and secondary STL/3MF/GLB exports; exclude render-only art, CAM, BIM, FEA conclusions, and certification.
 ---
 
 # CAD generation, inspection, and validation
@@ -15,13 +15,7 @@ Create or modify parametric CAD models from natural-language requirements, gener
 
 There are two ways into the STEP workflow: generate from build123d Python source (the default when designing from scratch or modifying a generated model), or import an existing STEP/STP file directly (when no generator exists or the user explicitly targets the STEP file). Both produce the same inspectable artifacts.
 
-## Use this skill when
-
-Use this skill when the user asks for CAD files, STEP/STP files, build123d source, selector refs such as `#o1.2.f1`, mechanical parts, assemblies, enclosures, brackets, fixtures, holes, counterbores, countersinks, slots, pockets, bosses, standoffs, ribs, fillets, chamfers, shells, source-level joints, mating, or measurements. Also use it when the user supplies reference images or 2D technical drawings of a part to reproduce or take design intent from.
-
-Also use it when the user asks for STL, 3MF, or native GLB output from CAD geometry. Keep those workflows secondary and load `supported-exports.md` for details. 2D DXF drawing generation is not installed in this runtime; when asked for DXF, say so and offer STEP/STL/3MF exports instead.
-
-Do not use this skill for render-only concept art, CAM toolpaths, engineering certification, FEA conclusions, architectural BIM, or freehand illustration unless the user also needs CAD geometry.
+Keep STL, 3MF, and native GLB secondary to the STEP workflow and load `references/supported-exports.md` when requested. 2D DXF generation is not installed; offer STEP, STL, or 3MF instead.
 
 ## Default assumptions
 

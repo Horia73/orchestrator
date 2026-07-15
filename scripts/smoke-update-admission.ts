@@ -145,6 +145,31 @@ assert.equal(
     }),
     true,
 )
+assert.equal(
+    isChatUpdateInProgressResponse(502, null, false),
+    true,
+    'a non-JSON gateway response during web replacement must keep retrying',
+)
+assert.equal(
+    isChatUpdateInProgressResponse(503, null, false),
+    true,
+    'a non-JSON service-unavailable response must keep retrying',
+)
+assert.equal(
+    isChatUpdateInProgressResponse(504, null, false),
+    true,
+    'a non-JSON gateway timeout during restart must keep retrying',
+)
+assert.equal(
+    isChatUpdateInProgressResponse(500, null, false),
+    false,
+    'an unrelated non-JSON server error must not retry forever',
+)
+assert.equal(
+    isChatUpdateInProgressResponse(503, { error: 'Provider unavailable' }, true),
+    false,
+    'a structured application 503 must remain visible to the user',
+)
 assert.equal(isChatUpdateInProgressResponse(500, { code: 'update_in_progress' }), false)
 assert.equal(chatUpdateRetryDelayMs('30'), 30_000)
 assert.equal(chatUpdateRetryDelayMs('0'), 1_000)

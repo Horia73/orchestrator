@@ -1,6 +1,6 @@
 ---
 name: pdf
-description: Use this skill whenever the user wants to do anything with PDF files. This includes reading or extracting text/tables from PDFs, combining or merging multiple PDFs into one, splitting PDFs apart, rotating pages, adding watermarks, creating new PDFs, filling PDF forms, encrypting/decrypting PDFs, extracting images, and OCR on scanned PDFs to make them searchable. If the user mentions a .pdf file or asks to produce one, use this skill.
+description: Read, create, edit, render, and validate PDF files. Use when a PDF is an input or deliverable, including text/table/image extraction, OCR, merge/split/rotate, watermarking, encryption, form inspection or filling, conversion, and layout-sensitive review.
 license: Proprietary. LICENSE.txt has complete terms
 ---
 

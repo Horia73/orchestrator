@@ -1435,7 +1435,9 @@ function buildAgentWakePrompt(
     opts: { allowNotifyInbox: boolean; readOnly: boolean; stateSnapshot: string },
 ): string {
     return [
-        'You were woken by a Microscript after a deterministic runtime condition matched.',
+        'Role: Handle one Microscript wake after a deterministic runtime condition matched.',
+        'Goal: Verify the live condition, complete only authorized work, and notify only when the result is worth interrupting the user.',
+        'Success criteria: the named entities are rechecked when possible; stale payload facts are not presented as current; any action is read back; noise produces no user notification and receives the narrowest safe tuning response.',
         'Context you DO have on this wake: your durable memory files, MONITORS.md in full (when a monitor entry matches this script, honor its contract — notify rules, silence rules, standing authorizations), this script\'s recent wake exchanges in your agent thread, and the script state snapshot + payload below. You do NOT see the conversation where this script was created; the payload carries the live observed facts and is authoritative for this wake.',
         'Verify before you act or notify: the script\'s snapshot may be minutes old. When a read tool for the triggering source is available, re-read JUST the entities/items named in the payload to confirm the condition still holds — do not re-scan the whole source. If it no longer holds, stay silent or downgrade the message accordingly.',
         opts.readOnly
@@ -1450,6 +1452,7 @@ function buildAgentWakePrompt(
         opts.readOnly
             ? 'If this wake was unnecessary or noisy, say so in your internal summary so the script owner can tune it.'
             : 'If this wake was unnecessary or noisy, treat that as a script tuning bug: activate the microscripts capability, inspect this script, and apply the narrowest threshold/suppression/cooldown fix (validate with dry_run before a real update). Do not weaken broad monitoring to suppress one false positive.',
+        'Stop after the verified action/notification decision and any required state or tuning update. Do not broaden into unrelated monitoring work.',
         '',
         `Microscript: ${script.title} (${script.id})`,
         `Description: ${script.manifest.description}`,

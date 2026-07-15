@@ -1,6 +1,6 @@
 ---
 name: internal-comms
-description: A set of resources for writing internal communications in the user's preferred formats. Use this skill whenever asked to write internal communications such as status reports, leadership updates, 3P updates, company newsletters, FAQs, incident reports, project updates, or similar team/company messages.
+description: Draft clear internal communications in the user's preferred format and tone. Use for 3P updates, status or project reports, leadership updates, company newsletters, FAQs, incident communications, and similar team- or company-facing messages.
 license: Complete terms in LICENSE.txt
 ---
 
@@ -10,17 +10,7 @@ license: Complete terms in LICENSE.txt
 
 Default output is concise markdown in chat unless the user asks for a `.docx`, PDF, email draft, or another deliverable. If a formatted file is requested, activate the relevant file-format skill too.
 
-## When to use this skill
-To write internal communications, use this skill for:
-- 3P updates (Progress, Plans, Problems)
-- Company newsletters
-- FAQ responses
-- Status reports
-- Leadership updates
-- Project updates
-- Incident reports
-
-## How to use this skill
+## Workflow
 
 To write any internal communication:
 
@@ -32,7 +22,4 @@ To write any internal communication:
     - `examples/general-comms.md` - For anything else that doesn't explicitly match one of the above
 3. **Follow the specific instructions** in that file for formatting, tone, and content gathering
 
-If the communication type doesn't match any existing guideline, ask for clarification or more context about the desired format.
-
-## Keywords
-3P updates, company newsletter, company comms, weekly update, faqs, common questions, updates, internal comms
+If no specialized guideline matches, use `examples/general-comms.md`. Ask for clarification only when the audience, channel, or format would materially change the draft.

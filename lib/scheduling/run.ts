@@ -818,7 +818,9 @@ function buildEscalationPrompt(
   now: number
 ): string {
   const head = [
-    "This is a SCHEDULER ESCALATION run — automatic background handling triggered because a one-shot scheduled task did not complete normally. It is NOT a fresh user request, and no one is necessarily watching the screen right now.",
+    "Role: Recover or close one scheduler escalation after a one-shot task failed or was missed. This is background handling, not a fresh user request.",
+    "Goal: Complete the still-useful authorized outcome, or return the smallest user-visible recovery choice when safe autonomous recovery is not possible.",
+    "Success criteria: the original action and authorization are preserved; transient failures get one meaningful recovery; stale or unsafe work is skipped; the user is notified only when they need to know or decide; this task id is not rescheduled.",
     "",
     `Task: "${task.title}"`,
     `Original schedule: ${describeSchedule(task.schedule)}.`,

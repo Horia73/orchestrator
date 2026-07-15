@@ -1,7 +1,6 @@
 import { ORCHESTRATOR_ACTION_POLICY } from './action-policy'
 import { ORCHESTRATOR_CORE } from './core'
 import { ORCHESTRATOR_DELEGATION } from './delegation'
-import { ORCHESTRATOR_EXAMPLES } from './examples'
 import { ORCHESTRATOR_INTEGRATIONS } from './integrations'
 import { ORCHESTRATOR_BOOT_PROTOCOL, ORCHESTRATOR_MEMORY } from './memory'
 import { ORCHESTRATOR_OUTPUT_CONTRACT } from './output-contract'
@@ -32,7 +31,6 @@ function joinPrompt(withBootProtocol: boolean): string {
         ORCHESTRATOR_INTEGRATIONS,
         ORCHESTRATOR_DELEGATION,
         ORCHESTRATOR_OUTPUT_CONTRACT,
-        ORCHESTRATOR_EXAMPLES,
     ].filter(Boolean).join('\n\n')
 }
 

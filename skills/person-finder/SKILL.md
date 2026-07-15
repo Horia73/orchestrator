@@ -1,6 +1,6 @@
 ---
 name: person-finder
-description: Find a person and their reachable contact details — phone, email, social profiles, or any reliable channel — starting from a name plus whatever the user knows. Use when the user wants to locate someone, find a number, find an email, track down a social profile, confirm an identity, or reconnect with a person. Triggers on "find X's number / phone / email", "find this person", "look up / locate someone", "who is X and how do I reach them", "find them on LinkedIn / Facebook / Instagram", "gaseste numarul / contactul lui X", "cauta persoana asta", "gaseste-l pe", "vezi daca e aceeasi persoana". Also use when a light web search for a person failed and the next move is to propose deeper, more targeted sources rather than give up.
+description: Find and verify a person's reachable contact details from a name plus known clues. Use to locate someone, confirm identity, reconnect, or find a phone number, email, professional/social profile, or other reliable contact channel, including Romanian requests such as „găsește numărul/contactul” and deeper follow-up after a light search fails.
 license: Public-source person lookup for legitimate, user-directed outreach. Defers to <safety_core>.
 ---
 

@@ -2624,10 +2624,21 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           .then(async (response) => {
             streamPostInFlightRef.current = false
             if (!response.ok) {
-              const err = await response
-                .json()
-                .catch(() => ({ error: "Unknown error" }))
-              if (isChatUpdateInProgressResponse(response.status, err)) {
+              let responseBodyWasJson = true
+              const err = await response.json().catch(() => {
+                responseBodyWasJson = false
+                return {
+                  error:
+                    response.statusText || `HTTP ${response.status || "error"}`,
+                }
+              })
+              if (
+                isChatUpdateInProgressResponse(
+                  response.status,
+                  err,
+                  responseBodyWasJson
+                )
+              ) {
                 // The user's row is already persisted. Keep this exact turn
                 // alive across the managed restart and retry with the same
                 // conversation/message ids, so reconnect cannot duplicate it.

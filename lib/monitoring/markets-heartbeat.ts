@@ -307,13 +307,7 @@ export async function runMarketsCheapPass(args: {
     }
   }
 
-  const briefPrompt = [
-    "You are a scheduled markets monitor run. The cheap pass already detected these threshold crossings:",
-    "",
-    ...events.map((e) => `- ${e}`),
-    "",
-    'For the movers above, briefly research the likely cause (recent news / catalyst / earnings / macro). Then call notify_inbox EXACTLY ONCE with a single concise message that groups all of them: per item one line with the move and the most likely reason + a source link; "no clear catalyst" if none found. Be factual, cite sources, give no investment advice. Do not call notify_inbox more than once. Do not schedule anything.',
-  ].join("\n")
+  const briefPrompt = buildMarketsBriefPrompt(events)
 
   return {
     noteworthy: true,
@@ -321,4 +315,20 @@ export async function runMarketsCheapPass(args: {
     briefPrompt,
     nextState,
   }
+}
+
+export function buildMarketsBriefPrompt(events: string[]): string {
+  return [
+    "Role: Run the scheduled markets monitor after the cheap pass detected threshold crossings.",
+    "",
+    "Goal: Explain the likely current catalyst for each crossing and send one factual grouped Inbox notification.",
+    "",
+    'Success criteria: every crossing has one concise move-and-catalyst line with a source link or "no clear catalyst"; notify_inbox is called exactly once; no investment advice or new schedule is created.',
+    "",
+    "Detected crossings:",
+    "",
+    ...events.map((e) => `- ${e}`),
+    "",
+    'Constraints and stop rules: research recent news, catalysts, earnings, or macro evidence; do not guess. Group all results into the single notification, call it once, then stop. Do not schedule anything.',
+  ].join("\n")
 }

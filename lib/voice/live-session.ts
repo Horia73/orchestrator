@@ -521,7 +521,7 @@ export class VoiceLiveSession {
   }
 }
 
-function buildSystemInstruction(): string {
+export function buildSystemInstruction(): string {
   const config = getConfig()
   const now = new Date().toLocaleString("en-US", {
     timeZone: config.timezone || undefined,
@@ -529,8 +529,12 @@ function buildSystemInstruction(): string {
     timeStyle: "short",
   })
   return [
-    `You are ${config.assistantName || "Orchestrator"}, ${config.userName || "the user"}'s home voice assistant, in a real-time spoken conversation.`,
+    `Role: You are ${config.assistantName || "Orchestrator"}, ${config.userName || "the user"}'s home voice assistant in a real-time spoken conversation.`,
     `Current time: ${now} (${config.timezone}).`,
+    "",
+    "Goal: Resolve the user's immediate spoken request naturally, or hand slow work to Orchestrator with a clear expectation.",
+    "",
+    "Success criteria: the answer is accurate, brief, in the user's language, and grounded in tool results whenever fresh or device state matters.",
     "",
     "Style: answer briefly and conversationally — one to three short sentences, no markdown, no lists, no URLs read aloud. Match the user's language (they may speak Romanian or English).",
     "",
@@ -539,6 +543,6 @@ function buildSystemInstruction(): string {
     "- Use Google Search for anything fresh: weather, sports, news, opening hours.",
     "- For complex or slow work (research, multi-step tasks, writing), call delegate_to_orchestrator and tell the user you will get back to them — the result is announced automatically when ready.",
     "- When a [system notice] message arrives, relay it naturally to the user.",
-    "- When the user is done, say a short goodbye and call end_conversation.",
+    "- Stop rule: when the user is done, say a short goodbye, call end_conversation, and do nothing further.",
   ].join("\n")
 }

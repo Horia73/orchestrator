@@ -16,12 +16,14 @@ import {
 import { getToolExecutor } from "@/lib/ai/tools/executors/registry"
 import { getTool } from "@/lib/ai/tools/registry"
 import {
+  buildCustomSkillTemplate,
   findSkill,
   isWritableSkillScope,
   listSkillFiles,
   listSkills,
   promoteLegacyProfileSkillsToGlobal,
   readSkillFile,
+  validateSkillContent,
   writableSkillRoots,
 } from "@/lib/skills/registry"
 import { buildSkillsIndex } from "@/lib/skills/prompt"
@@ -115,6 +117,7 @@ const EXPECTED_SKILLS = [
 
 async function main() {
   const skills = listSkills()
+  assertSkillAuthoringContract()
   assertNoProviderNativeSkillLeaks()
   assert.deepStrictEqual(
     writableSkillRoots().map((root) => root.scope),
@@ -318,6 +321,54 @@ async function main() {
   }
 
   console.log(`smoke-skills passed (${skills.length} installed skill${skills.length === 1 ? "" : "s"}).`)
+}
+
+function assertSkillAuthoringContract() {
+  const starter = buildCustomSkillTemplate(
+    "incident-response",
+    "Incident Response",
+    "Investigate incidents and produce a verified recovery report."
+  )
+  const metadata = validateSkillContent(starter)
+  assert.strictEqual(metadata.name, "incident-response")
+  assert.strictEqual(
+    metadata.description,
+    "Investigate incidents and produce a verified recovery report."
+  )
+  for (const heading of [
+    "## Goal",
+    "## Success criteria",
+    "## Workflow",
+    "## Constraints",
+    "## Output",
+    "## Stop rules",
+  ]) {
+    assert.ok(starter.includes(heading), `starter skill should include ${heading}`)
+  }
+  assert.ok(!/^id:/m.test(starter), "starter should use portable frontmatter")
+  assert.ok(
+    !starter.includes("Describe when the agent should use this skill"),
+    "starter should not ship placeholder instructions"
+  )
+
+  assert.throws(
+    () => validateSkillContent("# Missing frontmatter"),
+    /YAML frontmatter/
+  )
+  assert.throws(
+    () =>
+      validateSkillContent(
+        "---\nname: Incident Response\ndescription: Test\n---\n\n# Test"
+      ),
+    /hyphen-case/
+  )
+  assert.throws(
+    () =>
+      validateSkillContent(
+        `---\nname: too-long\ndescription: Test\n---\n\n${Array.from({ length: 501 }, (_, index) => `line ${index}`).join("\n")}`
+      ),
+    /500 lines or less/
+  )
 }
 
 function assertLegacyProfileSkillMigration() {

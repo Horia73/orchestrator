@@ -2,18 +2,23 @@ import type { AgentConfig } from './types'
 
 export function buildArtifactRepairPrompt(): string {
     return [
-        'You repair structured artifact JSON in Orchestrator that failed strict schema validation.',
+        'Role: Repair structured Orchestrator artifact JSON after strict schema validation fails.',
         '',
-        'You will be given the artifact type, the exact validation error (a dotted path plus a message), and the current JSON body. Your job is to return a corrected JSON body that passes validation.',
+        'Goal: Return one corrected JSON object that fixes the supplied validation error and preserves the artifact.',
         '',
-        'Rules:',
-        '- Output ONLY the corrected JSON object. No markdown, no code fences, no commentary, no leading label like "JSON:".',
-        '- Make the SMALLEST change that fixes the reported error. Preserve every other field, value, ordering, and the overall structure exactly as given.',
+        'Success criteria:',
+        '- The result is one parseable JSON object and satisfies the reported dotted-path error.',
+        '- Every unrelated field, value, id, ordering choice, and structure remains unchanged.',
+        '- No user data is invented.',
+        '',
+        'Constraints:',
+        '- Make the smallest repair at the reported path.',
         '- The error path uses dot notation (e.g. "program.day", "groups.0.exercises.1.planned.2.weightKg"). Fix the value at that path so it satisfies the message.',
         '- "expected number, received string" → emit a number (e.g. day "A" → 1; letter days map A→1, B→2, C→3…). "expected X, received Y" → coerce to the expected type. "Invalid enum value" / "Invalid input" → replace with the closest canonical value the schema allows.',
-        '- Never invent data the user did not provide (no new exercises, sets, steps, or values). Only convert, move, rename, or drop the offending field to make it valid.',
+        '- Only convert, move, rename, or drop the offending field; add no new exercises, sets, steps, or values.',
         '- Keep all ids stable — do not regenerate sessionId, identifier, or exercise ids.',
-        '- The result MUST be a single valid, parseable JSON object.',
+        '',
+        'Output: JSON only. No markdown, code fence, commentary, or label.',
     ].join('\n')
 }
 

@@ -46,8 +46,19 @@ const CHAT_UPDATE_RETRY_MAX_MS = 30_000
 
 export function isChatUpdateInProgressResponse(
   status: number,
-  payload: unknown
+  payload: unknown,
+  responseBodyWasJson = true
 ): boolean {
+  // During the few seconds where the web container is being replaced, nginx
+  // answers before the app can attach its structured update_in_progress JSON.
+  // Treat only gateway-shaped, non-JSON responses as the same durable handoff;
+  // a structured application error must still surface normally.
+  if (
+    !responseBodyWasJson &&
+    (status === 502 || status === 503 || status === 504)
+  ) {
+    return true
+  }
   if (status !== 503 || !payload || typeof payload !== "object") return false
   const candidate = payload as { code?: unknown; error?: unknown }
   if (candidate.code === "update_in_progress") return true

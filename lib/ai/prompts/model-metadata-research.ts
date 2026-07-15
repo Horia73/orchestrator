@@ -193,9 +193,13 @@ export function buildProviderMetadataResearchPrompt(target: ProviderResearchTarg
 
     return [
         '<provider_metadata_research_task>',
-        `Update metadata for ${target.models.length} model(s) of provider "${target.providerId}" (${target.providerName}) in one research pass.`,
+        '<role>Research official provider metadata for a bounded batch of Orchestrator model-registry entries.</role>',
+        `<goal>Update metadata for ${target.models.length} model(s) of provider "${target.providerId}" (${target.providerName}) in one research pass and return schema-valid JSON.</goal>`,
+        '<success_criteria>Every requested modelId appears exactly once; every returned fact has official-source support; every unsupported field is unresolved rather than guessed; the output matches json_schema and contains no markdown.</success_criteria>',
+        '<constraints>',
         'The provider may have additional models beyond this batch — research ONLY the modelIds listed in current_registry_entries. If you encounter other model names on official pages, ignore them: do not investigate them, do not include them in your output, and do not flag them as unresolved.',
         `The registry accepts open, future-proof stable identifiers matching ${STABLE_ID_RULE}. Do not force new official values into an old vocabulary just because they are new.`,
+        '</constraints>',
         '',
         '<research_workflow>',
         `1. Identify the provider's official product surface(s) for these models: providerId "${target.providerId}", ${target.models.length} model(s) listed below.`,
@@ -258,6 +262,7 @@ export function buildProviderMetadataResearchPrompt(target: ProviderResearchTarg
         '<current_registry_entries>',
         JSON.stringify(currentEntries, null, 2),
         '</current_registry_entries>',
+        '<stop_rules>Return after one complete JSON object. If official evidence is insufficient, preserve the entry and mark the exact gaps unresolved.</stop_rules>',
         '</provider_metadata_research_task>',
     ].filter(Boolean).join('\n')
 }
@@ -276,9 +281,12 @@ export function buildSingleModelMetadataResearchPrompt(target: SingleModelResear
 
     return [
         '<model_metadata_research_task>',
-        'You are updating one model entry in Orchestrator\'s local model registry.',
-        'Your job is to research the current official metadata for this exact model and return a machine-validated JSON object only.',
+        '<role>Research official metadata for one Orchestrator model-registry entry.</role>',
+        '<goal>Update this exact model entry and return one machine-valid JSON object.</goal>',
+        '<success_criteria>Every returned fact has official-source support; each missing unsupported field is unresolved rather than guessed; the result matches json_schema and contains no markdown.</success_criteria>',
+        '<constraints>',
         `The registry accepts open, future-proof stable identifiers matching ${STABLE_ID_RULE}. Do not force new official values into an old vocabulary just because they are new.`,
+        '</constraints>',
         '',
         '<research_workflow>',
         '1. Identify the exact product route: providerId, modelId, displayName, and whether this is an API model, a media model, or a local CLI/subscription wrapper.',
@@ -317,6 +325,7 @@ export function buildSingleModelMetadataResearchPrompt(target: SingleModelResear
         '<current_registry_entry>',
         JSON.stringify(current, null, 2),
         '</current_registry_entry>',
+        '<stop_rules>Return after one complete JSON object. If official evidence is insufficient, preserve known data and name the exact unresolved fields.</stop_rules>',
         '</model_metadata_research_task>',
     ].filter(Boolean).join('\n')
 }

@@ -1,8 +1,6 @@
 import { CONCIERGE_BOOKING_COMMERCE } from './booking-commerce'
-import { CONCIERGE_CONFIRMATION } from './confirmation'
 import { CONCIERGE_CORE } from './core'
 import { CONCIERGE_DELEGATION } from './delegation'
-import { CONCIERGE_EXAMPLES } from './examples'
 import { CONCIERGE_FOLLOWUP_MEMORY } from './followup-memory'
 import { CONCIERGE_INTAKE } from './intake'
 import { CONCIERGE_OPERATING_MODEL } from './operating-model'
@@ -19,9 +17,7 @@ export const CONCIERGE_PROMPT = [
     CONCIERGE_SERVICE_PROTOCOLS,
     CONCIERGE_TRAVEL_PROTOCOLS,
     CONCIERGE_BOOKING_COMMERCE,
-    CONCIERGE_CONFIRMATION,
     CONCIERGE_FOLLOWUP_MEMORY,
     CONCIERGE_QUALITY_CONTROL,
     CONCIERGE_OUTPUT_CONTRACT,
-    CONCIERGE_EXAMPLES,
 ].filter(Boolean).join('\n\n')

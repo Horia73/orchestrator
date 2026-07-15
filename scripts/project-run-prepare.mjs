@@ -508,7 +508,16 @@ function buildInstructions(values) {
   return [
     '# Project Run Instructions',
     '',
-    `Task: ${values.task}`,
+    '## Goal',
+    '',
+    values.task,
+    '',
+    '## Success Criteria',
+    '',
+    '- Implement the complete selected static, server-backed, or auto-routed product outcome in this isolated repository.',
+    '- Preserve the workspace, delivery, preview, git, and deployment boundaries below.',
+    '- Pass the strongest relevant project checks and leave a reproducible delivery contract.',
+    '- Return a commit-ready result and exact next publish/deploy gate; do not infer permission to commit, push, or deploy.',
     '',
     '## Workspace Boundary',
     '',
@@ -612,7 +621,9 @@ function buildCoderPrompt(values) {
       ]
 
   return [
-    `Task: ${values.task}`,
+    'Role: Implement and verify one standalone project run in its prepared isolated repository.',
+    `Goal: ${values.task}`,
+    'Success criteria: complete the selected delivery outcome, honor the instructions file, pass proportionate checks, and return a commit-ready result plus the exact publish/deploy gate.',
     '',
     `Work only in this isolated repository: ${values.repoDir}`,
     '',
