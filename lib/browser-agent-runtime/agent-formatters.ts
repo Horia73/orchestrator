@@ -16,6 +16,10 @@ function formatCoordinate(coordinate: [number, number] | undefined, mode: Vision
     return `${coordinateLabel(mode)} [${coordinate[0]}, ${coordinate[1]}]`;
 }
 
+function uploadFilename(filePath: string | undefined): string {
+    return String(filePath || '').split(/[\\/]/).filter(Boolean).pop() || '[?]';
+}
+
 export function formatAction(action: AgentAction, coordinateMode: VisionCoordinateMode = 'normalized'): string {
     switch (action.action) {
         case 'click': {
@@ -33,6 +37,8 @@ export function formatAction(action: AgentAction, coordinateMode: VisionCoordina
             const count = action.clickCount && action.clickCount > 1 ? ' (Double Click)' : '';
             return `Click element ${action.ref || '[?]'}${count} - ${reason(action)}`;
         }
+        case 'uploadFile':
+            return `Attach workspace file ${uploadFilename(action.path)}${action.ref ? ` to ${action.ref}` : ''} - ${reason(action)}`;
         case 'setViewport': {
             const scheme = action.colorScheme && action.colorScheme !== 'auto' ? `, ${action.colorScheme} mode` : '';
             return `Set Viewport ${action.viewportPreset || 'desktop'}${scheme} - ${reason(action)}`;

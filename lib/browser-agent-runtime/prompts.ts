@@ -48,7 +48,7 @@ export function buildSystemPrompt(
    const timezone = getConfiguredTimezone();
    const dateString = now.toLocaleDateString('ro-RO', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: timezone });
    const localTime = formatDateTimeInTimezone(now, timezone);
-   const baseActions = '"click" | "type" | "key" | "scroll" | "scrollToBottom" | "undo" | "wait" | "navigate" | "hold" | "drag" | "hover" | "inspectPage" | "readPage" | "clickRef" | "findInPage" | "inspectDiagnostics" | "fetchUrl" | "screenshot" | "recordVideo" | "setViewport" | "closeTab" | "refresh" | "getCurrentUrl" | "getLink" | "pasteLink" | "readClipboard" | "clear" | "goBack" | "goForward" | "listTabs" | "switchTab" | "newTab" | "listDownloads" | "waitForDownloads"';
+   const baseActions = '"click" | "type" | "key" | "scroll" | "scrollToBottom" | "undo" | "wait" | "navigate" | "hold" | "drag" | "hover" | "inspectPage" | "readPage" | "clickRef" | "uploadFile" | "findInPage" | "inspectDiagnostics" | "fetchUrl" | "screenshot" | "recordVideo" | "setViewport" | "closeTab" | "refresh" | "getCurrentUrl" | "getLink" | "pasteLink" | "readClipboard" | "clear" | "goBack" | "goForward" | "listTabs" | "switchTab" | "newTab" | "listDownloads" | "waitForDownloads"';
    const responseActionList = isAdvancedMode
       ? `${baseActions} | "ask" | "yield_control"`
       : escalationEnabled
@@ -175,6 +175,7 @@ ${coordinateInstructions}
 ${inspectPageDoc}
 - **readPage**: List the interactive elements of the current page (buttons, links, inputs, selects) as short refs like \`e12\`, each with its role, visible name, link target, and current value. Use it when precise clicking is hard (small/dense/ambiguous targets), when a coordinate click missed, or when you need an exact inventory of the controls and form fields. The list arrives as an observation in your action history; follow up with \`clickRef\`.
 - **clickRef**: Click an element by its \`ref\` from the latest \`readPage\` (\`{"action":"clickRef","ref":"e12"}\`). This targets the DOM element directly and is more reliable than estimating coordinates for elements that appeared in \`readPage\`. Refs go stale after navigation or big page changes — if told the ref is stale, run \`readPage\` again. Supports \`clickCount\` for double clicks.
+- **uploadFile**: Attach an existing workspace file directly to a web page's \`input[type=file]\` without opening the native OS file picker. Provide the workspace-relative \`path\` from the delegated goal (absolute paths are accepted only when they resolve inside this profile's workspace). If the page has one file input, \`path\` is enough; if it has several, run \`readPage\` and also provide the intended \`ref\` — hidden file inputs are included there as \`input:file\`. The action does not click a final submit/import button, but some sites start transferring immediately when a file is selected, so use it only when the delegated task authorizes that exact file and destination. Do not click a “Choose file” control and navigate an OS picker when \`uploadFile\` can do the job.
 - **findInPage**: Search the page text for the exact text in \`text\`; the runtime scrolls the first match into view, highlights it, and reports how many matches exist (or that there are none). Use this for long pages when you know a word, price, date, label, or phrase to locate. Set \`submit: true\` to advance to the next match.
 - **inspectDiagnostics**: Read captured browser console messages, page errors, failed requests, and HTTP 4xx/5xx responses for the current session. Use this when diagnosing loading, blank, broken, or API-backed pages.
 - **fetchUrl**: Perform a read-only GET from the active page's browser context, with cookies/session included. Use \`url\` as an absolute same-origin URL or path. Use this for same-origin API checks instead of opening a second tab just to inspect JSON/text.
@@ -219,6 +220,11 @@ ${inspectPageRule}
 18. **Diagnostics Before Tab Bouncing**: For "keeps loading", blank UI, API/data, console, or failed-network tasks, prefer \`inspectDiagnostics\` and \`fetchUrl\` over opening/switching between API tabs. If you already collected enough evidence, return \`done\` instead of re-checking the same tabs.
 19. **Client-Side Application Errors**: If the visible page says "Application error", "client-side exception", or "see the browser console for more information", use \`inspectDiagnostics\` before refreshing, clicking, waiting, or continuing normal navigation. Once diagnostics are in the action history, summarize the current URL, page errors/stack, console errors, failed requests, and HTTP 4xx/5xx evidence. Use same-origin \`fetchUrl\` only when a specific endpoint/chunk path needs verification. Then return \`done\` or \`error\` with the diagnosis or bounded recovery result; do not keep interacting with the broken page as if it were usable.
 ${nativeUiRule}${incognitoRule}
+
+## 📤 UPLOAD HANDLING
+- Use \`uploadFile\` for web file inputs; do not navigate native file-picker folders or type filesystem paths into an OS dialog.
+- Only files inside the active profile workspace are eligible. The action reports a clean workspace-relative path and never exposes the hidden runtime/profile path.
+- The action does not click final submission, but file selection can trigger immediate transfer on some sites. Use it only for the exact authorized file and destination; after attaching, verify the visible filename/form state and preserve the Hard Commit Boundary before any Import, Upload, Send, Save, or equivalent commit button.
 
 ## 🧹 FOCUS & SELECTION HYGIENE
 - **Click to focus**: When an element may not already be focused, click it first — search boxes, text fields, rich-text editors, custom dropdowns, canvases, and sliders often ignore typing or key presses until they are focused. A single click on the target before \`type\`/\`key\` is a cheap, normal step; do not skip it just to save an action.
@@ -278,6 +284,7 @@ Single action:
   "url": "<url for navigate, newTab, or fetchUrl action>",
   "tabIndex": <number>, // For switchTab or closeTab action
   "ref": "<element ref from readPage, e.g. e12>", // For clickRef action
+  "path": "<workspace-relative file path>", // For uploadFile action
   "viewportPreset": "mobile" | "tablet" | "desktop", // For setViewport action
   "colorScheme": "dark" | "light" | "auto", // Optional, for setViewport action
   "durationMs": 1000, // Optional, duration in milliseconds for wait, hold, drag, and recordVideo actions
@@ -312,6 +319,7 @@ export interface ActionHistoryItem {
    url?: string;
    sub_objective?: string;
    expectedFilename?: string;
+   path?: string;
    observation?: string;
    reasoning?: string;
    success: boolean;
@@ -451,6 +459,7 @@ function formatActionHistory(recentActions: ActionHistoryItem[], totalActions = 
          if (a.submit) desc += ` + ENTER`;
          if (a.url) desc += ` url="${formatHistoryUrl(a.url)}"`;
          if (a.expectedFilename) desc += ` expected="${a.expectedFilename.substring(0, 60)}"`;
+         if (a.path) desc += ` path="${formatBrowserAgentTextForLog(a.path, a.reasoning, 100)}"`;
          desc += a.success ? ' ✓' : ' ✗ FAILED';
          if (a.reasoning) desc += `\n         → Reason: "${redactBrowserAgentText(a.reasoning).substring(0, 80)}"`;
          if (a.observation) {

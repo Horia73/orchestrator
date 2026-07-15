@@ -52,6 +52,14 @@ const currentUrlAction = parseAgentActionsFromModelText(JSON.stringify({
 }))
 assert.equal(currentUrlAction[0].action, 'getCurrentUrl')
 
+const uploadAction = parseAgentActionsFromModelText(JSON.stringify({
+    action: 'uploadFile',
+    path: 'files/Clienti_Oblio_TEST.xls',
+    reasoning: 'Attach the prepared workbook without opening the OS picker',
+}))
+assert.equal(uploadAction[0].action, 'uploadFile')
+assert.equal(uploadAction[0].path, 'files/Clienti_Oblio_TEST.xls')
+
 assert.throws(
     () => parseAgentActionsFromModelText('{ action: "click", reasoning: "bad JSON" }'),
     /Invalid JSON/,
@@ -77,6 +85,7 @@ const wrappedActions = parseAgentActionsFromModelText(JSON.stringify({
         scrollAmount: null,
         url: null,
         tabIndex: null,
+        path: null,
         sub_objective: null,
         reasoning: 'Click pixel target',
         memory: null,

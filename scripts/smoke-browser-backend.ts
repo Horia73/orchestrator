@@ -55,6 +55,8 @@ assert.match(systemPrompt, /Client-Side Application Errors/)
 assert.match(systemPrompt, /use `inspectDiagnostics` before refreshing/)
 assert.match(systemPrompt, /getCurrentUrl/)
 assert.match(systemPrompt, /OAuth localhost redirects/)
+assert.match(systemPrompt, /uploadFile/)
+assert.match(systemPrompt, /do not navigate native file-picker folders/i)
 
 const normalizedDisplayPrompt = buildSystemPrompt(false, 'normalized-display')
 assert.match(normalizedDisplayPrompt, /NORMALIZED COORDINATES \(0-1000 range\)/)

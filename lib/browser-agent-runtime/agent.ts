@@ -613,6 +613,7 @@ export function createAgentController(
                             url: action.url,
                             sub_objective: action.sub_objective,
                             expectedFilename: action.expectedFilename,
+                            path: action.path?.split(/[\\/]/).filter(Boolean).pop(),
                             observation: execution.observation,
                             reasoning: action.reasoning,
                             success,
@@ -892,6 +893,7 @@ function actionCanChangeVisualState(action: AgentAction): boolean {
     return [
         'click',
         'clickRef',
+        'uploadFile',
         'clear',
         'pasteLink',
         'scroll',
@@ -1340,6 +1342,33 @@ async function executeAction(
                     trace: null,
                     supplementalFrames: [],
                     observation: `${clickResult.error || `Could not click ${targetRef}.`}${clickResult.stale ? ' Run readPage again for fresh refs, or click by coordinates.' : ''}`,
+                };
+            }
+
+            case 'uploadFile': {
+                const filePath = String(action.path || '').trim();
+                if (!filePath) {
+                    return {
+                        success: false,
+                        trace: null,
+                        supplementalFrames: [],
+                        observation: 'uploadFile needs a workspace-relative "path" from the delegated goal.',
+                    };
+                }
+                const targetRef = String(action.ref || '').trim() || undefined;
+                onStatusUpdate(`📤 Attaching workspace file${targetRef ? ` to ${targetRef}` : ''}...`);
+                const uploadResult = await browser.uploadFile(filePath, targetRef);
+                await sleep(timing.actionSettleDelayMs);
+                if (uploadResult.success) {
+                    const observation = `Attached ${uploadResult.filename || 'workspace file'}${uploadResult.ref ? ` to ${uploadResult.ref}` : ''} from ${uploadResult.path}. No final submit/import control was clicked; verify the page because some sites begin transfer on file selection.`;
+                    onStatusUpdate(`📤 ${observation}`);
+                    return { success: true, trace: null, supplementalFrames: [], observation };
+                }
+                return {
+                    success: false,
+                    trace: null,
+                    supplementalFrames: [],
+                    observation: `${uploadResult.error || 'Could not attach the workspace file.'}${uploadResult.stale ? ' Run readPage again for fresh refs.' : ''}`,
                 };
             }
 

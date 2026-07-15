@@ -7,6 +7,8 @@ export interface BrowserManagerOptions {
     backend?: BrowserBackend;
     userDataDir?: string;
     downloadsDir?: string;
+    /** Root of files the browser agent may attach to web forms. */
+    workspaceDir?: string;
     headless?: boolean;
     liveView?: boolean;
     viewport?: { width: number; height: number } | null;
@@ -169,6 +171,18 @@ export interface BrowserClickRefResult {
     error?: string;
 }
 
+export interface BrowserUploadFileResult {
+    success: boolean;
+    /** True when a requested readPage ref no longer belongs to the active page. */
+    stale?: boolean;
+    ref?: string;
+    label?: string;
+    /** Workspace-relative path; absolute runtime/profile paths are never exposed. */
+    path?: string;
+    filename?: string;
+    error?: string;
+}
+
 export interface BrowserSetViewportResult {
     supported: boolean;
     preset?: ViewportPreset;
@@ -271,6 +285,7 @@ export interface BrowserPageSession {
     getPointerState(): BrowserPointerState | null;
     readPage(): Promise<BrowserReadPageResult>;
     clickRef(ref: string, count?: number): Promise<BrowserClickRefResult>;
+    uploadFile(filePath: string, ref?: string): Promise<BrowserUploadFileResult>;
     setViewport(preset: ViewportPreset, colorScheme?: 'dark' | 'light' | 'auto'): Promise<BrowserSetViewportResult>;
     fetchUrl(url: string): Promise<BrowserFetchResult>;
     getLatestAgentFrame(): BrowserFrameSnapshot | null;
@@ -282,6 +297,8 @@ export interface BrowserPageSession {
 export interface BrowserPageSessionOptions {
     id?: string;
     startupUrl?: string;
+    /** Profile workspace root used to sandbox uploadFile for this session. */
+    workspaceDir?: string;
 }
 
 export interface BrowserManager extends BrowserPageSession {

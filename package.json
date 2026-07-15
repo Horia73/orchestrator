@@ -60,7 +60,7 @@
     "smoke:upload-gc": "tsx scripts/smoke-upload-gc.ts",
     "smoke:api-guard": "tsx scripts/smoke-api-guard.ts",
     "smoke:profiles": "tsx scripts/smoke-profiles-settings.ts",
-    "smoke:browser-backend": "tsx scripts/smoke-browser-backend.ts && tsx scripts/smoke-browser-vision-json.ts",
+    "smoke:browser-backend": "tsx scripts/smoke-browser-backend.ts && tsx scripts/smoke-browser-vision-json.ts && tsx scripts/smoke-browser-upload.ts",
     "smoke:browser-context-recovery": "tsx scripts/smoke-browser-context-recovery.ts",
     "smoke:gemini": "tsx scripts/smoke-gemini-interactions-events.ts",
     "smoke:capability-gating": "tsx scripts/smoke-capability-gating.ts",

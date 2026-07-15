@@ -39,6 +39,7 @@ import type {
     BrowserManagerOptions,
     BrowserNetworkEntry,
     BrowserClickRefResult,
+    BrowserUploadFileResult,
     BrowserPageElementRef,
     BrowserPageSettleOptions,
     BrowserPageSettleResult,
@@ -79,6 +80,7 @@ export type {
     BrowserManagerOptions,
     BrowserNetworkEntry,
     BrowserClickRefResult,
+    BrowserUploadFileResult,
     BrowserPageElementRef,
     BrowserPageMetrics,
     BrowserPageSession,
@@ -521,6 +523,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         pageErrors: BrowserPageErrorEntry[];
         failedRequests: BrowserNetworkEntry[];
         httpErrors: BrowserNetworkEntry[];
+        uploadWorkspaceDir: string | null;
         elementRefs: {
             page: Page;
             url: string;
@@ -693,7 +696,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         await insertTextDirectly(page, text);
     };
 
-    const createSessionState = (requestedId?: string): BrowserSessionState => {
+    const createSessionState = (requestedId?: string, sessionWorkspaceDir?: string): BrowserSessionState => {
         const id = requestedId?.trim() || `browser_session_${++sessionSequence}`;
         if (sessions.has(id)) {
             throw new Error(`Browser session already exists: ${id}`);
@@ -715,6 +718,9 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             pageErrors: [],
             failedRequests: [],
             httpErrors: [],
+            uploadWorkspaceDir: sessionWorkspaceDir
+                ? path.resolve(/*turbopackIgnore: true*/ process.cwd(), sessionWorkspaceDir)
+                : null,
             elementRefs: null,
         };
         sessions.set(id, state);
@@ -736,6 +742,10 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
     const downloadsDir = path.resolve(
         /*turbopackIgnore: true*/ process.cwd(),
         options.downloadsDir || path.join(userDataDir, 'downloads')
+    );
+    const workspaceDir = path.resolve(
+        /*turbopackIgnore: true*/ process.cwd(),
+        options.workspaceDir || path.dirname(downloadsDir)
     );
     const log = (message: string) => {
         if (typeof options.onLog === 'function') {
@@ -2746,10 +2756,15 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                         const out: Element[] = [];
                         let total = 0;
                         for (const el of Array.from(document.querySelectorAll(selector))) {
+                            const isFileInput = el instanceof HTMLInputElement && el.type === 'file';
                             const rect = el.getBoundingClientRect();
-                            if (rect.width < 1 || rect.height < 1) continue;
+                            // File controls are commonly hidden behind a styled
+                            // "Choose file" button. Keep them addressable so the
+                            // agent can attach bytes through uploadFile without
+                            // opening an OS file picker.
+                            if (!isFileInput && (rect.width < 1 || rect.height < 1)) continue;
                             const style = window.getComputedStyle(el);
-                            if (style.visibility === 'hidden' || style.display === 'none') continue;
+                            if (!isFileInput && (style.visibility === 'hidden' || style.display === 'none')) continue;
                             total += 1;
                             if (out.length < maxElements) out.push(el);
                         }
@@ -2936,6 +2951,114 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                         : { success: false, label: entry.label, error: 'Click failed.' };
                 } catch (error) {
                     return { success: false, label: entry.label, error: formatBrowserError(error) };
+                }
+            },
+
+            async uploadFile(filePath: string, ref?: string): Promise<BrowserUploadFileResult> {
+                const requestedPath = String(filePath || '').trim();
+                if (!requestedPath) {
+                    return { success: false, error: 'uploadFile needs a workspace-relative "path".' };
+                }
+
+                let resolvedWorkspace: string;
+                try {
+                    resolvedWorkspace = fs.realpathSync(session.uploadWorkspaceDir || workspaceDir);
+                } catch {
+                    return { success: false, error: 'The active profile workspace is unavailable.' };
+                }
+
+                const candidate = path.isAbsolute(requestedPath)
+                    ? requestedPath
+                    : path.resolve(session.uploadWorkspaceDir || workspaceDir, requestedPath);
+                let resolvedFile: string;
+                try {
+                    resolvedFile = fs.realpathSync(candidate);
+                } catch {
+                    return { success: false, error: 'The requested workspace file was not found.' };
+                }
+
+                const relative = path.relative(resolvedWorkspace, resolvedFile);
+                if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+                    return { success: false, error: 'The selected file must be inside the active profile workspace.' };
+                }
+                if (!fs.statSync(resolvedFile).isFile()) {
+                    return { success: false, error: 'The selected workspace path is not a file.' };
+                }
+
+                const relativePath = relative.split(path.sep).join('/');
+                const activePage = await ensureActivePage(session);
+                const targetRef = String(ref || '').trim();
+                let target: ElementHandle | null = null;
+                let label = 'file input';
+                let ownsTarget = false;
+
+                if (targetRef) {
+                    const store = session.elementRefs;
+                    if (!store || store.page !== activePage) {
+                        return {
+                            success: false,
+                            stale: true,
+                            ref: targetRef,
+                            error: 'No current element refs for this page. Run readPage again.',
+                        };
+                    }
+                    const entry = store.byRef.get(targetRef);
+                    if (!entry) {
+                        return {
+                            success: false,
+                            stale: true,
+                            ref: targetRef,
+                            error: `Unknown element ref "${targetRef}". Run readPage again.`,
+                        };
+                    }
+                    target = entry.handle;
+                    label = entry.label;
+                } else {
+                    const inputs = await activePage.$$('input[type="file"]');
+                    if (inputs.length !== 1) {
+                        for (const input of inputs) void input.dispose().catch(() => {});
+                        return {
+                            success: false,
+                            error: inputs.length === 0
+                                ? 'No file input exists on the current page. Open the site upload form first.'
+                                : `Found ${inputs.length} file inputs. Run readPage and pass the intended input ref to uploadFile.`,
+                        };
+                    }
+                    target = inputs[0];
+                    ownsTarget = true;
+                }
+
+                try {
+                    const isFileInput = await target.evaluate((element) =>
+                        element instanceof HTMLInputElement && element.type === 'file'
+                    );
+                    if (!isFileInput) {
+                        return {
+                            success: false,
+                            ref: targetRef || undefined,
+                            label,
+                            error: `${targetRef || 'The selected element'} is not an input[type=file]. Run readPage and use the file input ref.`,
+                        };
+                    }
+                    await target.setInputFiles(resolvedFile);
+                    return {
+                        success: true,
+                        ref: targetRef || undefined,
+                        label,
+                        path: relativePath,
+                        filename: path.basename(resolvedFile),
+                    };
+                } catch (error) {
+                    return {
+                        success: false,
+                        ref: targetRef || undefined,
+                        label,
+                        path: relativePath,
+                        filename: path.basename(resolvedFile),
+                        error: formatBrowserError(error).split(resolvedWorkspace).join('<workspace>'),
+                    };
+                } finally {
+                    if (ownsTarget) void target.dispose().catch(() => {});
                 }
             },
 
@@ -3246,7 +3369,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 throw new Error('Browser not launched');
             }
 
-            const session = createSessionState(sessionOptions.id);
+            const session = createSessionState(sessionOptions.id, sessionOptions.workspaceDir);
             const newPage = takeReusableInitialBlankPage() ?? await openManagedPage();
             attachPageToSession(session, newPage, { origin: 'initial' });
             if (sessionOptions.startupUrl) {

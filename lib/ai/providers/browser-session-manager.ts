@@ -460,6 +460,7 @@ class BrowserSessionManager {
             backend: config.browser.backend,
             userDataDir: config.browser.userDataDir,
             downloadsDir: path.join(activeRuntimePaths().workspaceDir, 'browser-downloads'),
+            workspaceDir: activeRuntimePaths().workspaceDir,
             headless: config.browser.headless,
             liveView: config.browser.liveView,
             launchArgs: config.browser.launchArgs,
@@ -480,6 +481,7 @@ class BrowserSessionManager {
             backend: config.browser.backend,
             userDataDir,
             downloadsDir: path.join(activeRuntimePaths().workspaceDir, 'browser-downloads'),
+            workspaceDir: activeRuntimePaths().workspaceDir,
             headless: config.browser.headless,
             liveView: config.browser.liveView,
             launchArgs: config.browser.launchArgs,
@@ -517,6 +519,7 @@ class BrowserSessionManager {
             pageSession = await browserManager.createSession({
                 id,
                 startupUrl: config.browser.startupUrl || undefined,
+                workspaceDir: activeRuntimePaths().workspaceDir,
             })
         } catch (error) {
             if (mode === 'incognito') {
