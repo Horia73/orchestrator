@@ -5,11 +5,13 @@ import { getBrowserSessionManager } from '@/lib/ai/providers/browser-session-man
 import type { BrowserLiveViewClientState } from '@/lib/ai/providers/browser-session-manager'
 import { getEnvValue } from '@/lib/config'
 import { runWithRequestProfile } from "@/lib/profiles/server"
+import { proxyToDurableAiWorker, shouldProxyToDurableAiWorker } from '@/lib/ai/durable-worker'
 
 export async function GET(request: Request) {
   return runWithRequestProfile(request, async () => {
         const guard = guardSensitiveRequest(request)
         if (guard) return guard
+        if (shouldProxyToDurableAiWorker()) return proxyToDurableAiWorker(request)
 
         const sessionId = sessionIdFromRequest(request)
         const state = await getBrowserSessionManager().getLiveViewState(sessionId)
@@ -23,6 +25,7 @@ export async function POST(request: Request) {
   return runWithRequestProfile(request, async () => {
         const guard = guardSensitiveRequest(request)
         if (guard) return guard
+        if (shouldProxyToDurableAiWorker()) return proxyToDurableAiWorker(request)
 
         let body: unknown
         try {

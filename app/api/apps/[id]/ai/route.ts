@@ -9,6 +9,7 @@ import { SlidingWindowRateLimiter } from '@/lib/api/sliding-window-rate-limit'
 import { clearAgentRun, registerAgentRun } from '@/lib/agent-runs'
 import { runAppAi, type AppAiFile } from '@/lib/apps/ai'
 import { getApp } from '@/lib/apps/store'
+import { proxyToDurableAiWorker, shouldProxyToDurableAiWorker } from '@/lib/ai/durable-worker'
 import { getActiveProfileId } from '@/lib/profiles/context'
 import { runWithRequestProfile } from '@/lib/profiles/server'
 
@@ -34,6 +35,7 @@ export async function POST(
     return runWithRequestProfile(request, async () => {
         const guard = guardSensitiveRequest(request)
         if (guard) return guard
+        if (shouldProxyToDurableAiWorker()) return proxyToDurableAiWorker(request)
 
         const { id } = await params
         const app = getApp(id)
@@ -112,7 +114,6 @@ export async function POST(
                 systemPrompt,
                 responseFormat,
                 files: stored,
-                signal: request.signal,
             })
             return NextResponse.json(result, { headers: { 'Cache-Control': 'no-store' } })
         } catch (error) {

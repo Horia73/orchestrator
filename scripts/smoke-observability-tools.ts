@@ -30,6 +30,7 @@ async function main(): Promise<void> {
         sealInterruptedStreamingRequestLogs,
     } = await import('@/lib/observability/store')
     const { updateConfig } = await import('@/lib/config')
+    const { addMessage, createConversation, getConversation } = await import('@/lib/db')
     const { runWithProfileContext } = await import('@/lib/profiles/context')
     const {
         appendRuntimeRequestLogIndex,
@@ -328,6 +329,18 @@ async function main(): Promise<void> {
     check('usage report attributes browser tokens to browser_agent', browserAgentUsage?.inputTokens === 140, usage.byAgent)
 
     const staleRequestId = 'req_observability_stale_stream'
+    createConversation({
+        id: 'conv_observability_smoke',
+        title: 'Interrupted stream recovery',
+        createdAt: now - 10_000,
+        messages: [],
+    })
+    addMessage('conv_observability_smoke', {
+        id: staleRequestId,
+        role: 'assistant',
+        content: 'Partial output before restart.',
+        timestamp: now - 5_000,
+    })
     logRequestStart({
         requestId: staleRequestId,
         conversationId: 'conv_observability_smoke',
@@ -348,6 +361,34 @@ async function main(): Promise<void> {
     check('stale streaming request is sealed', sealed === 1)
     check('sealed request becomes aborted', staleLog?.status === 'aborted', staleLog)
     check('sealed request records restart hint', staleLog?.errorMessage?.includes('server process restarted'), staleLog)
+    check(
+        'sealed request also terminates its assistant message',
+        getConversation('conv_observability_smoke')?.messages.find(message => message.id === staleRequestId)?.status === 'aborted',
+        getConversation('conv_observability_smoke'),
+    )
+
+    const memberSealed = runWithProfileContext(
+        { profileId: 'member_smoke', role: 'member' },
+        () => {
+            logRequestStart({
+                requestId: 'req_member_interrupted_stream',
+                conversationId: 'conv_member_interrupted_stream',
+                agentId: 'browser_agent',
+                provider: 'browser',
+                model: 'default',
+                thinkingLevel: 'medium',
+                statefulMode: true,
+                startedAt: now - 4_000,
+                inputText: 'Member profile interrupted request.',
+            })
+            return sealInterruptedStreamingRequestLogs({
+                now,
+                activeRequestIds: new Set<string>(),
+                startedBefore: now + 1,
+            })
+        },
+    )
+    check('interrupted recovery can sweep a member profile independently', memberSealed === 1, memberSealed)
 
     const index = await executeReadRuntimeIndex({ section: 'overview' })
     check('read_runtime_index overview succeeds', index.success === true)

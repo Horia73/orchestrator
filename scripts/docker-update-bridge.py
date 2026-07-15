@@ -29,6 +29,8 @@ PORT = int(os.environ.get("ORCHESTRATOR_UPDATE_BRIDGE_PORT", "38733"))
 TOKEN_FILE = Path(os.environ.get("ORCHESTRATOR_UPDATE_TOKEN_FILE", str(APP_DIR.parent / "update-bridge-token")))
 APP_PORT = os.environ.get("ORCHESTRATOR_PORT", "3000")
 SERVICE_NAME = os.environ.get("ORCHESTRATOR_UPDATE_SERVICE", "orchestrator")
+AI_WORKER_SERVICE_NAME = os.environ.get("ORCHESTRATOR_AI_WORKER_SERVICE", "ai-worker")
+AI_WORKER_HOST_PORT = int(os.environ.get("ORCHESTRATOR_AI_WORKER_HOST_PORT", "3101"))
 IMAGE_NAME = os.environ.get("ORCHESTRATOR_UPDATE_IMAGE", "orchestrator:local")
 ROLLBACK_IMAGE_NAME = os.environ.get("ORCHESTRATOR_ROLLBACK_IMAGE", "orchestrator:rollback")
 PRUNE_AFTER_UPDATE = os.environ.get("ORCHESTRATOR_UPDATE_PRUNE_AFTER_BUILD", "1") != "0"
@@ -144,6 +146,14 @@ def docker_image_id(image: str) -> str:
         return capture_optional([docker_command(), "image", "inspect", image, "--format", "{{.Id}}"])
     except Exception:
         return ""
+
+
+def image_supports_durable_ai_worker(image: str) -> bool:
+    value = capture_optional([
+        docker_command(), "image", "inspect", image,
+        "--format", '{{index .Config.Labels "io.orchestrator.durable-ai-worker"}}',
+    ])
+    return value.strip() == "1"
 
 
 def read_package_version() -> Optional[str]:
@@ -589,6 +599,151 @@ def notify_app(
         write_log(f"Could not notify app update result: {exc}")
 
 
+def ai_worker_container_exists() -> bool:
+    container_id = capture_optional([
+        *compose_command(), "ps", "-a", "-q", AI_WORKER_SERVICE_NAME,
+    ])
+    return bool(container_id.strip())
+
+
+def ai_worker_control(action: Optional[str] = None, timeout: float = 10) -> Optional[dict]:
+    """Read or change the durable worker lifecycle through its loopback-only
+    control route. None means the service/route is not available (including a
+    pre-durable-worker installation); callers must never interpret that as an
+    idle worker when a container is known to exist."""
+    try:
+        payload = json.dumps({"action": action}).encode("utf-8") if action else None
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{AI_WORKER_HOST_PORT}/api/internal/ai-worker/control",
+            data=payload,
+            method="POST" if action else "GET",
+            headers={
+                "Authorization": f"Bearer {token()}",
+                "Content-Type": "application/json",
+            },
+        )
+        raw = urllib.request.urlopen(req, timeout=timeout).read()
+        parsed = json.loads(raw.decode("utf-8") or "{}")
+        return parsed if isinstance(parsed, dict) else None
+    except (OSError, ValueError, urllib.error.URLError, urllib.error.HTTPError):
+        return None
+
+
+def resume_ai_worker() -> None:
+    result = ai_worker_control("resume")
+    if result and result.get("ok"):
+        write_log("Re-opened durable AI worker admission after update failure.")
+
+
+def drain_ai_worker_before_update() -> bool:
+    if not ai_worker_container_exists():
+        return False
+    result = ai_worker_control("drain")
+    if not result or not result.get("ok"):
+        # The POST may have reached the worker even if its response was lost.
+        # Re-open admission best-effort before refusing the update so a
+        # transient loopback failure cannot strand the worker in drain mode.
+        ai_worker_control("resume")
+        raise RuntimeError(
+            "The durable AI worker exists but its drain control route is unavailable; "
+            "refusing an update that could interrupt active AI work."
+        )
+    active = int(result.get("activeRunCount") or 0)
+    write_log(f"Durable AI worker admission closed; {active} active run(s) may finish on the old image.")
+    return True
+
+
+def wait_for_ai_worker_control(timeout_seconds: float = 180) -> dict:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        result = ai_worker_control()
+        if result and result.get("ok"):
+            return result
+        time.sleep(2)
+    raise RuntimeError("Durable AI worker did not become healthy in time.")
+
+
+def wait_for_ai_worker_idle() -> None:
+    last_reported: Optional[int] = None
+    while True:
+        result = ai_worker_control()
+        if result and result.get("ok"):
+            active = int(result.get("activeRunCount") or 0)
+            if active != last_reported:
+                set_state(
+                    phase="restarting",
+                    waitReason=f"Waiting for {active} active AI run(s).",
+                    activeRunCount=active,
+                )
+                write_log(f"Waiting for durable AI worker: {active} active run(s).")
+                last_reported = active
+            if active == 0:
+                return
+        elif not ai_worker_container_exists():
+            return
+        time.sleep(2)
+
+
+def wait_for_ai_worker_web_requests() -> None:
+    """Let response-bound app AI calls finish before replacing the web proxy.
+
+    Chat streams can reattach after a web deploy and detached inbox/scheduled
+    runs persist their result independently. App AI calls currently return
+    their result on the original HTTP response, so keep the web container alive
+    for those calls after admission closes. They still execute in the durable
+    worker and therefore remain protected if the web process fails unexpectedly.
+    """
+    last_reported: Optional[int] = None
+    while True:
+        result = ai_worker_control()
+        if result and result.get("ok"):
+            app_runs = [
+                run
+                for run in (result.get("agentRuns") or [])
+                if isinstance(run, dict) and run.get("kind") == "app"
+            ]
+            active = len(app_runs)
+            if active != last_reported:
+                set_state(
+                    phase="restarting",
+                    waitReason=f"Waiting for {active} response-bound app AI request(s).",
+                    responseBoundRunCount=active,
+                )
+                write_log(f"Waiting before web rotation: {active} response-bound app AI request(s).")
+                last_reported = active
+            if active == 0:
+                return
+        elif not ai_worker_container_exists():
+            return
+        time.sleep(2)
+
+
+def refresh_ai_worker_after_update(worker_was_running: bool) -> None:
+    """Move the worker to the freshly tagged image without interrupting work.
+
+    Existing workers were drained before the web rebuild: already-accepted
+    runs continue, while new admissions wait. Once the active count reaches
+    zero, compose recreates only the worker. A first-time install has no old
+    worker and can start the service immediately.
+    """
+    if not worker_was_running:
+        set_state(phase="restarting", waitReason="Starting durable AI worker.")
+        run([*compose_command(), "up", "-d", "--no-deps", AI_WORKER_SERVICE_NAME])
+        wait_for_ai_worker_control()
+        write_log("Started durable AI worker on the current image.")
+        return
+
+    wait_for_ai_worker_idle()
+
+    set_state(phase="restarting", waitReason="Rotating durable AI worker.", activeRunCount=0)
+    run([
+        *compose_command(), "up", "-d", "--no-deps", "--force-recreate",
+        AI_WORKER_SERVICE_NAME,
+    ])
+    wait_for_ai_worker_control()
+    write_log("Rotated durable AI worker onto the current image after all active runs drained.")
+
+
 def allowed_peer(host: str) -> bool:
     if host in {"127.0.0.1", "::1", "localhost"}:
         return True
@@ -634,26 +789,36 @@ def safe_tag(value: object) -> str:
 
 def update_stack(payload: dict) -> None:
     job_id = str(payload.get("jobId") or f"manual-{int(time.time())}")
+    skip_git = bool(payload.get("skipGit"))
     target_tag = safe_tag(payload.get("targetTag"))
     branch = safe_branch(payload.get("targetBranch"))
     target_ref = target_tag or branch
     set_state(phase="updating", jobId=job_id, targetTag=target_ref, error=None)
     write_log(f"Starting Docker update job={job_id} target={target_ref}")
 
+    worker_was_running = False
     try:
         if not (APP_DIR / ".git").exists():
             raise RuntimeError(f"{APP_DIR} is not a git checkout.")
 
+        worker_was_running = drain_ai_worker_before_update()
+        if worker_was_running:
+            wait_for_ai_worker_web_requests()
+
         save_current_image_for_rollback(job_id, target_ref)
         prune_docker_build_artifacts("before rebuild")
 
-        if target_tag:
-            run(["git", "-C", str(APP_DIR), "fetch", "origin", "tag", target_tag, "--tags"])
-            run(["git", "-C", str(APP_DIR), "checkout", "--detach", target_tag])
+        if not skip_git:
+            if target_tag:
+                run(["git", "-C", str(APP_DIR), "fetch", "origin", "tag", target_tag, "--tags"])
+                run(["git", "-C", str(APP_DIR), "checkout", "--detach", target_tag])
+            else:
+                run(["git", "-C", str(APP_DIR), "fetch", "origin", branch, "--tags"])
+                run(["git", "-C", str(APP_DIR), "checkout", branch])
+                run(["git", "-C", str(APP_DIR), "pull", "--ff-only", "origin", branch])
         else:
-            run(["git", "-C", str(APP_DIR), "fetch", "origin", branch, "--tags"])
-            run(["git", "-C", str(APP_DIR), "checkout", branch])
-            run(["git", "-C", str(APP_DIR), "pull", "--ff-only", "origin", branch])
+            target_ref = current_git_ref() or target_ref
+            write_log(f"Deploying current checkout without changing git state ({target_ref}).")
         target_commit = capture(["git", "-C", str(APP_DIR), "rev-parse", "--short=12", "HEAD"])
         notify_app(
             job_id,
@@ -671,7 +836,13 @@ def update_stack(payload: dict) -> None:
         # ENV. Old installs sometimes ended up with these in `.env`; scrub
         # them defensively every update.
         scrub_stale_build_env(APP_DIR / ".env")
-        run([*compose_command(), "up", "--build", "-d"], env=compose_env)
+        # Rebuild/recreate ONLY the request-serving web container. The durable
+        # AI worker deliberately remains on its old image digest until its
+        # accepted runs finish; refresh_ai_worker_after_update rotates it later.
+        run([
+            *compose_command(), "up", "--build", "-d", "--no-deps", SERVICE_NAME,
+        ], env=compose_env)
+        refresh_ai_worker_after_update(worker_was_running)
         prune_docker_build_artifacts("after rebuild")
         notify_app(
             job_id,
@@ -679,9 +850,17 @@ def update_stack(payload: dict) -> None:
             "Host updater finished rebuilding the Docker stack.",
             target_commit=target_commit,
         )
-        set_state(phase="completed", error=None)
+        set_state(
+            phase="completed",
+            error=None,
+            waitReason=None,
+            activeRunCount=0,
+            responseBoundRunCount=0,
+        )
         write_log(f"Completed Docker update job={job_id}")
     except Exception as exc:
+        if worker_was_running:
+            resume_ai_worker()
         message = str(exc)
         set_state(phase="failed", error=message)
         write_log(f"Docker update failed job={job_id}: {message}")
@@ -1110,10 +1289,28 @@ def restart_container_async(delay: float = 0.4) -> None:
     its response first."""
     def _do() -> None:
         time.sleep(delay)
+        worker_was_running = False
         try:
-            run([*compose_command(), "restart", SERVICE_NAME])
-            write_log(f"Restarted container service '{SERVICE_NAME}'.")
+            worker_was_running = drain_ai_worker_before_update()
+            if worker_was_running:
+                wait_for_ai_worker_idle()
+                # Stop every process that may hold a profile DB before the
+                # worker boot applies a staged restore. The worker comes back
+                # first and is the sole restore owner; web starts only after
+                # the worker health/control route confirms completion.
+                run([*compose_command(), "stop", SERVICE_NAME])
+                run([*compose_command(), "restart", AI_WORKER_SERVICE_NAME])
+                wait_for_ai_worker_control()
+                run([*compose_command(), "up", "-d", "--no-deps", SERVICE_NAME])
+                write_log(
+                    f"Coordinated restart completed for '{AI_WORKER_SERVICE_NAME}' and '{SERVICE_NAME}'."
+                )
+            else:
+                run([*compose_command(), "restart", SERVICE_NAME])
+                write_log(f"Restarted container service '{SERVICE_NAME}'.")
         except Exception as exc:  # noqa: BLE001 — log and move on
+            if worker_was_running:
+                resume_ai_worker()
             write_log(f"Container restart failed: {exc}")
         finally:
             if update_lock.locked():
@@ -1131,16 +1328,50 @@ def rollback_container_async(delay: float = 0.4) -> None:
     def _do() -> None:
         time.sleep(delay)
         set_state(phase="rolling_back", error=None, rollback=rollback_status())
+        worker_was_running = False
         try:
             image_id = docker_image_id(ROLLBACK_IMAGE_NAME)
             if not image_id:
                 raise RuntimeError(f"No rollback image is available at {ROLLBACK_IMAGE_NAME}.")
 
+            worker_was_running = drain_ai_worker_before_update()
+            target_supports_worker = image_supports_durable_ai_worker(ROLLBACK_IMAGE_NAME)
+            if worker_was_running and target_supports_worker:
+                wait_for_ai_worker_web_requests()
+            elif worker_was_running:
+                # The first rollback after introducing the split architecture
+                # can target an image that predates the worker role/proxy. Such
+                # an image would start a scheduler in BOTH Compose services.
+                # Drain completely and remove the worker before booting the
+                # legacy app in its original single-process mode.
+                wait_for_ai_worker_idle()
             run([docker_command(), "tag", ROLLBACK_IMAGE_NAME, IMAGE_NAME])
-            run([*compose_command(), "up", "-d", "--no-build", "--force-recreate", SERVICE_NAME])
-            set_state(phase="completed", error=None, rollback=rollback_status())
+            if worker_was_running and not target_supports_worker:
+                run([
+                    *compose_command(), "rm", "-f", "-s", AI_WORKER_SERVICE_NAME,
+                ])
+                worker_was_running = False
+                write_log(
+                    "Rollback target predates the durable worker; returned to single-process mode."
+                )
+            run([
+                *compose_command(), "up", "-d", "--no-build", "--no-deps",
+                "--force-recreate", SERVICE_NAME,
+            ])
+            if target_supports_worker:
+                refresh_ai_worker_after_update(worker_was_running)
+            set_state(
+                phase="completed",
+                error=None,
+                rollback=rollback_status(),
+                waitReason=None,
+                activeRunCount=0,
+                responseBoundRunCount=0,
+            )
             write_log(f"Rolled back container service '{SERVICE_NAME}' to {ROLLBACK_IMAGE_NAME}.")
         except Exception as exc:  # noqa: BLE001 — log and surface through /status
+            if worker_was_running:
+                resume_ai_worker()
             message = str(exc)
             set_state(phase="failed", error=message, rollback=rollback_status())
             write_log(f"Container rollback failed: {message}")
@@ -1181,42 +1412,61 @@ def update_clis() -> dict:
         return {"ok": False, "error": "No CLI packages configured to update."}
     write_log("Starting CLI update: " + ", ".join(CLI_UPDATE_PACKAGES))
 
-    # Clear orphaned npm staging temp dirs that would otherwise block the
-    # install with ENOTEMPTY (see NPM_STAGING_SWEEP).
-    run_capture(
-        [*compose_command(), "exec", "-T", SERVICE_NAME, "sh", "-lc",
-         f"N={NPM_GLOBAL_NODE_MODULES}; {NPM_STAGING_SWEEP}"],
-        timeout=30,
-    )
+    # Claude/Codex live in a shared bind-mounted npm prefix used by both
+    # services. Mutating that prefix while an agent process is executing can
+    # replace its binary/package files mid-run, so close admission and wait for
+    # every accepted worker run before touching the installation.
+    worker_was_running = drain_ai_worker_before_update()
+    if worker_was_running:
+        wait_for_ai_worker_idle()
 
-    code, output = run_capture(
-        [*compose_command(), "exec", "-T", SERVICE_NAME, "npm", "install", "-g",
-         "--include=optional", "--foreground-scripts", *CLI_UPDATE_PACKAGES],
-        timeout=300,
-    )
-    if code != 0:
-        return {"ok": False, "error": f"npm install failed (exit {code}).", "log": output[-2000:]}
+    try:
+        # Clear orphaned npm staging temp dirs that would otherwise block the
+        # install with ENOTEMPTY (see NPM_STAGING_SWEEP).
+        run_capture(
+            [*compose_command(), "exec", "-T", SERVICE_NAME, "sh", "-lc",
+             f"N={NPM_GLOBAL_NODE_MODULES}; {NPM_STAGING_SWEEP}"],
+            timeout=30,
+        )
 
-    # Verify the binaries actually run — a 0 exit from npm doesn't guarantee the
-    # native binary landed (see CLI_VERIFY_PROBE).
-    verify_code, verify_out = run_capture(
-        [*compose_command(), "exec", "-T", SERVICE_NAME, "sh", "-lc", CLI_VERIFY_PROBE],
-        timeout=30,
-    )
-    if verify_code != 0:
-        return {
-            "ok": False,
-            "error": "CLI update finished but a binary is broken (native install did not land). "
-                     "Cleared the orphaned temp dir — re-run the update.",
-            "log": (output + "\n" + verify_out)[-2000:],
-        }
+        code, output = run_capture(
+            [*compose_command(), "exec", "-T", SERVICE_NAME, "npm", "install", "-g",
+             "--include=optional", "--foreground-scripts", *CLI_UPDATE_PACKAGES],
+            timeout=300,
+        )
+        if code != 0:
+            if worker_was_running:
+                resume_ai_worker()
+            return {"ok": False, "error": f"npm install failed (exit {code}).", "log": output[-2000:]}
 
-    _, versions = run_capture(
-        [*compose_command(), "exec", "-T", SERVICE_NAME, "sh", "-lc", CLI_VERSION_PROBE],
-        timeout=30,
-    )
-    restart_container_async()
-    return {"ok": True, "phase": "restarting", "versions": versions.strip()}
+        # Verify the binaries actually run — a 0 exit from npm doesn't guarantee the
+        # native binary landed (see CLI_VERIFY_PROBE).
+        verify_code, verify_out = run_capture(
+            [*compose_command(), "exec", "-T", SERVICE_NAME, "sh", "-lc", CLI_VERIFY_PROBE],
+            timeout=30,
+        )
+        if verify_code != 0:
+            if worker_was_running:
+                resume_ai_worker()
+            return {
+                "ok": False,
+                "error": "CLI update finished but a binary is broken (native install did not land). "
+                         "Cleared the orphaned temp dir — re-run the update.",
+                "log": (output + "\n" + verify_out)[-2000:],
+            }
+
+        _, versions = run_capture(
+            [*compose_command(), "exec", "-T", SERVICE_NAME, "sh", "-lc", CLI_VERSION_PROBE],
+            timeout=30,
+        )
+        # Keep admission closed across the short response-flush delay. The
+        # coordinated restart thread re-confirms drain and owns lock release.
+        restart_container_async()
+        return {"ok": True, "phase": "restarting", "versions": versions.strip()}
+    except Exception:
+        if worker_was_running:
+            resume_ai_worker()
+        raise
 
 
 # ── Background job containers ────────────────────────────────────────────
@@ -1552,9 +1802,22 @@ def main() -> None:
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
-        if sys.argv[1] != "--save-rollback":
-            raise SystemExit(f"Unknown argument: {sys.argv[1]}")
         LOG_DIR.mkdir(parents=True, exist_ok=True)
-        save_current_image_for_rollback("manual", sys.argv[2] if len(sys.argv) > 2 else BRANCH)
+        if sys.argv[1] == "--save-rollback":
+            save_current_image_for_rollback("manual", sys.argv[2] if len(sys.argv) > 2 else BRANCH)
+        elif sys.argv[1] == "--deploy-current":
+            if not TOKEN_FILE.exists():
+                raise SystemExit(f"Missing token file: {TOKEN_FILE}")
+            update_stack({
+                "jobId": f"manual-{int(time.time())}",
+                "targetBranch": current_git_ref() or BRANCH,
+                "skipGit": True,
+            })
+            with state_lock:
+                final_state = dict(state)
+            if final_state.get("phase") != "completed":
+                raise SystemExit(final_state.get("error") or "Manual deploy failed.")
+        else:
+            raise SystemExit(f"Unknown argument: {sys.argv[1]}")
     else:
         main()

@@ -553,17 +553,19 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
             }
 
             if (blocksParentOutput) blockingDelegations.add(callId)
-            try {
-                const result = await executeTool(tool, callArgs, toolContext
-                    ? { ...toolContext, currentToolCallId: callId }
-                    : undefined)
-                respond(requestId, {
-                    contentItems: [{ type: 'inputText', text: formatToolResult(result.success, result.data, result.error) }],
-                    success: result.success,
-                })
-            } finally {
-                blockingDelegations.delete(callId)
-            }
+            const result = await executeTool(tool, callArgs, toolContext
+                ? { ...toolContext, currentToolCallId: callId }
+                : undefined)
+            respond(requestId, {
+                contentItems: [{ type: 'inputText', text: formatToolResult(result.success, result.data, result.error) }],
+                success: result.success,
+            })
+            // Do not release parent output here. The app-server may already
+            // have written legacy parent commentary to stdout while the tool
+            // was pending, but Node can observe this local promise settling
+            // before that stdout chunk arrives. `item/completed` is emitted on
+            // the same ordered stream as agent messages, so it is the safe
+            // boundary for releasing the parent below.
         }
 
         const handleNotification = (method: string, params?: AnyObj) => {
@@ -785,6 +787,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                 const text = contentItemsToText(item.contentItems) || (ok ? '' : 'Tool call failed')
                 if (!firedToolCalls.has(item.id)) fireToolCall(item.id, name, toRecord(item.arguments))
                 fireToolResult(item.id, name, ok, text)
+                blockingDelegations.delete(item.id)
                 return
             }
 

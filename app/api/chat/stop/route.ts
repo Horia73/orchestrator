@@ -1,9 +1,11 @@
 import { stopChatStream } from '@/lib/chat-streams'
 import { clearFollowUps } from '@/lib/chat-followups'
 import { runWithRequestProfile } from "@/lib/profiles/server"
+import { proxyToDurableAiWorker, shouldProxyToDurableAiWorker } from '@/lib/ai/durable-worker'
 
 export async function POST(request: Request) {
   return runWithRequestProfile(request, async () => {
+        if (shouldProxyToDurableAiWorker()) return proxyToDurableAiWorker(request)
         let body: { conversationId?: string; messageId?: string }
         try {
             body = await request.json()

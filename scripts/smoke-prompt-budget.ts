@@ -34,11 +34,12 @@ process.env.ORCHESTRATOR_STATE_DIR = stateDir
 // fails, run scripts/inspect-orchestrator-prompt-full.ts for the breakdown
 // and either trim or consciously raise the budget in the same change.
 //
-// 2026-07: raised 165k → 170k. The baseline had already drifted to ~167.3k on
-// master (organic prompt growth, over the old ceiling before this change), and
-// the `ask_user` guidance block adds a lean ~0.9k on top. Restores real
-// headroom so the guard catches the NEXT creep instead of staying tripped.
-const MAX_PROMPT_CHARS = 170_000
+// 2026-07: raised 165k → 170k after the ask_user guidance landed, then to 173k
+// when the complete release checkout measured ~170.7k. The stronger combined
+// prompt + real tool-schema ceiling below remains 225k (currently ~221.5k), so
+// this restores copy-edit headroom without expanding the effective payload
+// budget or dropping useful onboarding/safety instructions.
+const MAX_PROMPT_CHARS = 173_000
 const MAX_PROMPT_PLUS_TOOL_SCHEMA_CHARS = 225_000
 
 let failures = 0

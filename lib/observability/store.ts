@@ -54,7 +54,6 @@ interface StartArgs {
 
 const globalForObservabilityStore = globalThis as unknown as {
     __orchestratorActiveRequestLogIds?: Set<string>
-    __orchestratorRequestLogBootSealDone?: boolean
 }
 
 const activeRequestLogIds =
@@ -401,6 +400,13 @@ const sealStreamingRequestStmt = db.prepare(`
     WHERE id = @id AND status = 'streaming'
 `)
 
+const sealInterruptedAssistantMessageStmt = db.prepare(`
+    UPDATE messages SET
+        status = 'aborted',
+        durationMs = COALESCE(durationMs, @durationMs)
+    WHERE id = @id AND role = 'assistant' AND status IS NULL
+`)
+
 export function sealInterruptedStreamingRequestLogs(options?: {
     now?: number
     activeRequestIds?: ReadonlySet<string>
@@ -425,6 +431,10 @@ export function sealInterruptedStreamingRequestLogs(options?: {
                     errorMessage: INTERRUPTED_STREAM_ERROR_MESSAGE,
                 })
                 if (result.changes > 0) {
+                    sealInterruptedAssistantMessageStmt.run({
+                        id: row.id,
+                        durationMs,
+                    })
                     sealedIds.push(row.id)
                     activeRequestLogIds.delete(row.id)
                 }
@@ -442,11 +452,6 @@ export function sealInterruptedStreamingRequestLogs(options?: {
     }
 
     return sealedIds.length
-}
-
-if (!globalForObservabilityStore.__orchestratorRequestLogBootSealDone) {
-    globalForObservabilityStore.__orchestratorRequestLogBootSealDone = true
-    sealInterruptedStreamingRequestLogs()
 }
 
 function indexRequestLog(requestId: string): void {

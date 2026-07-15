@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 
 import { guardSensitiveRequest } from '@/lib/api/request-guard'
+import { proxyToDurableAiWorker, shouldProxyToDurableAiWorker } from '@/lib/ai/durable-worker'
 import { getRuntimeConfig, setBrowserAgentProEnabled } from '@/lib/config'
 import { runWithRequestProfile } from "@/lib/profiles/server"
 
@@ -8,6 +9,7 @@ export async function PUT(request: Request) {
   return runWithRequestProfile(request, async () => {
         const guard = guardSensitiveRequest(request)
         if (guard) return guard
+        if (shouldProxyToDurableAiWorker()) return proxyToDurableAiWorker(request)
 
         let body: unknown
         try {

@@ -28,6 +28,10 @@ services:
       ORCHESTRATOR_HOST: 0.0.0.0
       ORCHESTRATOR_PORT: "3000"
       ORCHESTRATOR_PUBLIC_URL: ${ORCHESTRATOR_PUBLIC_URL:-}
+      # AI/model work runs in a separate service. Rebuilding this web service
+      # therefore drops only the client proxy connection; the accepted turn
+      # continues in ai-worker and the UI reattaches from persisted snapshots.
+      ORCHESTRATOR_AI_WORKER_URL: http://ai-worker:3100
       ORCHESTRATOR_SELF_DEV_SOURCE_DIR: /orchestrator-source
       PORT: "3000"
       NPM_CONFIG_PREFIX: /home/node/.npm-global
@@ -41,7 +45,9 @@ services:
       PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium
     ports:
       - "127.0.0.1:${ORCHESTRATOR_PORT:-3000}:3000"
-      - "127.0.0.1:${BROWSER_AGENT_VNC_WS_PORT:-6080}:6080"
+    depends_on:
+      ai-worker:
+        condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # Bind mounts to host paths set by install.sh. Defaults are relative to the
@@ -50,3 +56,51 @@ services:
       - ${ORCHESTRATOR_DATA_DIR:-./.orchestrator-data}:/app/.orchestrator
       - ${ORCHESTRATOR_NODE_HOME:-./.orchestrator-node-home}:/home/node
       - ${ORCHESTRATOR_SELF_DEV_HOST_SOURCE_DIR:-.}:/orchestrator-source
+
+  ai-worker:
+    # Deliberately uses the image built by `orchestrator` but has no build
+    # section of its own. Managed deploys rebuild/recreate only the web service;
+    # this container stays pinned to its old image digest until its active runs
+    # drain, then the host bridge rotates it onto the freshly tagged image.
+    image: orchestrator:local
+    restart: unless-stopped
+    user: "${ORCHESTRATOR_UID:-1000}:${ORCHESTRATOR_GID:-1000}"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      ORCHESTRATOR_SERVICE_MANAGER: docker
+      ORCHESTRATOR_TRUSTED_LOOPBACK_FORWARDERS: ${ORCHESTRATOR_TRUSTED_LOOPBACK_FORWARDERS:-172.16.0.0/12}
+      ORCHESTRATOR_AI_WORKER_PROCESS: "1"
+      ORCHESTRATOR_AI_WORKER_URL: http://ai-worker:3100
+      ORCHESTRATOR_HOST: 0.0.0.0
+      ORCHESTRATOR_PORT: "3100"
+      ORCHESTRATOR_PUBLIC_URL: ${ORCHESTRATOR_PUBLIC_URL:-}
+      ORCHESTRATOR_SELF_DEV_SOURCE_DIR: /orchestrator-source
+      PORT: "3100"
+      NPM_CONFIG_PREFIX: /home/node/.npm-global
+      PATCHRIGHT_BROWSERS_PATH: /ms-playwright
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      BROWSER_AGENT_LIVE_VIEW: "1"
+      BROWSER_AGENT_VNC_WS_HOST: 0.0.0.0
+      BROWSER_AGENT_VNC_WS_PORT: "6080"
+      BROWSER_AGENT_VNC_WS_PUBLIC_URL: ${BROWSER_AGENT_VNC_WS_PUBLIC_URL:-ws://127.0.0.1:6080}
+      WHATSAPP_CHROME_EXECUTABLE_PATH: /usr/bin/chromium
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium
+    ports:
+      # Control is host-loopback only; the host bridge uses it to drain and
+      # rotate the worker without exposing the worker API publicly.
+      - "127.0.0.1:${ORCHESTRATOR_AI_WORKER_HOST_PORT:-3101}:3100"
+      - "127.0.0.1:${BROWSER_AGENT_VNC_WS_PORT:-6080}:6080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${ORCHESTRATOR_DATA_DIR:-./.orchestrator-data}:/app/.orchestrator
+      - ${ORCHESTRATOR_NODE_HOME:-./.orchestrator-node-home}:/home/node
+      - ${ORCHESTRATOR_SELF_DEV_HOST_SOURCE_DIR:-.}:/orchestrator-source
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent --show-error http://127.0.0.1:3100/api/ping >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 6

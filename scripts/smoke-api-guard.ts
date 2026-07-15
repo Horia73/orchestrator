@@ -19,6 +19,7 @@ async function main(): Promise<void> {
     const originalApiToken = process.env.ORCHESTRATOR_API_TOKEN
     const originalAccessToken = process.env.ORCHESTRATOR_ACCESS_TOKEN
     const originalTrustedLoopbackForwarders = process.env.ORCHESTRATOR_TRUSTED_LOOPBACK_FORWARDERS
+    const originalDockerUpdateToken = process.env.ORCHESTRATOR_DOCKER_UPDATE_TOKEN
     delete process.env.ORCHESTRATOR_API_TOKEN
     delete process.env.ORCHESTRATOR_ACCESS_TOKEN
     delete process.env.ORCHESTRATOR_TRUSTED_LOOPBACK_FORWARDERS
@@ -52,6 +53,11 @@ async function main(): Promise<void> {
         isProfileExemptPath('/api/ping') === true,
     )
     check(
+        'durable worker control uses its own service-token guard',
+        shouldGuardApiRequest('/api/internal/ai-worker/control', 'POST') === false &&
+        isProfileExemptPath('/api/internal/ai-worker/control') === true,
+    )
+    check(
         'published apps reach their route before profile gating',
         isProfileExemptPath('/published-apps/smoke-static/assets/app.js') === true,
     )
@@ -82,6 +88,30 @@ async function main(): Promise<void> {
         },
     }))
     check('X-Orchestrator-API-Token satisfies public API guard', tokenGuard === null, tokenGuard?.status)
+
+    process.env.ORCHESTRATOR_DOCKER_UPDATE_TOKEN = 'worker-service-secret'
+    const workerProxyGuard = guardSensitiveRequest(new Request('http://ai-worker:3100/api/browser-agent/live', {
+        headers: {
+            host: 'ai-worker:3100',
+            origin: 'https://orchestrator.example.com',
+            'x-forwarded-host': 'orchestrator.example.com',
+            'x-forwarded-proto': 'https',
+            'x-orchestrator-ai-worker-proxy': '1',
+            'x-orchestrator-ai-worker-token': 'worker-service-secret',
+        },
+    }))
+    check('authenticated durable-worker proxy may preserve the public origin', workerProxyGuard === null, workerProxyGuard?.status)
+    const spoofedWorkerProxyGuard = guardSensitiveRequest(new Request('http://ai-worker:3100/api/browser-agent/live', {
+        headers: {
+            host: 'ai-worker:3100',
+            origin: 'https://orchestrator.example.com',
+            'x-forwarded-host': 'orchestrator.example.com',
+            'x-forwarded-proto': 'https',
+            'x-orchestrator-ai-worker-proxy': '1',
+            'x-orchestrator-ai-worker-token': 'wrong-secret',
+        },
+    }))
+    check('spoofed durable-worker proxy remains blocked', spoofedWorkerProxyGuard?.status === 403, spoofedWorkerProxyGuard?.status)
 
     delete process.env.ORCHESTRATOR_API_TOKEN
     const implicitForwardedLoopbackGuard = guardSensitiveRequest(new Request('http://127.0.0.1:3000/api/config', {
@@ -186,6 +216,8 @@ async function main(): Promise<void> {
     else process.env.ORCHESTRATOR_ACCESS_TOKEN = originalAccessToken
     if (originalTrustedLoopbackForwarders === undefined) delete process.env.ORCHESTRATOR_TRUSTED_LOOPBACK_FORWARDERS
     else process.env.ORCHESTRATOR_TRUSTED_LOOPBACK_FORWARDERS = originalTrustedLoopbackForwarders
+    if (originalDockerUpdateToken === undefined) delete process.env.ORCHESTRATOR_DOCKER_UPDATE_TOKEN
+    else process.env.ORCHESTRATOR_DOCKER_UPDATE_TOKEN = originalDockerUpdateToken
 
     console.log(`\n${failures === 0 ? '✅ ALL OK' : `❌ ${failures} failure(s)`}`)
     process.exit(failures === 0 ? 0 : 1)

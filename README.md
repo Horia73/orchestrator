@@ -146,8 +146,12 @@ Managed installs update from inside the app or the shell:
 - **Settings → Updates** shows the installed and latest versions and applies updates.
 - `orchestrator update` does the same from the host.
 
-Active AI runs are allowed to finish before an update starts. Manual Docker
-checkouts update with `git pull --ff-only && docker compose up --build -d`.
+On Docker, active AI runs continue in the durable worker while the web service
+is rebuilt; the worker is rotated onto the new image only after those runs
+finish. For a manual checkout use `git pull --ff-only` followed by
+`python3 scripts/docker-update-bridge.py --deploy-current`. Do not use a raw
+`docker compose up --build -d` for updates: it is allowed to recreate every
+service, including the durable worker.
 
 ## Security
 

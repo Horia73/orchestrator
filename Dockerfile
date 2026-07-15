@@ -163,6 +163,7 @@ ARG ORCHESTRATOR_BUILD_COMMIT=unknown
 ARG ORCHESTRATOR_BUILD_REF=unknown
 ENV ORCHESTRATOR_BUILD_COMMIT=${ORCHESTRATOR_BUILD_COMMIT} \
     ORCHESTRATOR_BUILD_REF=${ORCHESTRATOR_BUILD_REF}
+LABEL io.orchestrator.durable-ai-worker="1"
 
 # Bake build metadata into a file the running app can read directly. We
 # can't rely on `git rev-parse HEAD` inside the container (.git is

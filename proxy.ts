@@ -10,6 +10,7 @@ const API_GUARD_EXEMPT_PATHS = new Set([
   "/api/integrations/google/oauth/callback",
   "/api/integrations/mcp/oauth/callback",
   "/api/update/host-result",
+  "/api/internal/ai-worker/control",
 ])
 
 const PROFILE_EXEMPT_PATH_PREFIXES = [
@@ -24,6 +25,7 @@ const PROFILE_EXEMPT_PATH_PREFIXES = [
 const PROFILE_EXEMPT_EXACT_PATHS = new Set([
   "/api/cli/mcp-exec",
   "/api/ping",
+  "/api/internal/ai-worker/control",
   "/favicon.ico",
   "/icon.svg",
   "/icon-192.png",

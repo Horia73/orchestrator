@@ -2,21 +2,27 @@
 // starts (both `next dev` and `next start`). This is where the scheduler's
 // background tick is armed. It must never be bundled into Edge instrumentation.
 export async function registerRuntime(): Promise<void> {
+    const {
+        isDurableAiWorkerProcess,
+        ownsDurableAiBackgroundWork,
+    } = await import('@/lib/ai/durable-worker')
     // Apply a staged backup restore BEFORE anything opens the database. The
     // connection in '@/lib/db' is created at import time, so a restored data.db
     // can only be swapped in here, on the next boot after a restore. The boot
     // module intentionally imports nothing that touches '@/lib/db'.
-    try {
-        const { applyPendingDbRestore } = await import('@/lib/settings/backup-boot')
-        applyPendingDbRestore()
-    } catch (err) {
-        console.error('[backup] pending restore check failed', err)
+    if (ownsDurableAiBackgroundWork()) {
+        try {
+            const { applyPendingDbRestore } = await import('@/lib/settings/backup-boot')
+            applyPendingDbRestore()
+        } catch (err) {
+            console.error('[backup] pending restore check failed', err)
+        }
     }
     // The voice gateway is a request-serving surface (WebSocket upgrade
     // handler consumed by scripts/start.mjs via a globalThis hook), not
     // background work — register it even when schedulers are disabled, but
     // never in throwaway preview instances.
-    if (process.env.ORCHESTRATOR_PREVIEW !== '1') {
+    if (process.env.ORCHESTRATOR_PREVIEW !== '1' && !isDurableAiWorkerProcess()) {
         try {
             const { registerVoiceGateway } = await import('@/lib/voice/gateway')
             registerVoiceGateway()
@@ -30,7 +36,7 @@ export async function registerRuntime(): Promise<void> {
     // lingers with a read-only "Profile" badge. Idempotent — a cheap no-op once
     // each profile's private/skills dir is drained. Runs before the background
     // gate so it still applies when schedulers/monitors are disabled.
-    if (process.env.ORCHESTRATOR_PREVIEW !== '1') {
+    if (process.env.ORCHESTRATOR_PREVIEW !== '1' && !isDurableAiWorkerProcess()) {
         try {
             const { promoteLegacyProfileSkillsToGlobal } = await import('@/lib/skills/registry')
             await forEachProfile((profileId) => {
@@ -50,7 +56,32 @@ export async function registerRuntime(): Promise<void> {
             console.error('[skills] failed to promote legacy profile skills', err)
         }
     }
-    if (backgroundWorkDisabled()) return
+    // A request-log row can only be considered interrupted by the process that
+    // owns AI execution. In split-process installs the web container must not
+    // seal rows that are still alive inside the durable worker. Sweep every
+    // profile explicitly; module-level one-shot recovery used to touch only
+    // whichever profile happened to import the store first.
+    if (ownsDurableAiBackgroundWork() && process.env.ORCHESTRATOR_PREVIEW !== '1') {
+        try {
+            const { sealInterruptedStreamingRequestLogs } = await import('@/lib/observability/store')
+            await forEachProfile(() => sealInterruptedStreamingRequestLogs())
+        } catch (err) {
+            console.error('[observability] failed to seal interrupted profile streams', err)
+        }
+    }
+
+    // Both the request-serving web process and the worker need their own OOM
+    // backstop. Keep this before the background-owner return below.
+    if (!backgroundWorkDisabled()) {
+        try {
+            const { startMemoryWatchdog } = await import('@/lib/observability/memory-watchdog')
+            startMemoryWatchdog()
+        } catch (err) {
+            console.error('[memory] failed to arm watchdog', err)
+        }
+    }
+
+    if (backgroundWorkDisabled() || !ownsDurableAiBackgroundWork()) return
     const { startScheduler } = await import('@/lib/scheduling/scheduler')
     startScheduler()
     // Steering resilience: if a queued follow-up isn't drained by the client
@@ -78,16 +109,6 @@ export async function registerRuntime(): Promise<void> {
         startSelfDevRecovery()
     } catch (err) {
         console.error('[self-dev] failed to arm interrupted-run recovery', err)
-    }
-    // Memory observability + OOM watchdog: periodically logs process memory
-    // (rss/heapUsed/external/arrayBuffers) and restarts the process in a
-    // controlled way if RSS climbs toward a host OOM. Motivated by the
-    // 2026-06-22 external-memory leak that the V8 heap cap could not catch.
-    try {
-        const { startMemoryWatchdog } = await import('@/lib/observability/memory-watchdog')
-        startMemoryWatchdog()
-    } catch (err) {
-        console.error('[memory] failed to arm watchdog', err)
     }
     // Pre-warm the integration status snapshot so the first scheduler tick
     // (Smart Monitor, Microscripts, scheduled agents) sees real connection

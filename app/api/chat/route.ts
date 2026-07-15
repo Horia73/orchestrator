@@ -95,6 +95,10 @@ import { generateTitle } from "@/lib/utils-chat"
 import { maybeAutoNameAttachmentOnlyConversation } from "@/lib/ai/conversation-auto-title"
 import { getProviderReadiness } from "@/lib/provider-readiness"
 import { resolveRequestOrigin } from "@/lib/app-origin"
+import {
+  proxyToDurableAiWorker,
+  shouldProxyToDurableAiWorker,
+} from "@/lib/ai/durable-worker"
 import { sendChatCompletionPushNotification } from "@/lib/push-notifications"
 import {
   appendBoundedToolDelta,
@@ -186,6 +190,10 @@ export async function POST(request: Request) {
             },
           }
         )
+      }
+
+      if (shouldProxyToDurableAiWorker()) {
+        return proxyToDurableAiWorker(request)
       }
 
       const enc = new TextEncoder()

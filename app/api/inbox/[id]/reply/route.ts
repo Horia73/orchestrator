@@ -25,6 +25,7 @@ import {
 } from "@/lib/scheduling/store"
 import { clearAgentRun, registerAgentRun } from "@/lib/agent-runs"
 import { resolveRequestOrigin } from "@/lib/app-origin"
+import { proxyToDurableAiWorker, shouldProxyToDurableAiWorker } from "@/lib/ai/durable-worker"
 import { runWithRequestProfile } from "@/lib/profiles/server"
 
 const ATTACHMENT_TYPES = new Set<Attachment["type"]>([
@@ -299,6 +300,7 @@ export async function POST(
   return runWithRequestProfile(request, async () => {
       const guard = guardSensitiveRequest(request)
       if (guard) return guard
+      if (shouldProxyToDurableAiWorker()) return proxyToDurableAiWorker(request)
 
       try {
         const { id } = await params

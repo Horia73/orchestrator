@@ -36,6 +36,15 @@ function getGuardFailureMessage(request: Request): string | null {
         return 'Malformed request URL.'
     }
 
+    // The request-serving container proxies browser-authenticated AI/browser
+    // control calls to the private durable worker. Node's fetch correctly
+    // rewrites Host to the Docker service address, while x-forwarded-host keeps
+    // the browser-visible origin for prompt URLs and live-view links. Admit
+    // that deliberate mismatch only when the shared host-bridge secret proves
+    // the request came from our sibling service; profile-session auth still
+    // runs separately on every proxied route.
+    if (hasValidAiWorkerProxyToken(request)) return null
+
     const method = request.method.toUpperCase()
     const host = request.headers.get('host')
     const forwardedHost = firstHeaderValue(request.headers.get('x-forwarded-host'))
@@ -109,6 +118,17 @@ function getGuardFailureMessage(request: Request): string | null {
     }
 
     return null
+}
+
+function hasValidAiWorkerProxyToken(request: Request): boolean {
+    if (request.headers.get('x-orchestrator-ai-worker-proxy') !== '1') return false
+    const expected = (
+        process.env.ORCHESTRATOR_DOCKER_UPDATE_TOKEN
+        || process.env.ORCHESTRATOR_HOST_UPDATE_TOKEN
+        || ''
+    ).trim()
+    const candidate = request.headers.get('x-orchestrator-ai-worker-token')?.trim() || ''
+    return Boolean(expected && candidate && constantTimeEqual(candidate, expected))
 }
 
 function isSafeMethod(method: string): boolean {
