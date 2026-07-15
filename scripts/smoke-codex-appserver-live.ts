@@ -160,6 +160,19 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     res.end(sse([
       responseCreated("offline-response-1"),
       {
+        type: "response.output_item.added",
+        item: {
+          type: "reasoning",
+          id: "offline-pre-delegation-reasoning",
+          summary: [],
+        },
+      },
+      {
+        type: "response.reasoning_summary_text.delta",
+        delta: "Delegate synchronously.",
+        summary_index: 0,
+      },
+      {
         type: "response.output_item.done",
         item: {
           type: "function_call",
@@ -167,6 +180,15 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           namespace: "orchestrator",
           name: "delegate_to",
           arguments: JSON.stringify({ agent_id: "browser_agent", prompt: "offline protocol probe" }),
+        },
+      },
+      {
+        type: "response.output_item.done",
+        item: {
+          type: "reasoning",
+          id: "offline-pre-delegation-reasoning",
+          summary: [{ type: "summary_text", text: "Delegate synchronously." }],
+          encrypted_content: Buffer.from("b".repeat(550)).toString("base64"),
         },
       },
       responseCompleted("offline-response-1"),

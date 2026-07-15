@@ -232,6 +232,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
         const rawWebToolCalls = new Map<string, { name: string; args: Record<string, unknown> }>()
         const messageTextByItem = new Map<string, string>()
         const blockingDelegations = new Set<string>()
+        const activeReasoningItems = new Set<string>()
         let parentActivityViolation = false
         let thinkingStartedAt: number | null = null
         let thinkingTotalMs = 0
@@ -690,7 +691,9 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                 case 'item/reasoning/summaryTextDelta': {
                     const delta = typeof params?.delta === 'string' ? params.delta : ''
                     if (!delta) return
-                    if (stopParentActivityDuringDelegation('reasoning')) return
+                    const itemId = typeof params?.itemId === 'string' ? params.itemId : ''
+                    const beganBeforeDelegation = itemId !== '' && activeReasoningItems.has(itemId)
+                    if (!beganBeforeDelegation && stopParentActivityDuringDelegation('reasoning')) return
                     if (thinkingStartedAt === null) thinkingStartedAt = Date.now()
                     callbacks.onThinking(delta)
                     return
@@ -773,6 +776,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
             if (itemType !== 'dynamicToolCall' && stopParentActivityDuringDelegation(itemType ?? 'tool')) {
                 return
             }
+            if (itemType === 'reasoning') activeReasoningItems.add(item.id)
             if (itemType === 'commandExecution') {
                 fireToolCall(item.id, 'shell', {
                     command: typeof item.command === 'string' ? item.command : '',
@@ -817,7 +821,8 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
             }
 
             if (itemType === 'reasoning') {
-                if (stopParentActivityDuringDelegation('reasoning')) return
+                const beganBeforeDelegation = activeReasoningItems.delete(item.id)
+                if (!beganBeforeDelegation && stopParentActivityDuringDelegation('reasoning')) return
                 closeThinking()
                 return
             }

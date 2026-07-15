@@ -200,6 +200,12 @@ rl.on("line", line => {
     send({ id: message.id, result: { turn: { id: "fake-turn" } } })
     send({ method: "turn/started", params: { turn: { id: "fake-turn" } } })
     send({ method: "item/started", params: { item: {
+      id: "pre-delegation-reasoning", type: "reasoning",
+    } } })
+    send({ method: "item/reasoning/summaryTextDelta", params: {
+      itemId: "pre-delegation-reasoning", delta: "Delegate synchronously.",
+    } })
+    send({ method: "item/started", params: { item: {
       id: "delegate-call", type: "dynamicToolCall", namespace: "orchestrator", tool: "delegate_to",
       status: "inProgress", arguments: { agent_id: "browser_agent", prompt: "diagnostic" },
     } } })
@@ -207,6 +213,12 @@ rl.on("line", line => {
       callId: "delegate-call", namespace: "orchestrator", tool: "delegate_to",
       arguments: { agent_id: "browser_agent", prompt: "diagnostic" },
     } })
+    // Codex 0.144.4 can close the already-started reasoning item after the
+    // direct client tool request is in flight. This is stream tail, not the
+    // parent resuming, and must not trip the fail-closed guard.
+    send({ method: "item/completed", params: { item: {
+      id: "pre-delegation-reasoning", type: "reasoning",
+    } } })
     if (parentViolation) {
       send({ method: "item/started", params: { item: {
         id: "forbidden-shell", type: "commandExecution", command: "git status --short", cwd: "/tmp",
