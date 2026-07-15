@@ -133,7 +133,7 @@ export const BROWSER_ACTION_JSON_SCHEMA = {
         ref: { type: 'string' },
         assetRef: { type: 'string' },
         path: { type: 'string' },
-        paths: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 20 },
+        paths: { type: 'array', items: { type: 'string', minLength: 1 }, minItems: 1, maxItems: 20 },
         optionValues: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 20 },
         checked: { type: 'boolean' },
         waitFor: { type: 'string', enum: ['url', 'text', 'ref', 'load'] },

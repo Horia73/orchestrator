@@ -2856,7 +2856,10 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                                         ? Array.from(el.labels).map((label) => label.textContent?.trim() || '').filter(Boolean).join(' ')
                                         : '';
                                     if (labels) return labels;
-                                    return el.getAttribute('placeholder') || el.getAttribute('name') || (el instanceof HTMLInputElement ? el.value : '') || '';
+                                    const fallback = el.getAttribute('placeholder') || el.getAttribute('name') || '';
+                                    if (fallback) return fallback;
+                                    if (el instanceof HTMLInputElement && ['submit', 'button', 'reset'].includes(el.type)) return el.value || '';
+                                    return '';
                                 }
                                 return (el as HTMLElement).innerText?.trim()
                                     || el.textContent?.trim()
@@ -3197,7 +3200,19 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                             for (const frame of activePage.frames()) {
                                 found = await frame.evaluate((needle) => {
                                     const visit = (root: Document | ShadowRoot): string => {
-                                        let value = root instanceof Document ? root.body?.innerText || '' : root.textContent || '';
+                                        let value = '';
+                                        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+                                        let node = walker.nextNode();
+                                        while (node) {
+                                            const parent = node.parentElement;
+                                            if (parent) {
+                                                const style = window.getComputedStyle(parent);
+                                                if (style.display !== 'none' && style.visibility !== 'hidden' && parent.getClientRects().length > 0) {
+                                                    value += ` ${node.textContent || ''}`;
+                                                }
+                                            }
+                                            node = walker.nextNode();
+                                        }
                                         for (const host of Array.from(root.querySelectorAll('*'))) {
                                             if (host.shadowRoot) value += ` ${visit(host.shadowRoot)}`;
                                         }
@@ -3281,8 +3296,8 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
 
             async uploadFile(filePath: string | string[], ref?: string): Promise<BrowserUploadFileResult> {
                 const requestedPaths = (Array.isArray(filePath) ? filePath : [filePath])
-                    .map(value => String(value || '').trim())
-                    .filter(Boolean);
+                    .map(value => String(value || '').trim());
+                if (requestedPaths.some(requestedPath => !requestedPath)) return { success: false, error: 'uploadFile paths must all be non-empty.' };
                 if (requestedPaths.length === 0) return { success: false, error: 'uploadFile needs a workspace-relative "path" or non-empty "paths" list.' };
                 if (requestedPaths.length > MAX_UPLOAD_FILES) return { success: false, error: `uploadFile accepts at most ${MAX_UPLOAD_FILES} files at once.` };
 
@@ -3438,7 +3453,13 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                                     const link = candidate as HTMLLinkElement;
                                     add('stylesheet', link.href, link.getAttribute('title') || link.href.split('/').pop() || 'stylesheet');
                                 }
-                                for (const svg of Array.from(root.querySelectorAll('svg'))) add('svg', undefined, svg.getAttribute('aria-label') || svg.querySelector('title')?.textContent || 'inline SVG', Math.round(svg.getBoundingClientRect().width) || undefined, Math.round(svg.getBoundingClientRect().height) || undefined);
+                                for (const svg of Array.from(root.querySelectorAll('svg'))) {
+                                    const markup = svg.outerHTML;
+                                    const source = markup.length <= 1_000_000
+                                        ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(markup)}`
+                                        : undefined;
+                                    add('svg', source, svg.getAttribute('aria-label') || svg.querySelector('title')?.textContent || 'inline SVG', Math.round(svg.getBoundingClientRect().width) || undefined, Math.round(svg.getBoundingClientRect().height) || undefined);
+                                }
                             }
                             for (const resource of performance.getEntriesByType('resource') as PerformanceResourceTiming[]) {
                                 if (resource.initiatorType === 'css') add('stylesheet', resource.name, resource.name.split('/').pop() || 'stylesheet');
@@ -3497,11 +3518,10 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 let sourceUrl = '';
                 let sourceFrame: Frame = activePage.mainFrame();
                 let suggestedName = '';
-                const currentDocumentUrl = activePage.url().split('#')[0];
 
                 if (target.assetRef) {
                     const entry = session.pageAssets.get(String(target.assetRef).trim());
-                    if (!entry || entry.page !== activePage || entry.pageUrl.split('#')[0] !== currentDocumentUrl) {
+                    if (!entry || entry.page !== activePage || entry.pageUrl !== activePage.url()) {
                         return { success: false, stale: true, error: `Unknown or stale asset ref "${target.assetRef}". Run listPageAssets again.` };
                     }
                     sourceUrl = entry.sourceUrl || entry.asset.url || '';
@@ -3515,7 +3535,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                         ref = inspection.ref;
                     }
                     const store = session.elementRefs;
-                    const entry = store?.page === activePage && store.url.split('#')[0] === currentDocumentUrl ? store.byRef.get(ref) : null;
+                    const entry = store?.page === activePage && store.url === activePage.url() ? store.byRef.get(ref) : null;
                     if (!entry) return { success: false, stale: true, error: `Unknown or stale element ref "${ref}". Run readPage or inspectAt again.` };
                     sourceFrame = entry.frame;
                     suggestedName = entry.label;
@@ -3537,10 +3557,10 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 try {
                     parsed = new URL(sourceUrl, sourceFrame.url() || activePage.url());
                 } catch {
-                    return { success: false, sourceUrl, error: 'The selected media URL is invalid.' };
+                    return { success: false, sourceUrl: summarizeMediaSourceUrl(sourceUrl), error: 'The selected media URL is invalid.' };
                 }
                 if (!['http:', 'https:', 'data:', 'blob:'].includes(parsed.protocol)) {
-                    return { success: false, sourceUrl: parsed.href, error: `Media downloads do not allow the ${parsed.protocol} URL scheme.` };
+                    return { success: false, sourceUrl: summarizeMediaSourceUrl(parsed.href), error: `Media downloads do not allow the ${parsed.protocol} URL scheme.` };
                 }
 
                 try {
@@ -3548,6 +3568,9 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                     let contentType = '';
                     let responseFilename = '';
                     if (parsed.protocol === 'data:') {
+                        if (parsed.href.length > Math.ceil(MAX_MEDIA_DOWNLOAD_BYTES * 1.5) + 1_024) {
+                            throw new Error(`Media exceeds the ${MAX_MEDIA_DOWNLOAD_BYTES} byte limit.`);
+                        }
                         const match = parsed.href.match(/^data:([^;,]*)(;base64)?,([\s\S]*)$/i);
                         if (!match) throw new Error('Malformed data URL.');
                         contentType = match[1] || 'application/octet-stream';
@@ -3581,7 +3604,13 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                                 Accept: 'image/*,video/*,audio/*,application/octet-stream,*/*;q=0.5',
                                 Range: `bytes=0-${MAX_MEDIA_DOWNLOAD_BYTES}`,
                             };
-                            if (/^https?:/i.test(referer)) headers.Referer = referer;
+                            if (/^https?:/i.test(referer)) {
+                                const refererUrl = new URL(referer);
+                                const targetUrl = new URL(requestUrl);
+                                headers.Referer = refererUrl.origin === targetUrl.origin
+                                    ? refererUrl.href
+                                    : `${refererUrl.origin}/`;
+                            }
                             if (userAgent) headers['User-Agent'] = userAgent;
                             if (cookies.length > 0) headers.Cookie = cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; ');
 
@@ -3662,7 +3691,10 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                                             : contentType.includes('webm') ? '.webm'
                                                 : contentType.includes('mpeg') ? '.mp3'
                                                     : '';
-                    let filename = responseFilename ? decodeURIComponent(responseFilename.trim()) : '';
+                    let filename = responseFilename ? responseFilename.trim() : '';
+                    if (filename) {
+                        try { filename = decodeURIComponent(filename); } catch { /* Keep the server-provided fallback verbatim. */ }
+                    }
                     if (!filename) filename = parsed.protocol === 'data:' || parsed.protocol === 'blob:' ? suggestedName : path.basename(parsed.pathname);
                     filename = sanitizeDownloadFilename(filename || `page-media${mimeExtension}`);
                     if (!path.extname(filename) && mimeExtension) filename += mimeExtension;
@@ -3672,7 +3704,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                     const download: BrowserDownloadFile = {
                         id: `media_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
                         timestamp: new Date().toISOString(),
-                        url: parsed.href,
+                        url: summarizeMediaSourceUrl(parsed.href),
                         suggestedFilename: filename,
                         savedPath,
                         state: 'saved',
@@ -3680,9 +3712,9 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                     };
                     session.downloads.push(download);
                     log(`✅ Page media saved: ${savedPath}`);
-                    return { success: true, sourceUrl: parsed.href, download: cloneDownload(download) };
+                    return { success: true, sourceUrl: summarizeMediaSourceUrl(parsed.href), download: cloneDownload(download) };
                 } catch (error) {
-                    return { success: false, sourceUrl: parsed.href, error: formatBrowserError(error) };
+                    return { success: false, sourceUrl: summarizeMediaSourceUrl(parsed.href), error: formatBrowserError(error) };
                 }
             },
 

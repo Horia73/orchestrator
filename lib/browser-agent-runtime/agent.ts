@@ -1442,9 +1442,9 @@ async function executeAction(
             }
 
             case 'uploadFile': {
-                const filePaths = action.paths?.map(value => String(value).trim()).filter(Boolean)
+                const filePaths = action.paths?.map(value => String(value).trim())
                     || (action.path ? [String(action.path).trim()] : []);
-                if (filePaths.length === 0) {
+                if (filePaths.length === 0 || filePaths.some(filePath => !filePath)) {
                     return {
                         success: false,
                         trace: null,

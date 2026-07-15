@@ -51,6 +51,7 @@ async function main(): Promise<void> {
             '<button id="inspect-button" onclick="document.querySelector(\'#click-result\').textContent=event.shiftKey?\'shift\':\'plain\'">Inspect target</button>',
             '<output id="click-result"></output>',
             '<label for="name">Name</label><input id="name" value="old">',
+            '<input id="secret" type="password" value="must-not-leak">',
             '<label for="choice">Choice</label><select id="choice"><option value="one">One</option><option value="two">Two</option></select>',
             '<label for="accept">Accept</label><input id="accept" type="checkbox">',
             `<img id="pixel" alt="Pixel asset" src="http://127.0.0.1:${port}/pixel.png" onclick="void 0">`,
@@ -87,6 +88,10 @@ async function main(): Promise<void> {
         const frameButton = read.elements.find(element => element.name === 'Framed action')
         assert.ok(frameButton, 'readPage should traverse child frames')
         assert.match(frameButton.frame || '', /frame/i)
+        const password = read.elements.find(element => element.role === 'input:password')
+        assert.ok(password)
+        assert.notEqual(password.name, 'must-not-leak')
+        assert.equal(password.value, undefined)
 
         const frameClick = await session.clickRef(frameButton.ref)
         assert.equal(frameClick.success, true, frameClick.error)

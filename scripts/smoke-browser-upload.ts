@@ -122,6 +122,18 @@ async function main(): Promise<void> {
             'an invalid batch must not partially replace the input selection',
         )
 
+        const rejectedEmptyBatchPath = await session.uploadFile(
+            ['files/Clienti_Oblio_TEST.xls', ''],
+            batchInput.ref,
+        )
+        assert.equal(rejectedEmptyBatchPath.success, false)
+        assert.match(rejectedEmptyBatchPath.error || '', /non-empty/i)
+        assert.equal(
+            await session.getPage()?.locator('#batch-selected').textContent(),
+            'Clienti_Oblio_TEST.xls,Produse_Oblio_TEST.xls',
+            'an empty item must reject the complete batch before attachment',
+        )
+
         const escapedUpload = await session.uploadFile(outsidePath, fileInput.ref)
         assert.equal(escapedUpload.success, false)
         assert.match(escapedUpload.error || '', /inside the active profile workspace/i)

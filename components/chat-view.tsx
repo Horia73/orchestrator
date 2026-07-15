@@ -2845,7 +2845,7 @@ export function ChatView() {
 
   // Inline browser blocks collapse to a chip while their run is in the panel.
   const browserPanelRunId =
-    !isMobile && activePanelAgentRun?.agentId === "browser_agent"
+    activePanelAgentRun?.agentId === "browser_agent"
       ? activePanelAgentRun.runId
       : null
 
