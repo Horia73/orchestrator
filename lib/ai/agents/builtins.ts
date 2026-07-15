@@ -31,6 +31,10 @@ export const DELEGATE_TOOL_IDS: string[] = [
     'delegate_parallel',
 ]
 
+export const OWNER_AGENT_HELP_TOOL_IDS: string[] = [
+    'request_owner_agent_help',
+]
+
 // Always-on control tool. Operational integration tool schemas are loaded on
 // demand via this tool (see lib/integrations/exposure.ts); it must stay
 // exposed for every agent that holds any integration tools.
@@ -420,6 +424,7 @@ export const DELEGATING_WORKSPACE_TOOLS: string[] = [
     ...LEGACY_WORKSPACE_TOOL_IDS,
     ...WORKSPACE_TOOL_IDS,
     ...DELEGATE_TOOL_IDS,
+    ...OWNER_AGENT_HELP_TOOL_IDS,
 ]
 
 export const CLI_WORKSPACE_BUILTINS: ProviderBuiltin[] = [

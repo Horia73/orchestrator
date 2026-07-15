@@ -175,6 +175,11 @@ const TOOL_META: Record<
     description: "Spawn sub-agents",
     icon: Bot,
   },
+  owner_agent_help: {
+    label: "Owner agent help",
+    description: "Let this profile ask Horia's agent for internal help",
+    icon: ShieldCheck,
+  },
   web_access: {
     label: "Web access",
     description: "Search and fetch the web",

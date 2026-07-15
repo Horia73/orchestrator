@@ -87,12 +87,18 @@ import { createBackupTool } from "./create-backup"
 import { hostStatusTool } from "./host-status"
 import { skillTools } from "./skills"
 import { profileAdminTools } from "./profile-admin"
+import {
+  completeOwnerAgentHelpTool,
+  requestOwnerAgentHelpTool,
+} from "./owner-agent-help"
 
 export const ALL_TOOL_DEFS: ToolDef[] = [
   listDirTool,
   readFileTool,
   delegateToTool,
   delegateParallelTool,
+  requestOwnerAgentHelpTool,
+  completeOwnerAgentHelpTool,
   readTool,
   writeTool,
   editTool,

@@ -40,6 +40,8 @@ import {
 } from "../apps"
 
 export const ORCHESTRATOR_ONLY_TOOL_IDS = new Set<string>([
+  "request_owner_agent_help",
+  "complete_owner_agent_help",
   MAP_RENDER_TOOL_ID,
   MAPS_STATUS_TOOL_ID,
   MAPS_CURRENT_LOCATION_TOOL_ID,

@@ -52,6 +52,7 @@ const TOOL_IDS: Record<string, ToolPermissionId> = {
   create_backup: "backups",
   apply_update: "updates",
   host_status: "updates",
+  request_owner_agent_help: "owner_agent_help",
 }
 
 export function getActiveProfilePermissions(): ProfilePermissions | null {
@@ -61,6 +62,12 @@ export function getActiveProfilePermissions(): ProfilePermissions | null {
 }
 
 export function isToolAllowedForActiveProfile(tool: ToolDef): boolean {
+  if (
+    tool.id === "request_owner_agent_help" &&
+    isAdminProfileId(getActiveProfileId())
+  ) {
+    return false
+  }
   const permissions = getActiveProfilePermissions()
   if (!permissions) return true
   const denied = deniedToolReason(tool, permissions)
@@ -71,6 +78,12 @@ export function deniedToolReason(
   tool: ToolDef,
   permissions = getActiveProfilePermissions()
 ): string | null {
+  if (
+    tool.id === "request_owner_agent_help" &&
+    isAdminProfileId(getActiveProfileId())
+  ) {
+    return "Owner-agent help is only available to member profiles."
+  }
   if (!permissions) return null
 
   const explicit = TOOL_IDS[tool.id]

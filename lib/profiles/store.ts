@@ -591,6 +591,30 @@ function initializeControlSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_profile_webhook_slugs_profile
       ON profile_webhook_slugs(profileId, updatedAt DESC);
 
+    CREATE TABLE IF NOT EXISTS owner_agent_requests (
+      id TEXT PRIMARY KEY,
+      requesterProfileId TEXT NOT NULL,
+      requesterConversationId TEXT NOT NULL,
+      requesterAgentId TEXT NOT NULL,
+      ownerProfileId TEXT NOT NULL,
+      ownerConversationId TEXT,
+      ownerAgentThreadId TEXT,
+      title TEXT NOT NULL,
+      request TEXT NOT NULL,
+      status TEXT NOT NULL,
+      response TEXT,
+      error TEXT,
+      createdAt INTEGER NOT NULL,
+      updatedAt INTEGER NOT NULL,
+      completedAt INTEGER,
+      FOREIGN KEY (requesterProfileId) REFERENCES profiles(id) ON DELETE CASCADE,
+      FOREIGN KEY (ownerProfileId) REFERENCES profiles(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_owner_agent_requests_requester
+      ON owner_agent_requests(requesterProfileId, createdAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_owner_agent_requests_status
+      ON owner_agent_requests(status, updatedAt DESC);
+
     CREATE TABLE IF NOT EXISTS control_meta (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL,

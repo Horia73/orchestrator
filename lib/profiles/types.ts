@@ -28,6 +28,7 @@ export type ToolPermissionId =
   | "shell"
   | "browser_agent"
   | "delegate_agents"
+  | "owner_agent_help"
   | "web_access"
   | "memory"
   | "skills"
@@ -99,6 +100,7 @@ export const TOOL_PERMISSION_IDS: ToolPermissionId[] = [
   "shell",
   "browser_agent",
   "delegate_agents",
+  "owner_agent_help",
   "web_access",
   "memory",
   "skills",
@@ -139,6 +141,7 @@ const MEMBER_TOOL_DEFAULTS: Record<ToolPermissionId, boolean> = {
   shell: true,
   browser_agent: true,
   delegate_agents: true,
+  owner_agent_help: false,
   web_access: true,
   memory: true,
   skills: true,
