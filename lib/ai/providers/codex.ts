@@ -80,8 +80,8 @@ export class CodexProvider implements AIProvider {
     }
 
     async stream(options: ProviderSendOptions, cb: StreamCallbacks): Promise<void> {
-        const prevSessionId = decodeAppServerSessionId(options.prevSession?.id)
-        const userPrompt = latestUserPromptWithPortableHistory(options.messages, Boolean(prevSessionId))
+        const prevSession = decodeAppServerSessionId(options.prevSession?.id)
+        const userPrompt = latestUserPromptWithPortableHistory(options.messages, Boolean(prevSession))
         const latestUserAttachments = [...options.messages]
             .reverse()
             .find(message => message.role === 'user')
@@ -108,7 +108,7 @@ export class CodexProvider implements AIProvider {
             tools,
             builtins: options.builtins ?? [],
             toolContext: options.toolContext,
-            prevSessionId,
+            prevSession,
             nativeCoderRun: isNativeCoderRun,
             cwd: options.cwd,
             signal: options.signal,
@@ -135,7 +135,7 @@ interface RunCodexAppServerArgs {
     tools: ToolDef[]
     builtins: ProviderBuiltin[]
     toolContext?: ProviderSendOptions['toolContext']
-    prevSessionId?: string
+    prevSession?: AppServerSession
     nativeCoderRun: boolean
     cwd?: string
     signal?: AbortSignal
@@ -143,8 +143,17 @@ interface RunCodexAppServerArgs {
 }
 
 const APP_SERVER_SESSION_PREFIX = 'appserver:'
+const DIRECT_TOOL_SESSION_PREFIX = 'appserver:direct:'
 const JSON_RPC_REQUEST_TIMEOUT_MS = 60_000
 const CODEX_RECONNECTING_NOTICE_RE = /^Reconnecting(?:\.{3}|…)\s+\d+\/\d+$/i
+const BLOCKING_DELEGATION_TOOLS = new Set(['delegate_to', 'delegate_parallel'])
+
+interface AppServerSession {
+    threadId: string
+    /** New managed threads use direct, blocking dynamic tools. Legacy threads
+     * may have Codex's yieldable code-mode host persisted in their rollout. */
+    directToolMode: boolean
+}
 
 export function isTransientCodexAppServerError(message: string): boolean {
     return CODEX_RECONNECTING_NOTICE_RE.test(message.trim())
@@ -161,7 +170,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
         tools,
         builtins,
         toolContext,
-        prevSessionId,
+        prevSession,
         nativeCoderRun,
         cwd,
         signal,
@@ -215,6 +224,8 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
         const firedCompactions = new Set<string>()
         const rawWebToolCalls = new Map<string, { name: string; args: Record<string, unknown> }>()
         const messageTextByItem = new Map<string, string>()
+        const blockingDelegations = new Set<string>()
+        let managedThreadUsesDirectTools = !prevSession || prevSession.directToolMode
         let thinkingStartedAt: number | null = null
         let thinkingTotalMs = 0
         let syntheticRawWebCallCount = 0
@@ -375,7 +386,12 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                 fireToolResult(id, name, false, 'No completion event received')
             }
             callbacks.onDone({
-                sessionId: activeThreadId ? encodeAppServerSessionId(activeThreadId) : undefined,
+                sessionId: activeThreadId
+                    ? encodeAppServerSessionId(
+                        activeThreadId,
+                        !nativeCoderRun && managedThreadUsesDirectTools
+                    )
+                    : undefined,
                 usage: attachBillingMetadata(finalUsage, [...billingByModel.values()]),
                 thinkingDuration: finalDurationMs !== undefined
                     ? finalDurationMs / 1000
@@ -523,6 +539,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                 }
             }
             const surfacedName = tool?.name ?? (toolName || 'tool')
+            const blocksParentOutput = BLOCKING_DELEGATION_TOOLS.has(tool?.id ?? toolName)
 
             fireToolCall(callId, surfacedName, callArgs)
 
@@ -535,13 +552,18 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                 return
             }
 
-            const result = await executeTool(tool, callArgs, toolContext
-                ? { ...toolContext, currentToolCallId: callId }
-                : undefined)
-            respond(requestId, {
-                contentItems: [{ type: 'inputText', text: formatToolResult(result.success, result.data, result.error) }],
-                success: result.success,
-            })
+            if (blocksParentOutput) blockingDelegations.add(callId)
+            try {
+                const result = await executeTool(tool, callArgs, toolContext
+                    ? { ...toolContext, currentToolCallId: callId }
+                    : undefined)
+                respond(requestId, {
+                    contentItems: [{ type: 'inputText', text: formatToolResult(result.success, result.data, result.error) }],
+                    success: result.success,
+                })
+            } finally {
+                blockingDelegations.delete(callId)
+            }
         }
 
         const handleNotification = (method: string, params?: AnyObj) => {
@@ -593,6 +615,12 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                     const delta = typeof params?.delta === 'string' ? params.delta : ''
                     if (!delta) return
                     if (itemId) messageTextByItem.set(itemId, (messageTextByItem.get(itemId) ?? '') + delta)
+                    // A synchronous delegation owns the parent turn until its
+                    // child returns. Legacy code-mode rollouts can otherwise
+                    // emit commentary checkpoints from a yielded JS cell while
+                    // delegate_to is still awaiting that child. Keep the text
+                    // only for item de-duplication; never surface it to the user.
+                    if (blockingDelegations.size > 0) return
                     closeThinking()
                     callbacks.onContent(delta)
                     return
@@ -601,6 +629,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                 case 'item/reasoning/summaryTextDelta': {
                     const delta = typeof params?.delta === 'string' ? params.delta : ''
                     if (!delta) return
+                    if (blockingDelegations.size > 0) return
                     if (thinkingStartedAt === null) thinkingStartedAt = Date.now()
                     callbacks.onThinking(delta)
                     return
@@ -705,6 +734,10 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
 
             if (itemType === 'agentMessage') {
                 const text = typeof item.text === 'string' ? item.text : ''
+                if (blockingDelegations.size > 0) {
+                    if (text) messageTextByItem.set(item.id, text)
+                    return
+                }
                 const seen = messageTextByItem.get(item.id) ?? ''
                 if (text && text.length > seen.length && text.startsWith(seen)) {
                     callbacks.onContent(text.slice(seen.length))
@@ -819,18 +852,43 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                 })
 
                 let threadResult: AnyObj
-                if (prevSessionId) {
-                    try {
-                        threadResult = await request('thread/resume', {
-                            threadId: prevSessionId,
-                            ...threadParams,
-                        }) as AnyObj
-                    } catch (err) {
-                        rememberDiagnostic(`resume failed: ${err instanceof Error ? err.message : String(err)}`)
-                        threadResult = await request('thread/start', threadParams) as AnyObj
+                if (prevSession) {
+                    if (!nativeCoderRun && !prevSession.directToolMode) {
+                        // features.code_mode_host is sticky in Codex 0.144
+                        // rollouts: thread/resume accepts the override, but the
+                        // restored thread keeps exposing the yieldable `exec`
+                        // host. Fork once to preserve completed history while
+                        // creating a thread whose dynamic tools are direct and
+                        // blocking. The new session prefix prevents re-forking.
+                        try {
+                            threadResult = await request('thread/fork', {
+                                threadId: prevSession.threadId,
+                                ...buildThreadForkParams(threadParams),
+                            }) as AnyObj
+                            managedThreadUsesDirectTools = true
+                        } catch (err) {
+                            rememberDiagnostic(`legacy direct-tool migration failed: ${err instanceof Error ? err.message : String(err)}`)
+                            threadResult = await request('thread/resume', {
+                                threadId: prevSession.threadId,
+                                ...threadParams,
+                            }) as AnyObj
+                            managedThreadUsesDirectTools = false
+                        }
+                    } else {
+                        try {
+                            threadResult = await request('thread/resume', {
+                                threadId: prevSession.threadId,
+                                ...threadParams,
+                            }) as AnyObj
+                        } catch (err) {
+                            rememberDiagnostic(`resume failed: ${err instanceof Error ? err.message : String(err)}`)
+                            threadResult = await request('thread/start', threadParams) as AnyObj
+                            managedThreadUsesDirectTools = true
+                        }
                     }
                 } else {
                     threadResult = await request('thread/start', threadParams) as AnyObj
+                    managedThreadUsesDirectTools = true
                 }
 
                 const thread = threadResult.thread as AnyObj | undefined
@@ -953,6 +1011,18 @@ function buildThreadParams(args: {
     return params
 }
 
+function buildThreadForkParams(threadParams: AnyObj): AnyObj {
+    const params = { ...threadParams }
+    // These are thread/start-only fields. A fork inherits completed history
+    // (including its dynamic tool catalog) and accepts the remaining runtime
+    // configuration overrides.
+    delete params.dynamicTools
+    delete params.serviceName
+    delete params.experimentalRawEvents
+    delete params.persistExtendedHistory
+    return params
+}
+
 function codexAllowsShell(builtins: ProviderBuiltin[]): boolean {
     return builtins.some(builtin => (
         builtin === 'bash' ||
@@ -972,18 +1042,29 @@ function buildCodexTurnInput(prompt: string, attachments: MessageAttachment[] = 
 }
 
 export const codexProviderTestHooks = {
+    runCodexAppServer,
     buildAppServerArgs,
     buildThreadParams,
+    buildThreadForkParams,
     buildCodexTurnInput,
+    encodeAppServerSessionId,
+    decodeAppServerSessionId,
 }
 
-function encodeAppServerSessionId(threadId: string): string {
-    return `${APP_SERVER_SESSION_PREFIX}${threadId}`
+function encodeAppServerSessionId(threadId: string, directToolMode: boolean): string {
+    return directToolMode
+        ? `${DIRECT_TOOL_SESSION_PREFIX}${threadId}`
+        : `${APP_SERVER_SESSION_PREFIX}${threadId}`
 }
 
-function decodeAppServerSessionId(sessionId: string | undefined): string | undefined {
+function decodeAppServerSessionId(sessionId: string | undefined): AppServerSession | undefined {
+    if (sessionId?.startsWith(DIRECT_TOOL_SESSION_PREFIX)) {
+        const threadId = sessionId.slice(DIRECT_TOOL_SESSION_PREFIX.length)
+        return threadId ? { threadId, directToolMode: true } : undefined
+    }
     if (!sessionId?.startsWith(APP_SERVER_SESSION_PREFIX)) return undefined
-    return sessionId.slice(APP_SERVER_SESSION_PREFIX.length) || undefined
+    const threadId = sessionId.slice(APP_SERVER_SESSION_PREFIX.length)
+    return threadId ? { threadId, directToolMode: false } : undefined
 }
 
 function recordCodexBillingUsage(

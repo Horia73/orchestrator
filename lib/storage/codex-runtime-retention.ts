@@ -14,6 +14,7 @@ import { ORCHESTRATOR_STATE_DIR } from '@/lib/runtime-paths'
 
 const DAY_MS = 86_400_000
 const APP_SERVER_PREFIX = 'appserver:'
+const DIRECT_TOOL_SESSION_PREFIX = 'appserver:direct:'
 const DEFAULT_SESSION_RETENTION_DAYS = 30
 const DEFAULT_DELETE_LIMIT = 200
 const DEFAULT_LOG_VACUUM_MIN_BYTES = 256 * 1024 * 1024
@@ -660,6 +661,9 @@ function tableExists(db: Database.Database, table: string): boolean {
 }
 
 function normalizeSessionId(id: string): string {
+    if (id.startsWith(DIRECT_TOOL_SESSION_PREFIX)) {
+        return id.slice(DIRECT_TOOL_SESSION_PREFIX.length)
+    }
     return id.startsWith(APP_SERVER_PREFIX) ? id.slice(APP_SERVER_PREFIX.length) : id
 }
 

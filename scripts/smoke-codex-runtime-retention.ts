@@ -29,6 +29,7 @@ try {
     const oldOrphan = addThread('old-orphan', oldSeconds)
     const compressedOrphan = addThread('compressed-orphan', oldSeconds, { compressed: true })
     addThread('referenced', oldSeconds)
+    addThread('direct-referenced', oldSeconds)
     addThread('recent-orphan', recentSeconds)
     addThread('protected-parent', oldSeconds)
     addThread('referenced-child', oldSeconds)
@@ -38,6 +39,7 @@ try {
     addEdge('protected-parent', 'referenced-child')
     addEdge('safe-parent', 'safe-child')
     addReference('appserver:referenced')
+    addReference('appserver:direct:direct-referenced')
     addReference('appserver:referenced-child', 'agent_threads')
 
     const audit = auditCodexRuntime({
@@ -48,8 +50,8 @@ try {
         retentionDays: 30,
     })
     assert.deepEqual(audit.errors, [])
-    assert.equal(audit.totalThreads, 9)
-    assert.equal(audit.referencedThreads, 2)
+    assert.equal(audit.totalThreads, 10)
+    assert.equal(audit.referencedThreads, 3)
     assert.equal(audit.recentThreads, 1)
     assert.equal(audit.missingRollouts, 1)
     assert.equal(audit.protectedParents, 1)
@@ -94,6 +96,7 @@ try {
     )
     assert.ok(!requestedDeletes.includes('safe-parent'), 'parents are deferred until descendants are gone')
     assert.ok(!requestedDeletes.includes('referenced'))
+    assert.ok(!requestedDeletes.includes('direct-referenced'))
     assert.ok(!requestedDeletes.includes('referenced-child'))
     assert.ok(!requestedDeletes.includes('protected-parent'))
 

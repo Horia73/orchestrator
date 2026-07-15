@@ -9,6 +9,7 @@ import {
   isTransientCodexAppServerError,
   mapEffortForCodex,
 } from "@/lib/ai/providers/codex"
+import { delegateToTool } from "@/lib/ai/tools/delegate-to"
 import { codexImageTestHooks, generateCodexImage } from "@/lib/ai/providers/codex-image"
 import { imageGenerator } from "@/lib/ai/agents/image-generator"
 import { migrateLegacyAgentModelSelection } from "@/lib/config"
@@ -94,6 +95,117 @@ assert.equal(
   undefined,
   "Native coder thread configuration should not override Codex code mode"
 )
+
+const legacyManagedSession = codexProviderTestHooks.decodeAppServerSessionId("appserver:legacy-thread")
+assert.deepEqual(
+  legacyManagedSession,
+  { threadId: "legacy-thread", directToolMode: false },
+  "Unversioned app-server sessions must be recognized as legacy managed threads"
+)
+const directManagedSessionId = codexProviderTestHooks.encodeAppServerSessionId("direct-thread", true)
+assert.equal(directManagedSessionId, "appserver:direct:direct-thread")
+assert.deepEqual(
+  codexProviderTestHooks.decodeAppServerSessionId(directManagedSessionId),
+  { threadId: "direct-thread", directToolMode: true },
+  "Migrated managed sessions must not be forked again"
+)
+const managedForkParams = codexProviderTestHooks.buildThreadForkParams(managedThreadParams)
+assert.equal(managedForkParams.dynamicTools, undefined, "thread/fork must not receive thread/start-only dynamicTools")
+assert.equal(managedForkParams.serviceName, undefined, "thread/fork must not receive thread/start-only serviceName")
+assert.equal(
+  (managedForkParams.config as { features?: { code_mode_host?: boolean } }).features?.code_mode_host,
+  false,
+  "Legacy thread forks must carry the direct-tool configuration override"
+)
+
+const directToolFixtureRoot = mkdtempSync(join(tmpdir(), "orchestrator-codex-direct-tools-"))
+try {
+  const fakeCodex = join(directToolFixtureRoot, "fake-codex.mjs")
+  const capturePath = join(directToolFixtureRoot, "capture.json")
+  writeFileSync(fakeCodex, `#!/usr/bin/env node
+import readline from "node:readline"
+import { writeFileSync } from "node:fs"
+
+const send = value => process.stdout.write(JSON.stringify(value) + "\\n")
+const rl = readline.createInterface({ input: process.stdin })
+rl.on("line", line => {
+  const message = JSON.parse(line)
+  if (message.id === 700 && !message.method) {
+    send({ method: "item/completed", params: { item: {
+      id: "delegate-call", type: "dynamicToolCall", tool: "delegate_to",
+      status: "completed", success: false, contentItems: [{ type: "inputText", text: "diagnostic failure" }],
+    } } })
+    send({ method: "item/agentMessage/delta", params: { itemId: "final-message", delta: "DONE" } })
+    send({ method: "item/completed", params: { item: { id: "final-message", type: "agentMessage", text: "DONE" } } })
+    send({ method: "turn/completed", params: { turn: { id: "fake-turn", status: "completed" } } })
+    return
+  }
+  if (message.method === "initialize") {
+    send({ id: message.id, result: { userAgent: "fake" } })
+    return
+  }
+  if (message.method === "thread/fork") {
+    writeFileSync(process.env.FAKE_CAPTURE_PATH, JSON.stringify({ method: message.method, params: message.params }))
+    send({ id: message.id, result: { thread: { id: "migrated-thread" } } })
+    return
+  }
+  if (message.method === "turn/start") {
+    send({ id: message.id, result: { turn: { id: "fake-turn" } } })
+    send({ id: 700, method: "item/tool/call", params: {
+      callId: "delegate-call", tool: "delegate_to", arguments: { agent_id: "browser_agent", prompt: "diagnostic" },
+    } })
+    send({ method: "item/agentMessage/delta", params: { itemId: "blocked-message", delta: "SHOULD_NOT_SURFACE" } })
+    send({ method: "item/completed", params: { item: {
+      id: "blocked-message", type: "agentMessage", text: "SHOULD_NOT_SURFACE",
+    } } })
+  }
+})
+`)
+  chmodSync(fakeCodex, 0o755)
+
+  const content: string[] = []
+  const sessions: string[] = []
+  const errors: string[] = []
+  const previousCapturePath = process.env.FAKE_CAPTURE_PATH
+  process.env.FAKE_CAPTURE_PATH = capturePath
+  try {
+    await codexProviderTestHooks.runCodexAppServer({
+      bin: fakeCodex,
+      prompt: "Run the diagnostic.",
+      model: "gpt-5.6-sol",
+      tools: [delegateToTool],
+      builtins: [],
+      prevSession: { threadId: "legacy-thread", directToolMode: false },
+      nativeCoderRun: false,
+      callbacks: {
+        onThinking() {},
+        onThinkingDone() {},
+        onContent(text) { content.push(text) },
+        onToolCall() {},
+        onToolResult() {},
+        onDone(meta) { if (meta.sessionId) sessions.push(meta.sessionId) },
+        onError(error) { errors.push(error) },
+      },
+    })
+  } finally {
+    if (previousCapturePath === undefined) delete process.env.FAKE_CAPTURE_PATH
+    else process.env.FAKE_CAPTURE_PATH = previousCapturePath
+  }
+
+  assert.deepEqual(errors, [], "The legacy-thread migration fixture must finish without provider errors")
+  assert.equal(content.join(""), "DONE", "Parent commentary emitted during delegate_to must stay suppressed")
+  assert.deepEqual(sessions, ["appserver:direct:migrated-thread"])
+  const capture = JSON.parse(readFileSync(capturePath, "utf8")) as {
+    method: string
+    params: { threadId: string; dynamicTools?: unknown; config?: { features?: { code_mode_host?: boolean } } }
+  }
+  assert.equal(capture.method, "thread/fork")
+  assert.equal(capture.params.threadId, "legacy-thread")
+  assert.equal(capture.params.dynamicTools, undefined)
+  assert.equal(capture.params.config?.features?.code_mode_host, false)
+} finally {
+  rmSync(directToolFixtureRoot, { recursive: true, force: true })
+}
 
 assert.deepEqual(
   codexProviderTestHooks.buildCodexTurnInput("Inspect these.", [
