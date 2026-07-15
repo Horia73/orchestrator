@@ -40,6 +40,9 @@ export const INTEGRATION_CONTROL_TOOL_IDS: string[] = [
 ]
 
 export const GMAIL_TOOL_IDS: string[] = [
+    'GmailStatus',
+    'GmailConfigure',
+    'GmailStartOAuth',
     'GmailSearch',
     'GmailReadThread',
     'GmailCreateDraft',

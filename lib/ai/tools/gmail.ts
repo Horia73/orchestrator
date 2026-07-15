@@ -1,7 +1,8 @@
 import fs from 'fs'
 import path from 'path'
 
-import type { ToolDef, ToolResult } from '@/lib/ai/agents/types'
+import { resolveAppOrigin } from '@/lib/app-origin'
+import type { ToolDef, ToolExecutionContext, ToolResult } from '@/lib/ai/agents/types'
 import {
     type GmailOutgoingInlineAttachment,
     type GmailOutgoingAttachment,
@@ -30,12 +31,52 @@ import {
     gmailUntrash,
     gmailGetUnsubscribeInfo,
     gmailUnsubscribe,
+    getGmailIntegrationStatus,
+    saveGmailOAuthConfig,
+    startGmailOAuth,
 } from '@/lib/integrations/gmail'
 import { clamp, collectIds, ensureParentDir, numberArg, stringArg } from './helpers'
 import { displayPath, resolveSandboxed, resolveSandboxedWritable } from './sandbox'
 
 const MAX_OUTGOING_ATTACHMENT_BYTES = 25 * 1024 * 1024
 const MAX_OUTGOING_TOTAL_ATTACHMENT_BYTES = 25 * 1024 * 1024
+const DEFAULT_ORIGIN = 'http://localhost:3000'
+
+export const gmailStatusTool: ToolDef = {
+    id: 'GmailStatus',
+    name: 'GmailStatus',
+    description: 'Checks Gmail OAuth configuration, connection state, account, scopes, and the exact redirect URI for the active profile.',
+    input_schema: { type: 'object', properties: {} },
+    tags: ['read', 'gmail', 'email', 'setup'],
+}
+
+export const gmailConfigureTool: ToolDef = {
+    id: 'GmailConfigure',
+    name: 'GmailConfigure',
+    description: [
+        'Saves Google OAuth client configuration for Gmail in the active profile environment.',
+        'Use only when the user provides OAuth client JSON, env lines, client ID, or client secret.',
+        'Never echo client secrets back to the user.',
+    ].join(' '),
+    input_schema: {
+        type: 'object',
+        properties: {
+            client_id: { type: 'string', description: 'Google OAuth client ID.' },
+            client_secret: { type: 'string', description: 'Google OAuth client secret. Treat as secret.' },
+            redirect_uri: { type: 'string', description: 'Optional redirect URI. Defaults to the shared Google OAuth callback.' },
+            raw_env: { type: 'string', description: 'Pasted env lines or Google OAuth client JSON.' },
+        },
+    },
+    tags: ['read', 'gmail', 'email', 'setup'],
+}
+
+export const gmailStartOAuthTool: ToolDef = {
+    id: 'GmailStartOAuth',
+    name: 'GmailStartOAuth',
+    description: 'Starts Gmail OAuth directly for the active profile and returns the Google consent URL. Do not use shell, curl, profile cookies, or SSH tunnels when this tool succeeds.',
+    input_schema: { type: 'object', properties: {} },
+    tags: ['read', 'gmail', 'email', 'setup', 'external_action'],
+}
 
 export const gmailSearchTool: ToolDef = {
     id: 'GmailSearch',
@@ -209,6 +250,9 @@ export const gmailDownloadAttachmentTool: ToolDef = {
 }
 
 export const gmailTools: ToolDef[] = [
+    gmailStatusTool,
+    gmailConfigureTool,
+    gmailStartOAuthTool,
     gmailSearchTool,
     gmailReadThreadTool,
     gmailCreateDraftTool,
@@ -227,6 +271,37 @@ export const gmailTools: ToolDef[] = [
     gmailCreateLabelTool,
     gmailDownloadAttachmentTool,
 ]
+
+export async function executeGmailStatus(
+    _args?: Record<string, unknown>,
+    ctx?: ToolExecutionContext
+): Promise<ToolResult> {
+    return { success: true, data: await getGmailIntegrationStatus(toolOrigin(ctx), true) }
+}
+
+export async function executeGmailConfigure(
+    args: Record<string, unknown>,
+    ctx?: ToolExecutionContext
+): Promise<ToolResult> {
+    const data = await saveGmailOAuthConfig(toolOrigin(ctx), {
+        clientId: stringArg(args, ['client_id', 'clientId']),
+        clientSecret: stringArg(args, ['client_secret', 'clientSecret']),
+        redirectUri: stringArg(args, ['redirect_uri', 'redirectUri']),
+        rawEnv: stringArg(args, ['raw_env', 'rawEnv']),
+    })
+    return { success: true, data }
+}
+
+export async function executeGmailStartOAuth(
+    _args?: Record<string, unknown>,
+    ctx?: ToolExecutionContext
+): Promise<ToolResult> {
+    return { success: true, data: startGmailOAuth(toolOrigin(ctx)) }
+}
+
+function toolOrigin(ctx?: ToolExecutionContext): string {
+    return resolveAppOrigin(ctx?.appOrigin ?? DEFAULT_ORIGIN)
+}
 
 export async function executeGmailSearch(args: Record<string, unknown>): Promise<ToolResult> {
     const query = stringArg(args, ['query', 'q'])

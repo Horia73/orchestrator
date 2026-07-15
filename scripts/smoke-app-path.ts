@@ -6,6 +6,11 @@ import {
   currentPreviewBasePath,
   prefixWithPreviewBasePath,
 } from "@/lib/app-path"
+import { normalizeWorkspacePath } from "@/lib/workspace-files-resolve"
+import {
+  isWorkspaceRuntimePath,
+  workspaceRelativePathFromRuntimePath,
+} from "@/lib/workspace-runtime-path"
 
 const originalPreviewBasePath = process.env.ORCHESTRATOR_PREVIEW_BASE_PATH
 const globals = globalThis as Record<string, unknown>
@@ -33,6 +38,33 @@ try {
   assert.equal(appPath("//cdn.example.com/a.png"), "//cdn.example.com/a.png")
   assert.equal(appPath("workspace/file.png"), "workspace/file.png")
   assert.equal(appPath("https://example.com/a.png"), "https://example.com/a.png")
+
+  const legacyWorkspacePath =
+    "/app/.orchestrator/workspace/files/reports/summary.docx"
+  const profileWorkspacePath =
+    "/app/.orchestrator/profiles/iulius/workspace/files/migrare_oblio/Lista_fisiere_WinMentor_pentru_test_Oblio.docx"
+  assert.equal(isWorkspaceRuntimePath(legacyWorkspacePath), true)
+  assert.equal(isWorkspaceRuntimePath(profileWorkspacePath), true)
+  assert.equal(
+    workspaceRelativePathFromRuntimePath(profileWorkspacePath),
+    "files/migrare_oblio/Lista_fisiere_WinMentor_pentru_test_Oblio.docx"
+  )
+  assert.equal(
+    workspaceRelativePathFromRuntimePath(
+      "C:\\app\\.orchestrator\\profiles\\iulius\\workspace\\files\\report.pdf"
+    ),
+    "files/report.pdf"
+  )
+  assert.equal(
+    isWorkspaceRuntimePath(
+      "/app/.orchestrator/profiles/iulius/not-workspace/files/report.pdf"
+    ),
+    false
+  )
+  assert.equal(
+    normalizeWorkspacePath(profileWorkspacePath),
+    "files/migrare_oblio/Lista_fisiere_WinMentor_pentru_test_Oblio.docx"
+  )
 
   process.env.ORCHESTRATOR_PREVIEW_BASE_PATH = "/dev-preview/self-123/"
   assert.equal(currentPreviewBasePath(), "/dev-preview/self-123")

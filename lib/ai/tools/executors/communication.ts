@@ -2,6 +2,7 @@ import {
   executeGmailArchive,
   executeGmailCreateDraft,
   executeGmailCreateLabel,
+  executeGmailConfigure,
   executeGmailDeletePermanently,
   executeGmailDownloadAttachment,
   executeGmailListLabels,
@@ -10,6 +11,8 @@ import {
   executeGmailModifyLabels,
   executeGmailReadThread,
   executeGmailSearch,
+  executeGmailStartOAuth,
+  executeGmailStatus,
   executeGmailSendDraft,
   executeGmailSendEmail,
   executeGmailTrash,
@@ -35,6 +38,9 @@ import {
 import type { ToolExecutor } from "./types"
 
 export const communicationToolExecutors: Record<string, ToolExecutor> = {
+  GmailStatus: executeGmailStatus,
+  GmailConfigure: executeGmailConfigure,
+  GmailStartOAuth: executeGmailStartOAuth,
   GmailSearch: executeGmailSearch,
   GmailReadThread: executeGmailReadThread,
   GmailCreateDraft: executeGmailCreateDraft,

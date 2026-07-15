@@ -22,6 +22,7 @@ import {
   isHtmlFile,
 } from "@/lib/preview-kinds"
 import { workspaceHtmlPreviewHref } from "@/lib/workspace-file-links"
+import { isWorkspaceRuntimePath } from "@/lib/workspace-runtime-path"
 import type { Components } from "react-markdown"
 import type { Attachment } from "@/lib/types"
 
@@ -306,7 +307,6 @@ function MarkdownImage({
 // model wrapped in backticks) should still be clickable, not an inert code span.
 const INLINE_URL_RE = /^https?:\/\/[^\s]+$/i
 
-const WORKSPACE_PATH_MARKER = "/.orchestrator/workspace/"
 const DOWNLOADABLE_WORKSPACE_EXT_RE =
   /\.(?:docx?|xlsx?|pptx?|pdf|txt|md|csv|json|xml|rtf|png|jpe?g|gif|webp|heic|heif|mp3|wav|m4a|aac|aiff|flac|ogg|mp4|webm|mov|mpeg|mpg|avi|wmv|3gp|glb|stl|3mf|step|stp|gcode)(?:[?#].*)?$/i
 const WORKSPACE_OUTPUT_PATH_RE =
@@ -373,7 +373,7 @@ function workspaceCandidatePath(href: string | undefined): string | null {
   if (hasProtocol && !raw.startsWith("file://")) return null
 
   const pathOnly = candidate.split(/[?#]/, 1)[0]?.replace(/\\/g, "/") ?? ""
-  const isWorkspacePath = pathOnly.includes(WORKSPACE_PATH_MARKER)
+  const isWorkspacePath = isWorkspaceRuntimePath(pathOnly)
   const isRelativeWorkspaceFile =
     !pathOnly.startsWith("/") &&
     !pathOnly.includes("://") &&

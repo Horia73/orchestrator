@@ -7,8 +7,7 @@ import {
     isInsideProtectedAgentPath,
     resolveSandboxed,
 } from '@/lib/ai/tools/sandbox'
-
-const WORKSPACE_MARKER = `${path.sep}.orchestrator${path.sep}workspace${path.sep}`
+import { workspaceRelativePathFromRuntimePath } from '@/lib/workspace-runtime-path'
 
 function isInside(parent: string, child: string): boolean {
     const rel = path.relative(parent, child)
@@ -31,11 +30,8 @@ export function normalizeWorkspacePath(input: string): string {
         // Keep the original if it is not valid percent-encoded text.
     }
 
-    const platformPath = raw.replace(/[\\/]+/g, path.sep)
-    const markerIndex = platformPath.indexOf(WORKSPACE_MARKER)
-    if (markerIndex >= 0) {
-        return platformPath.slice(markerIndex + WORKSPACE_MARKER.length)
-    }
+    const workspaceRelative = workspaceRelativePathFromRuntimePath(raw)
+    if (workspaceRelative !== null) return workspaceRelative
 
     return raw
 }

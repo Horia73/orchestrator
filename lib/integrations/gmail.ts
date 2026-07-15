@@ -261,7 +261,7 @@ export function getGmailOAuthConfig(origin: string): OAuthConfig {
     return {
         clientId: clientId.value,
         clientSecret: clientSecret.value,
-        redirectUri: resolveOAuthRedirectUri(redirectUri.value, origin, '/api/integrations/gmail/oauth/callback'),
+        redirectUri: resolveOAuthRedirectUri(redirectUri.value, origin, '/api/integrations/google/oauth/callback'),
         missing,
         envKeys: {
             clientId: clientId.key,
@@ -1218,6 +1218,12 @@ function readOAuthStates(): OAuthStateRecord[] {
     } catch {
         return []
     }
+}
+
+export function getGmailOAuthStateProvider(state: string): 'gmail' | null {
+    const clean = state.trim()
+    if (!clean) return null
+    return readOAuthStates().some(item => item.state === clean) ? 'gmail' : null
 }
 
 function writeOAuthStates(records: OAuthStateRecord[]): void {

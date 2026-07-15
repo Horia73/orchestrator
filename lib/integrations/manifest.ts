@@ -85,6 +85,11 @@ export interface IntegrationManifestEntry {
 }
 
 /** Tool ids that are part of the setup/lifecycle surface, by family. */
+const GMAIL_SETUP = [
+  "GmailStatus",
+  "GmailConfigure",
+  "GmailStartOAuth",
+]
 const GOOGLE_CALENDAR_SETUP = [
   "GoogleCalendarStatus",
   "GoogleCalendarConfigure",
@@ -125,9 +130,8 @@ export const INTEGRATION_MANIFEST: IntegrationManifestEntry[] = [
       "Email: search the mailbox, read threads, create/send drafts and emails, manage labels, archive/trash, download attachments.",
     runbookId: "gmail",
     statusKind: "gmail",
-    // Gmail has no in-tool setup surface; setup is driven via the runbook + config API.
-    setupToolIds: [],
-    operationalToolIds: [...GMAIL_TOOL_IDS],
+    setupToolIds: GMAIL_SETUP,
+    operationalToolIds: operationalOnly(GMAIL_TOOL_IDS, GMAIL_SETUP),
   },
   {
     id: "google-calendar",
