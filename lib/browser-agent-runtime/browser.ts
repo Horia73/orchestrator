@@ -1,4 +1,4 @@
-import { chromium, BrowserContext, ElementHandle, Page } from 'patchright';
+import { chromium, BrowserContext, ElementHandle, Frame, Page } from 'patchright';
 import { spawnSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
@@ -31,6 +31,8 @@ import type {
     BrowserDiagnosticsSnapshot,
     BrowserDownloadFile,
     BrowserDownloadWaitOptions,
+    BrowserDownloadMediaResult,
+    BrowserDownloadMediaTarget,
     BrowserFetchResult,
     BrowserFrameSnapshot,
     BrowserFrameSource,
@@ -39,6 +41,12 @@ import type {
     BrowserManagerOptions,
     BrowserNetworkEntry,
     BrowserClickRefResult,
+    BrowserClickOptions,
+    BrowserInspectAtResult,
+    BrowserKeyModifier,
+    BrowserMouseButton,
+    BrowserPageAsset,
+    BrowserPageAssetsResult,
     BrowserUploadFileResult,
     BrowserPageElementRef,
     BrowserPageSettleOptions,
@@ -54,6 +62,8 @@ import type {
     BrowserTabInfo,
     BrowserTabOrigin,
     BrowserVideoRecording,
+    BrowserWaitForOptions,
+    BrowserWaitForResult,
     TracedActionResult,
 } from './browser-types';
 import {
@@ -72,6 +82,8 @@ export type {
     BrowserDiagnosticsSnapshot,
     BrowserDownloadFile,
     BrowserDownloadWaitOptions,
+    BrowserDownloadMediaResult,
+    BrowserDownloadMediaTarget,
     BrowserFetchResult,
     BrowserFrameSnapshot,
     BrowserFrameSource,
@@ -80,6 +92,12 @@ export type {
     BrowserManagerOptions,
     BrowserNetworkEntry,
     BrowserClickRefResult,
+    BrowserClickOptions,
+    BrowserInspectAtResult,
+    BrowserKeyModifier,
+    BrowserMouseButton,
+    BrowserPageAsset,
+    BrowserPageAssetsResult,
     BrowserUploadFileResult,
     BrowserPageElementRef,
     BrowserPageMetrics,
@@ -94,11 +112,17 @@ export type {
     BrowserTabInfo,
     BrowserTabOrigin,
     BrowserVideoRecording,
+    BrowserWaitForOptions,
+    BrowserWaitForResult,
     TracedActionResult,
 } from './browser-types';
 
 const MAX_DIAGNOSTIC_ENTRIES = 80;
 const MAX_READ_PAGE_ELEMENTS = 150;
+const MAX_PAGE_ASSETS = 160;
+const MAX_MEDIA_DOWNLOAD_BYTES = 50 * 1024 * 1024;
+const MAX_UPLOAD_FILES = 20;
+const MAX_TARGETED_WAIT_MS = 30_000;
 const MAX_FETCH_BODY_CHARS = 12_000;
 const INTERNAL_BROWSER_URL_PREFIXES = [
     'about:',
@@ -306,6 +330,14 @@ function normalizeXdotoolKey(key: string): string {
         if (lower === 'arrowdown') return 'Down';
         return part.length === 1 ? part.toLowerCase() : part;
     }).join('+');
+}
+
+function summarizeMediaSourceUrl(value: string): string {
+    if (value.startsWith('data:')) {
+        const separator = value.indexOf(',');
+        return `${value.slice(0, separator >= 0 ? Math.min(separator + 1, 80) : 80)}…`;
+    }
+    return value.length > 2_000 ? `${value.slice(0, 1_999)}…` : value;
 }
 
 function emptyTrace(action: ActionTrace['action']): ActionTrace {
@@ -527,8 +559,9 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         elementRefs: {
             page: Page;
             url: string;
-            byRef: Map<string, { handle: ElementHandle; label: string }>;
+            byRef: Map<string, { handle: ElementHandle; frame: Frame; label: string; metadata: BrowserPageElementRef }>;
         } | null;
+        pageAssets: Map<string, { asset: BrowserPageAsset; frame: Frame; page: Page; pageUrl: string; sourceUrl?: string }>;
     };
 
     type PageOwnership = {
@@ -722,6 +755,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 ? path.resolve(/*turbopackIgnore: true*/ process.cwd(), sessionWorkspaceDir)
                 : null,
             elementRefs: null,
+            pageAssets: new Map(),
         };
         sessions.set(id, state);
         return state;
@@ -784,6 +818,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             session.lastMousePosition = null;
             session.latestAgentFrame = null;
             session.agentFrameHistory = [];
+            session.pageAssets.clear();
         }
     };
     const isContextConnected = (candidate: BrowserContext): boolean => {
@@ -1709,28 +1744,51 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         session.lastPointerAction = { x, y, kind, at: Date.now() };
     };
 
+    const normalizeClickOptions = (value?: number | BrowserClickOptions): Required<BrowserClickOptions> => {
+        const options = typeof value === 'number' ? { count: value } : (value || {});
+        return {
+            count: Number.isFinite(options.count) ? Math.max(1, Math.min(5, Math.round(options.count || 1))) : 1,
+            button: options.button || 'left',
+            modifiers: [...new Set(options.modifiers || [])].filter((modifier): modifier is BrowserKeyModifier =>
+                modifier === 'Alt' || modifier === 'Control' || modifier === 'Meta' || modifier === 'Shift'
+            ),
+        };
+    };
+
+    const mouseButtonNumber = (button: BrowserMouseButton): string =>
+        button === 'middle' ? '2' : button === 'right' ? '3' : '1';
+
     const clickDisplayCoordinate = async (
         session: BrowserSessionState,
         x: number,
         y: number,
-        count: number = 1,
+        clickOptions?: number | BrowserClickOptions,
     ): Promise<boolean> => {
         const [safeX, safeY] = clampDisplayCoordinate(x, y);
-        const repeat = Number.isFinite(count) ? Math.max(1, Math.round(count)) : 1;
+        const options = normalizeClickOptions(clickOptions);
+        const repeat = options.count;
+        const button = mouseButtonNumber(options.button);
 
         try {
-            log(`🖱️ Display click at ${safeX}, ${safeY} (Count: ${repeat})`);
+            log(`🖱️ Display ${options.button} click at ${safeX}, ${safeY} (Count: ${repeat})`);
             await xdotool(['mousemove', String(safeX), String(safeY)]);
             setDisplayPointer(session, safeX, safeY, 'click');
             if (await drawDisplayClickMarker(session, safeX, safeY)) {
                 await sleep(120);
             }
-            for (let i = 0; i < repeat; i++) {
-                await xdotool(['mousedown', '1']);
-                await sleep(45);
-                await xdotool(['mouseup', '1']);
-                if (i < repeat - 1) {
-                    await sleep(80);
+            for (const modifier of options.modifiers) {
+                await xdotool(['keydown', normalizeXdotoolKey(modifier)]);
+            }
+            try {
+                for (let i = 0; i < repeat; i++) {
+                    await xdotool(['mousedown', button]);
+                    await sleep(45);
+                    await xdotool(['mouseup', button]);
+                    if (i < repeat - 1) await sleep(80);
+                }
+            } finally {
+                for (const modifier of [...options.modifiers].reverse()) {
+                    await xdotool(['keyup', normalizeXdotoolKey(modifier)]).catch(() => {});
                 }
             }
             return true;
@@ -2009,9 +2067,10 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 }
             },
 
-            async clickCoordinate(x: number, y: number, count: number = 1): Promise<boolean> {
+            async clickCoordinate(x: number, y: number, clickOptions?: number | BrowserClickOptions): Promise<boolean> {
+                const options = normalizeClickOptions(clickOptions);
                 if (shouldUseDisplayAutomation()) {
-                    return clickDisplayCoordinate(session, x, y, count);
+                    return clickDisplayCoordinate(session, x, y, options);
                 }
 
                 const activePage = await ensureActivePage(session);
@@ -2029,7 +2088,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 }
 
                 try {
-                    log(`🖱️ Clicking at ${safeX}, ${safeY} (Count: ${count})`);
+                    log(`🖱️ ${options.button} clicking at ${safeX}, ${safeY} (Count: ${options.count})`);
 
                     await humanMouseMove(
                         activePage,
@@ -2049,10 +2108,19 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                         await sleep(120);
                     }
 
-                    if (count === 2) {
-                        await activePage.mouse.click(safeX, safeY, { clickCount: 2, delay: 70 });
-                    } else {
-                        await activePage.mouse.click(safeX, safeY, { delay: 24 });
+                    for (const modifier of options.modifiers) {
+                        await activePage.keyboard.down(modifier);
+                    }
+                    try {
+                        await activePage.mouse.click(safeX, safeY, {
+                            button: options.button,
+                            clickCount: options.count,
+                            delay: options.count > 1 ? 70 : 24,
+                        });
+                    } finally {
+                        for (const modifier of [...options.modifiers].reverse()) {
+                            await activePage.keyboard.up(modifier).catch(() => {});
+                        }
                     }
 
                     return true;
@@ -2384,14 +2452,15 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 await selectAllAndClear(activePage);
             },
 
-            async pressKey(key: string) {
+            async pressKey(key: string, modifiers: BrowserKeyModifier[] = []) {
+                const shortcut = [...new Set(modifiers), key].filter(Boolean).join('+');
                 if (shouldUseDisplayAutomation()) {
-                    await pressDisplayKey(key);
+                    await pressDisplayKey(shortcut);
                     return;
                 }
 
                 const activePage = await ensureActivePage(session);
-                await activePage.keyboard.press(key);
+                await pressShortcut(activePage, shortcut);
             },
 
             async findInPage(query: string, next: boolean = false) {
@@ -2742,130 +2811,131 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 try {
                     const activePage = await ensureActivePage(session);
                     disposeElementRefs(session);
-
-                    // Collect the live elements once, then derive metadata and
-                    // handles from the SAME in-page array so refs cannot skew.
-                    const collectionHandle = await activePage.evaluateHandle(({ maxElements }) => {
-                        const selector = [
-                            'a[href]', 'button', 'input', 'select', 'textarea', 'summary',
-                            '[role="button"]', '[role="link"]', '[role="tab"]', '[role="menuitem"]',
-                            '[role="option"]', '[role="checkbox"]', '[role="radio"]',
-                            '[role="combobox"]', '[role="switch"]', '[role="textbox"]',
-                            '[contenteditable="true"]', '[onclick]',
-                        ].join(', ');
-                        const out: Element[] = [];
-                        let total = 0;
-                        for (const el of Array.from(document.querySelectorAll(selector))) {
-                            const isFileInput = el instanceof HTMLInputElement && el.type === 'file';
-                            const rect = el.getBoundingClientRect();
-                            // File controls are commonly hidden behind a styled
-                            // "Choose file" button. Keep them addressable so the
-                            // agent can attach bytes through uploadFile without
-                            // opening an OS file picker.
-                            if (!isFileInput && (rect.width < 1 || rect.height < 1)) continue;
-                            const style = window.getComputedStyle(el);
-                            if (!isFileInput && (style.visibility === 'hidden' || style.display === 'none')) continue;
-                            total += 1;
-                            if (out.length < maxElements) out.push(el);
-                        }
-                        return { elements: out, total };
-                    }, { maxElements: MAX_READ_PAGE_ELEMENTS });
-
-                    const metadata = await activePage.evaluate((collected) => {
-                        const textOf = (el: Element): string => {
-                            const aria = el.getAttribute('aria-label')?.trim();
-                            if (aria) return aria;
-                            const labelledBy = el.getAttribute('aria-labelledby')?.trim();
-                            if (labelledBy) {
-                                const parts = labelledBy.split(/\s+/)
-                                    .map((id) => document.getElementById(id)?.textContent?.trim() || '')
-                                    .filter(Boolean);
-                                if (parts.length) return parts.join(' ');
-                            }
-                            if (el instanceof HTMLInputElement) {
-                                if (el.labels && el.labels.length > 0) {
-                                    const label = Array.from(el.labels).map((l) => l.textContent?.trim() || '').filter(Boolean).join(' ');
-                                    if (label) return label;
-                                }
-                                return el.placeholder || el.name || (el.type === 'submit' || el.type === 'button' ? el.value : '') || '';
-                            }
-                            if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
-                                if (el.labels && el.labels.length > 0) {
-                                    const label = Array.from(el.labels).map((l) => l.textContent?.trim() || '').filter(Boolean).join(' ');
-                                    if (label) return label;
-                                }
-                                return (el as HTMLTextAreaElement).placeholder ?? el.name ?? '';
-                            }
-                            const text = (el as HTMLElement).innerText?.trim() || el.textContent?.trim() || '';
-                            if (text) return text;
-                            const img = el.querySelector('img[alt]');
-                            if (img) return img.getAttribute('alt') || '';
-                            return el.getAttribute('title') || '';
-                        };
-                        const roleOf = (el: Element): string => {
-                            const explicit = el.getAttribute('role');
-                            if (explicit) return explicit;
-                            const tag = el.tagName.toLowerCase();
-                            if (tag === 'a') return 'link';
-                            if (tag === 'input') {
-                                const type = (el as HTMLInputElement).type || 'text';
-                                if (type === 'submit' || type === 'button' || type === 'reset') return 'button';
-                                if (type === 'checkbox' || type === 'radio') return type;
-                                return `input:${type}`;
-                            }
-                            if (tag === 'textarea') return 'input:multiline';
-                            if (tag === 'select') return 'select';
-                            if (tag === 'summary') return 'expander';
-                            if (el.getAttribute('contenteditable') === 'true') return 'input:richtext';
-                            return tag === 'button' ? 'button' : `clickable:${tag}`;
-                        };
-                        return collected.elements.map((el) => {
-                            const rect = el.getBoundingClientRect();
-                            const inViewport = rect.bottom > 0 && rect.right > 0
-                                && rect.top < window.innerHeight && rect.left < window.innerWidth;
-                            const entry: {
-                                role: string; name: string; href?: string; value?: string;
-                                checked?: boolean; disabled?: boolean; inViewport: boolean;
-                            } = {
-                                role: roleOf(el),
-                                name: textOf(el).replace(/\s+/g, ' ').slice(0, 80),
-                                inViewport,
-                            };
-                            if (el instanceof HTMLAnchorElement && el.href) entry.href = el.href.slice(0, 200);
-                            if (el instanceof HTMLInputElement) {
-                                if (el.type !== 'password' && el.value && el.type !== 'submit' && el.type !== 'button') {
-                                    entry.value = el.value.slice(0, 60);
-                                }
-                                if (el.type === 'checkbox' || el.type === 'radio') entry.checked = el.checked;
-                                if (el.disabled) entry.disabled = true;
-                            } else if (el instanceof HTMLSelectElement) {
-                                entry.value = (el.selectedOptions[0]?.textContent || '').trim().slice(0, 60);
-                                if (el.disabled) entry.disabled = true;
-                            } else if (el instanceof HTMLTextAreaElement) {
-                                if (el.value) entry.value = el.value.slice(0, 60);
-                                if (el.disabled) entry.disabled = true;
-                            } else if (el instanceof HTMLButtonElement && el.disabled) {
-                                entry.disabled = true;
-                            }
-                            return entry;
-                        });
-                    }, collectionHandle);
-
-                    const collectedTotal = await activePage.evaluate((collected) => collected.total, collectionHandle);
-                    const elementsHandle = await collectionHandle.getProperty('elements');
-                    const properties = await elementsHandle.getProperties();
-                    const byRef = new Map<string, { handle: ElementHandle; label: string }>();
                     const elements: BrowserPageElementRef[] = [];
-                    for (let index = 0; index < metadata.length; index++) {
-                        const handle = properties.get(String(index))?.asElement();
-                        if (!handle) continue;
-                        const ref = `e${index + 1}`;
-                        const meta = metadata[index];
-                        byRef.set(ref, { handle, label: meta.name || meta.role });
-                        elements.push({ ref, ...meta });
+                    const byRef = new Map<string, { handle: ElementHandle; frame: Frame; label: string; metadata: BrowserPageElementRef }>();
+                    let total = 0;
+
+                    const frames = activePage.frames();
+                    for (let frameIndex = 0; frameIndex < frames.length; frameIndex++) {
+                        const frame = frames[frameIndex];
+                        try {
+                            const remaining = Math.max(0, MAX_READ_PAGE_ELEMENTS - elements.length);
+                            const collectionHandle = await frame.evaluateHandle(({ maxElements }) => {
+                            const selector = [
+                                'a[href]', 'button', 'input', 'select', 'textarea', 'summary',
+                                '[role="button"]', '[role="link"]', '[role="tab"]', '[role="menuitem"]',
+                                '[role="option"]', '[role="checkbox"]', '[role="radio"]',
+                                '[role="combobox"]', '[role="switch"]', '[role="textbox"]',
+                                '[contenteditable="true"]', '[onclick]',
+                            ].join(', ');
+                            const out: Element[] = [];
+                            let found = 0;
+                            const visit = (root: Document | ShadowRoot) => {
+                                for (const el of Array.from(root.querySelectorAll(selector))) {
+                                    const isFileInput = el instanceof HTMLInputElement && el.type === 'file';
+                                    const rect = el.getBoundingClientRect();
+                                    const style = window.getComputedStyle(el);
+                                    if (!isFileInput && (rect.width < 1 || rect.height < 1 || style.visibility === 'hidden' || style.display === 'none')) continue;
+                                    found += 1;
+                                    if (out.length < maxElements) out.push(el);
+                                }
+                                for (const host of Array.from(root.querySelectorAll('*'))) {
+                                    if (host.shadowRoot) visit(host.shadowRoot);
+                                }
+                            };
+                            visit(document);
+                            return { elements: out, total: found };
+                            }, { maxElements: remaining });
+
+                            const metadata = await frame.evaluate((collected) => {
+                            const textOf = (el: Element): string => {
+                                const aria = el.getAttribute('aria-label')?.trim();
+                                if (aria) return aria;
+                                if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+                                    const labels = 'labels' in el && el.labels
+                                        ? Array.from(el.labels).map((label) => label.textContent?.trim() || '').filter(Boolean).join(' ')
+                                        : '';
+                                    if (labels) return labels;
+                                    return el.getAttribute('placeholder') || el.getAttribute('name') || (el instanceof HTMLInputElement ? el.value : '') || '';
+                                }
+                                return (el as HTMLElement).innerText?.trim()
+                                    || el.textContent?.trim()
+                                    || el.querySelector('img[alt]')?.getAttribute('alt')
+                                    || el.getAttribute('title')
+                                    || '';
+                            };
+                            const roleOf = (el: Element): string => {
+                                const explicit = el.getAttribute('role');
+                                if (explicit) return explicit;
+                                const tag = el.tagName.toLowerCase();
+                                if (tag === 'a') return 'link';
+                                if (tag === 'input') {
+                                    const type = (el as HTMLInputElement).type || 'text';
+                                    if (type === 'submit' || type === 'button' || type === 'reset') return 'button';
+                                    if (type === 'checkbox' || type === 'radio') return type;
+                                    return `input:${type}`;
+                                }
+                                if (tag === 'textarea') return 'input:multiline';
+                                if (tag === 'select') return 'select';
+                                if (tag === 'summary') return 'expander';
+                                if (el.getAttribute('contenteditable') === 'true') return 'input:richtext';
+                                return tag === 'button' ? 'button' : `clickable:${tag}`;
+                            };
+                            return collected.elements.map((el) => {
+                                const rect = el.getBoundingClientRect();
+                                const tag = el.tagName.toLowerCase();
+                                const inputType = el instanceof HTMLInputElement ? el.type || 'text' : undefined;
+                                const source = el instanceof HTMLImageElement || el instanceof HTMLVideoElement || el instanceof HTMLAudioElement
+                                    ? el.currentSrc || el.getAttribute('src') || undefined
+                                    : el.querySelector('img,video,audio')?.getAttribute('src') || undefined;
+                                const entry: Omit<BrowserPageElementRef, 'ref'> = {
+                                    role: roleOf(el),
+                                    name: textOf(el).replace(/\s+/g, ' ').slice(0, 80),
+                                    tag,
+                                    kind: inputType || undefined,
+                                    inViewport: rect.bottom > 0 && rect.right > 0 && rect.top < window.innerHeight && rect.left < window.innerWidth,
+                                };
+                                if (el instanceof HTMLAnchorElement && el.href) entry.href = el.href.slice(0, 500);
+                                if (source) entry.sourceUrl = new URL(source, document.baseURI).href.slice(0, 1000);
+                                if (el instanceof HTMLInputElement) {
+                                    if (el.type !== 'password' && el.value && el.type !== 'submit' && el.type !== 'button') entry.value = el.value.slice(0, 60);
+                                    if (el.type === 'checkbox' || el.type === 'radio') entry.checked = el.checked;
+                                    if (el.disabled) entry.disabled = true;
+                                    if (el.type === 'file') entry.multiple = el.multiple;
+                                } else if (el instanceof HTMLSelectElement) {
+                                    entry.value = (el.selectedOptions[0]?.textContent || '').trim().slice(0, 60);
+                                    entry.multiple = el.multiple;
+                                    if (el.disabled) entry.disabled = true;
+                                } else if (el instanceof HTMLTextAreaElement) {
+                                    if (el.value) entry.value = el.value.slice(0, 60);
+                                    if (el.disabled) entry.disabled = true;
+                                } else if (el instanceof HTMLButtonElement && el.disabled) {
+                                    entry.disabled = true;
+                                }
+                                return entry;
+                            });
+                            }, collectionHandle);
+
+                            total += await frame.evaluate((collected) => collected.total, collectionHandle);
+                            const elementsHandle = await collectionHandle.getProperty('elements');
+                            const properties = await elementsHandle.getProperties();
+                            for (let index = 0; index < metadata.length; index++) {
+                                const handle = properties.get(String(index))?.asElement();
+                                if (!handle) continue;
+                                const ref = `e${elements.length + 1}`;
+                                const frameLabel = frame === activePage.mainFrame()
+                                    ? 'main'
+                                    : `frame ${frameIndex}: ${frame.url().slice(0, 160)}`;
+                                const element: BrowserPageElementRef = { ref, ...metadata[index], frame: frameLabel };
+                                byRef.set(ref, { handle, frame, label: element.name || element.role, metadata: element });
+                                elements.push(element);
+                            }
+                            void elementsHandle.dispose().catch(() => {});
+                            void collectionHandle.dispose().catch(() => {});
+                        } catch (frameError) {
+                            log(`⚠️ readPage skipped a transient frame: ${formatBrowserError(frameError)}`);
+                        }
                     }
-                    void elementsHandle.dispose().catch(() => {});
-                    void collectionHandle.dispose().catch(() => {});
 
                     session.elementRefs = {
                         page: activePage,
@@ -2877,8 +2947,8 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                         supported: true,
                         url: activePage.url(),
                         capturedAt,
-                        total: collectedTotal,
-                        truncated: collectedTotal > elements.length,
+                        total,
+                        truncated: total > elements.length,
                         elements,
                     };
                 } catch (error) {
@@ -2894,8 +2964,263 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 }
             },
 
-            async clickRef(ref: string, count: number = 1): Promise<BrowserClickRefResult> {
+            async inspectAt(x: number, y: number): Promise<BrowserInspectAtResult> {
                 const activePage = await ensureActivePage(session);
+                let viewportX = Math.round(x);
+                let viewportY = Math.round(y);
+
+                if (shouldUseDisplayAutomation()) {
+                    const mapped = await activePage.evaluate(({ displayX, displayY }) => {
+                        const sideChrome = Math.max(0, Math.round((window.outerWidth - window.innerWidth) / 2));
+                        const topChrome = Math.max(0, Math.round(window.outerHeight - window.innerHeight - sideChrome));
+                        return {
+                            x: displayX - window.screenX - sideChrome,
+                            y: displayY - window.screenY - topChrome,
+                            width: window.innerWidth,
+                            height: window.innerHeight,
+                        };
+                    }, { displayX: viewportX, displayY: viewportY });
+                    if (mapped.x < 0 || mapped.y < 0 || mapped.x >= mapped.width || mapped.y >= mapped.height) {
+                        return { supported: true, success: false, surface: 'native-browser-ui', error: 'The coordinate is in native browser UI, outside webpage content.' };
+                    }
+                    viewportX = mapped.x;
+                    viewportY = mapped.y;
+                }
+
+                const viewport = await facade.getViewport();
+                if (viewportX < 0 || viewportY < 0 || viewportX >= viewport.width || viewportY >= viewport.height) {
+                    return { supported: true, success: false, surface: 'none', error: 'The coordinate is outside the current webpage viewport.' };
+                }
+
+                const frames = [...activePage.frames()].reverse();
+                for (let frameIndex = 0; frameIndex < frames.length; frameIndex++) {
+                    const frame = frames[frameIndex];
+                    let localX = viewportX;
+                    let localY = viewportY;
+                    if (frame !== activePage.mainFrame()) {
+                        const frameElement = await frame.frameElement().catch(() => null);
+                        const frameBox = frameElement ? await frameElement.boundingBox().catch(() => null) : null;
+                        if (frameElement) void frameElement.dispose().catch(() => {});
+                        if (!frameBox || viewportX < frameBox.x || viewportY < frameBox.y || viewportX >= frameBox.x + frameBox.width || viewportY >= frameBox.y + frameBox.height) continue;
+                        localX = viewportX - frameBox.x;
+                        localY = viewportY - frameBox.y;
+                    }
+
+                    const handle = (await frame.evaluateHandle(({ pointX, pointY }) => {
+                        let element = document.elementFromPoint(pointX, pointY);
+                        while (element?.shadowRoot) {
+                            const nested = element.shadowRoot.elementFromPoint(pointX, pointY);
+                            if (!nested || nested === element) break;
+                            element = nested;
+                        }
+                        return element;
+                    }, { pointX: localX, pointY: localY })).asElement();
+                    if (!handle) continue;
+
+                    try {
+                        const meta = await handle.evaluate((el) => {
+                            const tag = el.tagName.toLowerCase();
+                            const input = el instanceof HTMLInputElement ? el : null;
+                            const role = el.getAttribute('role')
+                                || (tag === 'a' ? 'link' : tag === 'button' ? 'button' : input ? `input:${input.type || 'text'}` : tag);
+                            const labels = input?.labels
+                                ? Array.from(input.labels).map((label) => label.textContent?.trim() || '').filter(Boolean).join(' ')
+                                : '';
+                            const name = (el.getAttribute('aria-label') || labels || (el as HTMLElement).innerText || el.textContent || el.getAttribute('title') || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+                            const rect = el.getBoundingClientRect();
+                            const media = el instanceof HTMLImageElement || el instanceof HTMLVideoElement || el instanceof HTMLAudioElement ? el : null;
+                            const result: Omit<BrowserPageElementRef, 'ref'> = {
+                                role,
+                                name,
+                                tag,
+                                kind: input?.type || undefined,
+                                inViewport: rect.bottom > 0 && rect.right > 0 && rect.top < window.innerHeight && rect.left < window.innerWidth,
+                            };
+                            if (el instanceof HTMLAnchorElement && el.href) result.href = el.href.slice(0, 500);
+                            if (media?.currentSrc || media?.getAttribute('src')) result.sourceUrl = new URL(media.currentSrc || media.getAttribute('src') || '', document.baseURI).href.slice(0, 1000);
+                            if (input) {
+                                if (input.type !== 'password' && input.value && input.type !== 'submit' && input.type !== 'button') result.value = input.value.slice(0, 60);
+                                if (input.type === 'checkbox' || input.type === 'radio') result.checked = input.checked;
+                                if (input.disabled) result.disabled = true;
+                                if (input.type === 'file') result.multiple = input.multiple;
+                            } else if (el instanceof HTMLSelectElement) {
+                                result.value = (el.selectedOptions[0]?.textContent || '').trim().slice(0, 60);
+                                result.multiple = el.multiple;
+                                if (el.disabled) result.disabled = true;
+                            } else if (el instanceof HTMLTextAreaElement) {
+                                if (el.value) result.value = el.value.slice(0, 60);
+                                if (el.disabled) result.disabled = true;
+                            } else if (el instanceof HTMLButtonElement && el.disabled) {
+                                result.disabled = true;
+                            }
+                            return result;
+                        });
+                        const bounds = await handle.boundingBox();
+                        if (!bounds) continue;
+
+                        if (!session.elementRefs || session.elementRefs.page !== activePage) {
+                            disposeElementRefs(session);
+                            session.elementRefs = { page: activePage, url: activePage.url(), byRef: new Map() };
+                        }
+                        const store = session.elementRefs;
+                        const existing = [...store.byRef.entries()].find(([, entry]) => entry.handle === handle)?.[0];
+                        const ref = existing || `e${store.byRef.size + 1}`;
+                        const frameLabel = frame === activePage.mainFrame() ? 'main' : `frame: ${frame.url().slice(0, 160)}`;
+                        const element: BrowserPageElementRef = { ref, ...meta, frame: frameLabel };
+                        store.byRef.set(ref, { handle, frame, label: element.name || element.role, metadata: element });
+                        return { supported: true, success: true, surface: 'page', ref, label: element.name || element.role, element, bounds };
+                    } catch (error) {
+                        void handle.dispose().catch(() => {});
+                        return { supported: false, success: false, surface: 'page', error: formatBrowserError(error) };
+                    }
+                }
+
+                return { supported: true, success: false, surface: 'none', error: 'No inspectable webpage element exists at this coordinate.' };
+            },
+
+            async hoverRef(ref: string): Promise<BrowserClickRefResult> {
+                const activePage = await ensureActivePage(session);
+                const store = session.elementRefs;
+                const entry = store?.page === activePage ? store.byRef.get(ref) : null;
+                if (!entry) return { success: false, stale: true, error: `Unknown or stale element ref "${ref}". Run readPage again.` };
+                try {
+                    await entry.handle.scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => {});
+                    const box = await entry.handle.boundingBox();
+                    if (!box) return { success: false, stale: true, label: entry.label, error: `Element ${ref} is detached or hidden.` };
+                    const centerX = Math.round(box.x + box.width / 2);
+                    const centerY = Math.round(box.y + box.height / 2);
+                    if (shouldUseDisplayAutomation()) {
+                        const point = await activePage.evaluate(({ x: pageX, y: pageY }) => {
+                            const sideChrome = Math.max(0, Math.round((window.outerWidth - window.innerWidth) / 2));
+                            const topChrome = Math.max(0, Math.round(window.outerHeight - window.innerHeight - sideChrome));
+                            return { x: pageX + window.screenX + sideChrome, y: pageY + window.screenY + topChrome };
+                        }, { x: centerX, y: centerY });
+                        await hoverDisplayCoordinate(session, point.x, point.y);
+                    } else {
+                        await facade.hoverCoordinate(centerX, centerY);
+                    }
+                    return { success: true, label: entry.label };
+                } catch (error) {
+                    return { success: false, label: entry.label, error: formatBrowserError(error) };
+                }
+            },
+
+            async selectOption(ref: string, values: string[]): Promise<BrowserClickRefResult> {
+                const activePage = await ensureActivePage(session);
+                const store = session.elementRefs;
+                const entry = store?.page === activePage ? store.byRef.get(ref) : null;
+                if (!entry) return { success: false, stale: true, error: `Unknown or stale element ref "${ref}". Run readPage again.` };
+                const requested = values.map(String).map(value => value.trim()).filter(Boolean).slice(0, 20);
+                if (requested.length === 0) return { success: false, label: entry.label, error: 'selectOption needs at least one value or label.' };
+                try {
+                    const isSelect = await entry.handle.evaluate((element) => element instanceof HTMLSelectElement);
+                    if (!isSelect) return { success: false, label: entry.label, error: `${ref} is not a select element.` };
+                    let selected = await entry.handle.selectOption(requested.map(value => ({ label: value }))).catch(() => []);
+                    if (selected.length === 0) {
+                        selected = await entry.handle.selectOption(requested.map(value => ({ value })));
+                    }
+                    return selected.length > 0
+                        ? { success: true, label: `${entry.label}: ${selected.join(', ')}` }
+                        : { success: false, label: entry.label, error: `No option matched ${requested.join(', ')}.` };
+                } catch (error) {
+                    return { success: false, label: entry.label, error: formatBrowserError(error) };
+                }
+            },
+
+            async setChecked(ref: string, checked: boolean): Promise<BrowserClickRefResult> {
+                const activePage = await ensureActivePage(session);
+                const store = session.elementRefs;
+                const entry = store?.page === activePage ? store.byRef.get(ref) : null;
+                if (!entry) return { success: false, stale: true, error: `Unknown or stale element ref "${ref}". Run readPage again.` };
+                try {
+                    const state = await entry.handle.evaluate((element) => {
+                        if (!(element instanceof HTMLInputElement) || (element.type !== 'checkbox' && element.type !== 'radio')) return null;
+                        return { checked: element.checked, disabled: element.disabled };
+                    });
+                    if (!state) return { success: false, label: entry.label, error: `${ref} is not a checkbox or radio input.` };
+                    if (state.disabled) return { success: false, label: entry.label, error: `${ref} is disabled.` };
+                    if (state.checked !== checked) {
+                        const clicked = await facade.clickRef(ref);
+                        if (!clicked.success) return clicked;
+                    }
+                    const actual = await entry.handle.evaluate((element) => element instanceof HTMLInputElement && element.checked);
+                    return actual === checked
+                        ? { success: true, label: entry.label }
+                        : { success: false, label: entry.label, error: `${ref} did not reach the requested checked state.` };
+                } catch (error) {
+                    return { success: false, label: entry.label, error: formatBrowserError(error) };
+                }
+            },
+
+            async waitFor(options: BrowserWaitForOptions): Promise<BrowserWaitForResult> {
+                const startedAt = Date.now();
+                const timeoutMs = Math.max(100, Math.min(MAX_TARGETED_WAIT_MS, Math.round(options.timeoutMs || 10_000)));
+                const activePage = await ensureActivePage(session);
+                const finish = (success: boolean, observation: string, extra: Partial<BrowserWaitForResult> = {}): BrowserWaitForResult => ({
+                    success,
+                    elapsedMs: Date.now() - startedAt,
+                    observation,
+                    ...extra,
+                });
+
+                try {
+                    if (options.kind === 'load') {
+                        const state = options.state === 'networkidle' ? 'networkidle' : 'domcontentloaded';
+                        await activePage.waitForLoadState(state, { timeout: timeoutMs });
+                        return finish(true, `Page reached ${state}.`);
+                    }
+
+                    while (Date.now() - startedAt < timeoutMs) {
+                        if (options.kind === 'url') {
+                            const expected = String(options.url || '').trim();
+                            if (!expected) return finish(false, 'waitFor url needs a URL substring.', { error: 'Missing URL.' });
+                            const current = activePage.url();
+                            if (current.includes(expected)) return finish(true, `URL contains "${expected}": ${current}`);
+                        } else if (options.kind === 'ref') {
+                            const ref = String(options.ref || '').trim();
+                            const store = session.elementRefs;
+                            const entry = store?.page === activePage ? store.byRef.get(ref) : null;
+                            if (!entry) return finish(false, `Element ref "${ref}" is stale or unknown.`, { stale: true, error: 'Stale ref.' });
+                            const state = options.state || 'visible';
+                            const matched = state === 'hidden'
+                                ? !(await entry.handle.isVisible().catch(() => false))
+                                : state === 'enabled'
+                                    ? await entry.handle.isEnabled().catch(() => false)
+                                    : state === 'disabled'
+                                        ? !(await entry.handle.isEnabled().catch(() => true))
+                                        : await entry.handle.isVisible().catch(() => false);
+                            if (matched) return finish(true, `Element ${ref} is ${state}.`);
+                        } else if (options.kind === 'text') {
+                            const expected = String(options.text || '').trim();
+                            if (!expected) return finish(false, 'waitFor text needs non-empty text.', { error: 'Missing text.' });
+                            let found = false;
+                            for (const frame of activePage.frames()) {
+                                found = await frame.evaluate((needle) => {
+                                    const visit = (root: Document | ShadowRoot): string => {
+                                        let value = root instanceof Document ? root.body?.innerText || '' : root.textContent || '';
+                                        for (const host of Array.from(root.querySelectorAll('*'))) {
+                                            if (host.shadowRoot) value += ` ${visit(host.shadowRoot)}`;
+                                        }
+                                        return value;
+                                    };
+                                    return visit(document).toLocaleLowerCase().includes(needle.toLocaleLowerCase());
+                                }, expected).catch(() => false);
+                                if (found) break;
+                            }
+                            const wantsHidden = options.state === 'hidden';
+                            if ((found && !wantsHidden) || (!found && wantsHidden)) return finish(true, `Text "${expected}" is ${wantsHidden ? 'hidden/absent' : 'present'}.`);
+                        }
+                        await sleep(100);
+                    }
+                    return finish(false, `Timed out after ${timeoutMs}ms waiting for ${options.kind}.`, { error: 'Targeted wait timed out.' });
+                } catch (error) {
+                    return finish(false, `waitFor failed: ${formatBrowserError(error)}`, { error: formatBrowserError(error) });
+                }
+            },
+
+            async clickRef(ref: string, clickOptions?: number | BrowserClickOptions): Promise<BrowserClickRefResult> {
+                const activePage = await ensureActivePage(session);
+                const options = normalizeClickOptions(clickOptions);
                 const store = session.elementRefs;
                 if (!store || store.page !== activePage) {
                     return {
@@ -2939,13 +3264,13 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                                 y: Math.round(y + window.screenY + topChrome),
                             };
                         }, { x: centerX, y: centerY });
-                        const clicked = await clickDisplayCoordinate(session, displayPoint.x, displayPoint.y, count);
+                        const clicked = await clickDisplayCoordinate(session, displayPoint.x, displayPoint.y, options);
                         return clicked
                             ? { success: true, label: entry.label }
                             : { success: false, label: entry.label, error: 'Display click failed.' };
                     }
 
-                    const clicked = await facade.clickCoordinate(centerX, centerY, count);
+                    const clicked = await facade.clickCoordinate(centerX, centerY, options);
                     return clicked
                         ? { success: true, label: entry.label }
                         : { success: false, label: entry.label, error: 'Click failed.' };
@@ -2954,11 +3279,12 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 }
             },
 
-            async uploadFile(filePath: string, ref?: string): Promise<BrowserUploadFileResult> {
-                const requestedPath = String(filePath || '').trim();
-                if (!requestedPath) {
-                    return { success: false, error: 'uploadFile needs a workspace-relative "path".' };
-                }
+            async uploadFile(filePath: string | string[], ref?: string): Promise<BrowserUploadFileResult> {
+                const requestedPaths = (Array.isArray(filePath) ? filePath : [filePath])
+                    .map(value => String(value || '').trim())
+                    .filter(Boolean);
+                if (requestedPaths.length === 0) return { success: false, error: 'uploadFile needs a workspace-relative "path" or non-empty "paths" list.' };
+                if (requestedPaths.length > MAX_UPLOAD_FILES) return { success: false, error: `uploadFile accepts at most ${MAX_UPLOAD_FILES} files at once.` };
 
                 let resolvedWorkspace: string;
                 try {
@@ -2967,25 +3293,29 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                     return { success: false, error: 'The active profile workspace is unavailable.' };
                 }
 
-                const candidate = path.isAbsolute(requestedPath)
-                    ? requestedPath
-                    : path.resolve(session.uploadWorkspaceDir || workspaceDir, requestedPath);
-                let resolvedFile: string;
-                try {
-                    resolvedFile = fs.realpathSync(candidate);
-                } catch {
-                    return { success: false, error: 'The requested workspace file was not found.' };
+                // Resolve and validate the complete batch before touching the
+                // page, so a bad second path can never cause a partial upload.
+                const resolvedFiles: string[] = [];
+                const relativePaths: string[] = [];
+                for (const requestedPath of requestedPaths) {
+                    const candidate = path.isAbsolute(requestedPath)
+                        ? requestedPath
+                        : path.resolve(session.uploadWorkspaceDir || workspaceDir, requestedPath);
+                    let resolvedFile: string;
+                    try {
+                        resolvedFile = fs.realpathSync(candidate);
+                    } catch {
+                        return { success: false, error: `The requested workspace file was not found: ${path.basename(requestedPath) || '<empty>'}.` };
+                    }
+                    const relative = path.relative(resolvedWorkspace, resolvedFile);
+                    if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+                        return { success: false, error: 'Every selected file must be inside the active profile workspace.' };
+                    }
+                    if (!fs.statSync(resolvedFile).isFile()) return { success: false, error: `The selected workspace path is not a file: ${relative}.` };
+                    resolvedFiles.push(resolvedFile);
+                    relativePaths.push(relative.split(path.sep).join('/'));
                 }
 
-                const relative = path.relative(resolvedWorkspace, resolvedFile);
-                if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-                    return { success: false, error: 'The selected file must be inside the active profile workspace.' };
-                }
-                if (!fs.statSync(resolvedFile).isFile()) {
-                    return { success: false, error: 'The selected workspace path is not a file.' };
-                }
-
-                const relativePath = relative.split(path.sep).join('/');
                 const activePage = await ensureActivePage(session);
                 const targetRef = String(ref || '').trim();
                 let target: ElementHandle | null = null;
@@ -3014,7 +3344,8 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                     target = entry.handle;
                     label = entry.label;
                 } else {
-                    const inputs = await activePage.$$('input[type="file"]');
+                    const inputs: ElementHandle[] = [];
+                    for (const frame of activePage.frames()) inputs.push(...await frame.$$('input[type="file"]'));
                     if (inputs.length !== 1) {
                         for (const input of inputs) void input.dispose().catch(() => {});
                         return {
@@ -3029,10 +3360,12 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 }
 
                 try {
-                    const isFileInput = await target.evaluate((element) =>
+                    const inputState = await target.evaluate((element) =>
                         element instanceof HTMLInputElement && element.type === 'file'
+                            ? { valid: true, multiple: element.multiple }
+                            : { valid: false, multiple: false }
                     );
-                    if (!isFileInput) {
+                    if (!inputState.valid) {
                         return {
                             success: false,
                             ref: targetRef || undefined,
@@ -3040,25 +3373,316 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                             error: `${targetRef || 'The selected element'} is not an input[type=file]. Run readPage and use the file input ref.`,
                         };
                     }
-                    await target.setInputFiles(resolvedFile);
+                    if (resolvedFiles.length > 1 && !inputState.multiple) {
+                        return {
+                            success: false,
+                            ref: targetRef || undefined,
+                            label,
+                            error: `${targetRef || 'The selected file input'} does not accept multiple files. Attach one file or choose an input with the multiple attribute.`,
+                        };
+                    }
+                    await target.setInputFiles(resolvedFiles);
+                    const filenames = resolvedFiles.map(resolvedFile => path.basename(resolvedFile));
                     return {
                         success: true,
                         ref: targetRef || undefined,
                         label,
-                        path: relativePath,
-                        filename: path.basename(resolvedFile),
+                        path: relativePaths[0],
+                        filename: filenames[0],
+                        paths: relativePaths,
+                        filenames,
                     };
                 } catch (error) {
                     return {
                         success: false,
                         ref: targetRef || undefined,
                         label,
-                        path: relativePath,
-                        filename: path.basename(resolvedFile),
+                        path: relativePaths[0],
+                        filename: resolvedFiles[0] ? path.basename(resolvedFiles[0]) : undefined,
+                        paths: relativePaths,
+                        filenames: resolvedFiles.map(resolvedFile => path.basename(resolvedFile)),
                         error: formatBrowserError(error).split(resolvedWorkspace).join('<workspace>'),
                     };
                 } finally {
                     if (ownsTarget) void target.dispose().catch(() => {});
+                }
+            },
+
+            async listPageAssets(): Promise<BrowserPageAssetsResult> {
+                const activePage = await ensureActivePage(session);
+                session.pageAssets.clear();
+                try {
+                    const collected = new Map<string, { asset: Omit<BrowserPageAsset, 'ref'>; frame: Frame }>();
+                    let observedTotal = 0;
+                    for (const [frameIndex, frame] of activePage.frames().entries()) {
+                        const frameAssets = await frame.evaluate(() => {
+                            const assets: Array<{ kind: BrowserPageAsset['kind']; url?: string; name: string; width?: number; height?: number }> = [];
+                            const add = (kind: BrowserPageAsset['kind'], rawUrl: string | null | undefined, name: string, width?: number, height?: number) => {
+                                let url: string | undefined;
+                                if (rawUrl) {
+                                    try { url = new URL(rawUrl, document.baseURI).href; } catch { url = undefined; }
+                                }
+                                assets.push({ kind, url, name: name.replace(/\s+/g, ' ').trim().slice(0, 120) || kind, width, height });
+                            };
+                            const roots: Array<Document | ShadowRoot> = [document];
+                            for (let index = 0; index < roots.length; index++) {
+                                for (const host of Array.from(roots[index].querySelectorAll('*'))) {
+                                    if (host.shadowRoot) roots.push(host.shadowRoot);
+                                }
+                            }
+                            for (const root of roots) {
+                                for (const image of Array.from(root.querySelectorAll('img'))) add('image', image.currentSrc || image.src, image.alt || image.getAttribute('aria-label') || 'image', image.naturalWidth || undefined, image.naturalHeight || undefined);
+                                for (const video of Array.from(root.querySelectorAll('video'))) add('video', video.currentSrc || video.src || video.querySelector('source')?.src, video.getAttribute('aria-label') || video.getAttribute('title') || 'video', video.videoWidth || undefined, video.videoHeight || undefined);
+                                for (const audio of Array.from(root.querySelectorAll('audio'))) add('audio', audio.currentSrc || audio.src || audio.querySelector('source')?.src, audio.getAttribute('aria-label') || audio.getAttribute('title') || 'audio');
+                                for (const candidate of Array.from(root.querySelectorAll('link[rel~="stylesheet"]'))) {
+                                    const link = candidate as HTMLLinkElement;
+                                    add('stylesheet', link.href, link.getAttribute('title') || link.href.split('/').pop() || 'stylesheet');
+                                }
+                                for (const svg of Array.from(root.querySelectorAll('svg'))) add('svg', undefined, svg.getAttribute('aria-label') || svg.querySelector('title')?.textContent || 'inline SVG', Math.round(svg.getBoundingClientRect().width) || undefined, Math.round(svg.getBoundingClientRect().height) || undefined);
+                            }
+                            for (const resource of performance.getEntriesByType('resource') as PerformanceResourceTiming[]) {
+                                if (resource.initiatorType === 'css') add('stylesheet', resource.name, resource.name.split('/').pop() || 'stylesheet');
+                                if (resource.initiatorType === 'img') add('image', resource.name, resource.name.split('/').pop() || 'image');
+                                if (/\.(?:woff2?|ttf|otf)(?:[?#]|$)/i.test(resource.name)) add('font', resource.name, resource.name.split('/').pop() || 'font');
+                            }
+                            return assets;
+                        });
+                        observedTotal += frameAssets.length;
+                        for (const asset of frameAssets) {
+                            const key = `${asset.kind}:${asset.url || `${frame.url()}:${asset.name}:${asset.width || 0}x${asset.height || 0}`}`;
+                            if (collected.has(key)) continue;
+                            collected.set(key, {
+                                asset: {
+                                    ...asset,
+                                    frame: frame === activePage.mainFrame() ? 'main' : `frame ${frameIndex}: ${frame.url().slice(0, 160)}`,
+                                },
+                                frame,
+                            });
+                        }
+                    }
+
+                    const assets: BrowserPageAsset[] = [];
+                    for (const entry of [...collected.values()].slice(0, MAX_PAGE_ASSETS)) {
+                        const ref = `a${assets.length + 1}`;
+                        const sourceUrl = entry.asset.url;
+                        const publicUrl = sourceUrl?.startsWith('data:')
+                            ? `${sourceUrl.slice(0, Math.min(sourceUrl.indexOf(',') + 1 || 80, 80))}…`
+                            : sourceUrl && sourceUrl.length > 2_000
+                                ? `${sourceUrl.slice(0, 1_999)}…`
+                                : sourceUrl;
+                        const asset: BrowserPageAsset = { ref, ...entry.asset, url: publicUrl };
+                        assets.push(asset);
+                        session.pageAssets.set(ref, {
+                            asset,
+                            frame: entry.frame,
+                            page: activePage,
+                            pageUrl: activePage.url(),
+                            sourceUrl,
+                        });
+                    }
+                    return {
+                        supported: true,
+                        url: activePage.url(),
+                        total: Math.max(observedTotal, collected.size),
+                        truncated: collected.size > assets.length,
+                        assets,
+                    };
+                } catch (error) {
+                    return { supported: false, url: activePage.url(), total: 0, truncated: false, assets: [], error: formatBrowserError(error) };
+                }
+            },
+
+            async downloadMedia(target: BrowserDownloadMediaTarget): Promise<BrowserDownloadMediaResult> {
+                const activePage = await ensureActivePage(session);
+                let sourceUrl = '';
+                let sourceFrame: Frame = activePage.mainFrame();
+                let suggestedName = '';
+                const currentDocumentUrl = activePage.url().split('#')[0];
+
+                if (target.assetRef) {
+                    const entry = session.pageAssets.get(String(target.assetRef).trim());
+                    if (!entry || entry.page !== activePage || entry.pageUrl.split('#')[0] !== currentDocumentUrl) {
+                        return { success: false, stale: true, error: `Unknown or stale asset ref "${target.assetRef}". Run listPageAssets again.` };
+                    }
+                    sourceUrl = entry.sourceUrl || entry.asset.url || '';
+                    sourceFrame = entry.frame;
+                    suggestedName = entry.asset.name;
+                } else {
+                    let ref = String(target.ref || '').trim();
+                    if (!ref && target.coordinate) {
+                        const inspection = await facade.inspectAt(target.coordinate[0], target.coordinate[1]);
+                        if (!inspection.success || !inspection.ref) return { success: false, error: inspection.error || 'No downloadable media exists at that coordinate.' };
+                        ref = inspection.ref;
+                    }
+                    const store = session.elementRefs;
+                    const entry = store?.page === activePage && store.url.split('#')[0] === currentDocumentUrl ? store.byRef.get(ref) : null;
+                    if (!entry) return { success: false, stale: true, error: `Unknown or stale element ref "${ref}". Run readPage or inspectAt again.` };
+                    sourceFrame = entry.frame;
+                    suggestedName = entry.label;
+                    sourceUrl = await entry.handle.evaluate((element) => {
+                        if (!(element instanceof Element)) return '';
+                        const domElement = element as Element;
+                        const media = domElement instanceof HTMLImageElement || domElement instanceof HTMLVideoElement || domElement instanceof HTMLAudioElement
+                            ? domElement
+                            : domElement.querySelector('img,video,audio,source');
+                        if (media instanceof HTMLImageElement || media instanceof HTMLVideoElement || media instanceof HTMLAudioElement) return media.currentSrc || media.getAttribute('src') || '';
+                        if (media instanceof HTMLSourceElement) return media.src || '';
+                        if (domElement instanceof HTMLAnchorElement) return domElement.href || '';
+                        return '';
+                    });
+                }
+
+                if (!sourceUrl) return { success: false, error: 'The selected asset has no downloadable URL (for example, an inline SVG).' };
+                let parsed: URL;
+                try {
+                    parsed = new URL(sourceUrl, sourceFrame.url() || activePage.url());
+                } catch {
+                    return { success: false, sourceUrl, error: 'The selected media URL is invalid.' };
+                }
+                if (!['http:', 'https:', 'data:', 'blob:'].includes(parsed.protocol)) {
+                    return { success: false, sourceUrl: parsed.href, error: `Media downloads do not allow the ${parsed.protocol} URL scheme.` };
+                }
+
+                try {
+                    let bytes: Buffer;
+                    let contentType = '';
+                    let responseFilename = '';
+                    if (parsed.protocol === 'data:') {
+                        const match = parsed.href.match(/^data:([^;,]*)(;base64)?,([\s\S]*)$/i);
+                        if (!match) throw new Error('Malformed data URL.');
+                        contentType = match[1] || 'application/octet-stream';
+                        bytes = match[2] ? Buffer.from(match[3], 'base64') : Buffer.from(decodeURIComponent(match[3]), 'utf8');
+                    } else if (parsed.protocol === 'blob:') {
+                        const payload = await sourceFrame.evaluate(async ({ url, maxBytes }) => {
+                            const response = await fetch(url);
+                            if (!response.ok) throw new Error(`Blob fetch failed (${response.status}).`);
+                            const blob = await response.blob();
+                            if (blob.size > maxBytes) throw new Error(`Media exceeds ${maxBytes} bytes.`);
+                            const buffer = new Uint8Array(await blob.arrayBuffer());
+                            let binary = '';
+                            const chunkSize = 0x8000;
+                            for (let offset = 0; offset < buffer.length; offset += chunkSize) binary += String.fromCharCode(...buffer.subarray(offset, offset + chunkSize));
+                            return { base64: btoa(binary), type: blob.type };
+                        }, { url: parsed.href, maxBytes: MAX_MEDIA_DOWNLOAD_BYTES });
+                        bytes = Buffer.from(payload.base64, 'base64');
+                        contentType = payload.type;
+                    } else {
+                        let requestUrl = parsed.href;
+                        let referer = sourceFrame.url() || activePage.url();
+                        const userAgent = await activePage.evaluate(() => navigator.userAgent).catch(() => '');
+                        let response: Response | null = null;
+
+                        // Stream the response ourselves instead of using
+                        // APIRequestContext.body(), which buffers an unbounded
+                        // chunked response before the size guard can run.
+                        for (let redirectCount = 0; redirectCount <= 5; redirectCount++) {
+                            const cookies = await activePage.context().cookies(requestUrl);
+                            const headers: Record<string, string> = {
+                                Accept: 'image/*,video/*,audio/*,application/octet-stream,*/*;q=0.5',
+                                Range: `bytes=0-${MAX_MEDIA_DOWNLOAD_BYTES}`,
+                            };
+                            if (/^https?:/i.test(referer)) headers.Referer = referer;
+                            if (userAgent) headers['User-Agent'] = userAgent;
+                            if (cookies.length > 0) headers.Cookie = cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; ');
+
+                            const controller = new AbortController();
+                            const timer = setTimeout(() => controller.abort(), 20_000);
+                            try {
+                                response = await fetch(requestUrl, {
+                                    method: 'GET',
+                                    headers,
+                                    redirect: 'manual',
+                                    signal: controller.signal,
+                                });
+                            } finally {
+                                clearTimeout(timer);
+                            }
+
+                            if (![301, 302, 303, 307, 308].includes(response.status)) break;
+                            const location = response.headers.get('location');
+                            if (!location) throw new Error(`Media redirect ${response.status} did not include a Location header.`);
+                            const redirected = new URL(location, requestUrl);
+                            if (!['http:', 'https:'].includes(redirected.protocol)) {
+                                throw new Error(`Media redirect does not allow the ${redirected.protocol} URL scheme.`);
+                            }
+                            referer = requestUrl;
+                            requestUrl = redirected.href;
+                            response = null;
+                        }
+
+                        if (!response) throw new Error('Media request exceeded the redirect limit.');
+                        if (!response.ok) throw new Error(`Media request failed: ${response.status} ${response.statusText}`);
+                        const contentLength = Number(response.headers.get('content-length') || 0);
+                        if (contentLength > MAX_MEDIA_DOWNLOAD_BYTES) throw new Error(`Media exceeds the ${MAX_MEDIA_DOWNLOAD_BYTES} byte limit.`);
+                        if (response.status === 206) {
+                            const total = response.headers.get('content-range')?.match(/\/(\d+|\*)$/)?.[1];
+                            if (!total || total === '*' || Number(total) > MAX_MEDIA_DOWNLOAD_BYTES) {
+                                throw new Error(`Media exceeds the ${MAX_MEDIA_DOWNLOAD_BYTES} byte limit.`);
+                            }
+                        }
+
+                        const chunks: Buffer[] = [];
+                        let receivedBytes = 0;
+                        const reader = response.body?.getReader();
+                        if (!reader) throw new Error('Media response had no readable body.');
+                        let bodyTimedOut = false;
+                        const bodyTimer = setTimeout(() => {
+                            bodyTimedOut = true;
+                            void reader.cancel('Media response timed out.').catch(() => {});
+                        }, 20_000);
+                        try {
+                            while (true) {
+                                const chunk = await reader.read();
+                                if (chunk.done) break;
+                                receivedBytes += chunk.value.byteLength;
+                                if (receivedBytes > MAX_MEDIA_DOWNLOAD_BYTES) {
+                                    await reader.cancel().catch(() => {});
+                                    throw new Error(`Media exceeds the ${MAX_MEDIA_DOWNLOAD_BYTES} byte limit.`);
+                                }
+                                chunks.push(Buffer.from(chunk.value));
+                            }
+                        } finally {
+                            clearTimeout(bodyTimer);
+                        }
+                        if (bodyTimedOut) throw new Error('Media response timed out.');
+                        bytes = Buffer.concat(chunks, receivedBytes);
+                        parsed = new URL(requestUrl);
+                        contentType = response.headers.get('content-type') || '';
+                        const disposition = response.headers.get('content-disposition') || '';
+                        responseFilename = disposition.match(/filename\*?=(?:UTF-8''|"?)([^";]+)/i)?.[1] || '';
+                    }
+                    if (bytes.length > MAX_MEDIA_DOWNLOAD_BYTES) throw new Error(`Media exceeds the ${MAX_MEDIA_DOWNLOAD_BYTES} byte limit.`);
+
+                    const mimeExtension = contentType.includes('png') ? '.png'
+                        : contentType.includes('jpeg') ? '.jpg'
+                            : contentType.includes('webp') ? '.webp'
+                                : contentType.includes('gif') ? '.gif'
+                                    : contentType.includes('svg') ? '.svg'
+                                        : contentType.includes('mp4') ? '.mp4'
+                                            : contentType.includes('webm') ? '.webm'
+                                                : contentType.includes('mpeg') ? '.mp3'
+                                                    : '';
+                    let filename = responseFilename ? decodeURIComponent(responseFilename.trim()) : '';
+                    if (!filename) filename = parsed.protocol === 'data:' || parsed.protocol === 'blob:' ? suggestedName : path.basename(parsed.pathname);
+                    filename = sanitizeDownloadFilename(filename || `page-media${mimeExtension}`);
+                    if (!path.extname(filename) && mimeExtension) filename += mimeExtension;
+                    fs.mkdirSync(downloadsDir, { recursive: true });
+                    const savedPath = uniqueDownloadPath(downloadsDir, filename);
+                    fs.writeFileSync(savedPath, bytes);
+                    const download: BrowserDownloadFile = {
+                        id: `media_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+                        timestamp: new Date().toISOString(),
+                        url: parsed.href,
+                        suggestedFilename: filename,
+                        savedPath,
+                        state: 'saved',
+                        size: bytes.length,
+                    };
+                    session.downloads.push(download);
+                    log(`✅ Page media saved: ${savedPath}`);
+                    return { success: true, sourceUrl: parsed.href, download: cloneDownload(download) };
+                } catch (error) {
+                    return { success: false, sourceUrl: parsed.href, error: formatBrowserError(error) };
                 }
             },
 
@@ -3167,6 +3791,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 session.lastMousePosition = null;
                 session.latestAgentFrame = null;
                 session.agentFrameHistory = [];
+                session.pageAssets.clear();
             },
         };
 

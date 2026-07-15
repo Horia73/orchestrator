@@ -12,21 +12,29 @@ import { redactBrowserAgentText } from './redaction';
 import type { MediaResolutionLevel, ThinkingLevel, VisionProvider } from './config';
 
 export interface AgentAction {
-    action: 'click' | 'type' | 'key' | 'scroll' | 'scrollToBottom' | 'undo' | 'wait' | 'navigate' | 'hold' | 'drag' | 'hover' | 'inspectPage' | 'readPage' | 'clickRef' | 'uploadFile' | 'findInPage' | 'inspectDiagnostics' | 'fetchUrl' | 'screenshot' | 'recordVideo' | 'setViewport' | 'closeTab' | 'refresh' | 'getCurrentUrl' | 'getLink' | 'pasteLink' | 'readClipboard' | 'clear' | 'done' | 'ask' | 'goBack' | 'goForward' | 'listTabs' | 'switchTab' | 'newTab' | 'listDownloads' | 'waitForDownloads' | 'error' | 'escalate' | 'yield_control';
+    action: 'click' | 'type' | 'key' | 'scroll' | 'scrollToBottom' | 'undo' | 'wait' | 'waitFor' | 'navigate' | 'hold' | 'drag' | 'hover' | 'inspectPage' | 'inspectAt' | 'readPage' | 'clickRef' | 'selectOption' | 'setChecked' | 'uploadFile' | 'listPageAssets' | 'downloadMedia' | 'findInPage' | 'inspectDiagnostics' | 'fetchUrl' | 'screenshot' | 'recordVideo' | 'setViewport' | 'closeTab' | 'refresh' | 'getCurrentUrl' | 'getLink' | 'pasteLink' | 'readClipboard' | 'clear' | 'done' | 'ask' | 'goBack' | 'goForward' | 'listTabs' | 'switchTab' | 'newTab' | 'listDownloads' | 'waitForDownloads' | 'error' | 'escalate' | 'yield_control';
     sub_objective?: string; // Goal string when escalating task to advanced reasoning model
     coordinate?: [number, number]; // [x, y]
     coordinateEnd?: [number, number]; // [x, y] — end point for drag action
     text?: string;
     submit?: boolean;
     clearBefore?: boolean; // If true, select all and delete before typing
-    clickCount?: number; // Allowed to be any number, default 1
-    key?: 'Enter' | 'Escape' | 'Tab' | 'Backspace';
+    clickCount?: number; // 1-5 rapid clicks, default 1
+    key?: string;
+    button?: 'left' | 'middle' | 'right';
+    modifiers?: Array<'Alt' | 'Control' | 'Meta' | 'Shift'>;
     scrollDirection?: 'up' | 'down' | 'left' | 'right';
     scrollAmount?: number;
     url?: string;
     tabIndex?: number;
     ref?: string; // Element ref from readPage output (e.g. "e12") for clickRef
+    assetRef?: string; // Asset ref from listPageAssets (e.g. "a3")
     path?: string; // Workspace-relative file path for uploadFile
+    paths?: string[]; // Atomic multi-file upload list
+    optionValues?: string[];
+    checked?: boolean;
+    waitFor?: 'url' | 'text' | 'ref' | 'load';
+    waitState?: 'contains' | 'visible' | 'hidden' | 'enabled' | 'disabled' | 'domcontentloaded' | 'networkidle';
     viewportPreset?: 'mobile' | 'tablet' | 'desktop'; // For setViewport
     colorScheme?: 'dark' | 'light' | 'auto'; // For setViewport
     reasoning: string;
@@ -93,7 +101,7 @@ export type VisionGenerateResponse = { text?: string; usageMetadata?: unknown };
 export const MAX_JSON_PARSE_RETRIES = 3;
 const MAX_MODEL_RESPONSE_LOG_CHARS = 1000;
 
-export const VALID_ACTIONS = ['click', 'type', 'key', 'scroll', 'scrollToBottom', 'undo', 'wait', 'navigate', 'hold', 'drag', 'hover', 'inspectPage', 'readPage', 'clickRef', 'uploadFile', 'findInPage', 'inspectDiagnostics', 'fetchUrl', 'screenshot', 'recordVideo', 'setViewport', 'closeTab', 'refresh', 'getCurrentUrl', 'getLink', 'pasteLink', 'readClipboard', 'clear', 'done', 'ask', 'error', 'goBack', 'goForward', 'listTabs', 'switchTab', 'newTab', 'listDownloads', 'waitForDownloads', 'escalate', 'yield_control'] as const satisfies readonly AgentAction['action'][];
+export const VALID_ACTIONS = ['click', 'type', 'key', 'scroll', 'scrollToBottom', 'undo', 'wait', 'waitFor', 'navigate', 'hold', 'drag', 'hover', 'inspectPage', 'inspectAt', 'readPage', 'clickRef', 'selectOption', 'setChecked', 'uploadFile', 'listPageAssets', 'downloadMedia', 'findInPage', 'inspectDiagnostics', 'fetchUrl', 'screenshot', 'recordVideo', 'setViewport', 'closeTab', 'refresh', 'getCurrentUrl', 'getLink', 'pasteLink', 'readClipboard', 'clear', 'done', 'ask', 'error', 'goBack', 'goForward', 'listTabs', 'switchTab', 'newTab', 'listDownloads', 'waitForDownloads', 'escalate', 'yield_control'] as const satisfies readonly AgentAction['action'][];
 const VALID_ACTION_SET = new Set<string>(VALID_ACTIONS);
 
 export const COORDINATE_JSON_SCHEMA = {
@@ -114,14 +122,22 @@ export const BROWSER_ACTION_JSON_SCHEMA = {
         text: { type: 'string' },
         submit: { type: 'boolean' },
         clearBefore: { type: 'boolean' },
-        clickCount: { type: 'integer', minimum: 1 },
-        key: { type: 'string', enum: ['Enter', 'Escape', 'Tab', 'Backspace'] },
+        clickCount: { type: 'integer', minimum: 1, maximum: 5 },
+        key: { type: 'string', minLength: 1, maxLength: 40 },
+        button: { type: 'string', enum: ['left', 'middle', 'right'] },
+        modifiers: { type: 'array', items: { type: 'string', enum: ['Alt', 'Control', 'Meta', 'Shift'] }, maxItems: 4 },
         scrollDirection: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
         scrollAmount: { type: 'integer', minimum: 1 },
         url: { type: 'string' },
         tabIndex: { type: 'integer', minimum: 0 },
         ref: { type: 'string' },
+        assetRef: { type: 'string' },
         path: { type: 'string' },
+        paths: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 20 },
+        optionValues: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 20 },
+        checked: { type: 'boolean' },
+        waitFor: { type: 'string', enum: ['url', 'text', 'ref', 'load'] },
+        waitState: { type: 'string', enum: ['contains', 'visible', 'hidden', 'enabled', 'disabled', 'domcontentloaded', 'networkidle'] },
         viewportPreset: { type: 'string', enum: ['mobile', 'tablet', 'desktop'] },
         colorScheme: { type: 'string', enum: ['dark', 'light', 'auto'] },
         reasoning: { type: 'string' },
@@ -130,7 +146,7 @@ export const BROWSER_ACTION_JSON_SCHEMA = {
         expectedFilename: { type: 'string' },
     },
     required: ['action', 'reasoning'],
-    propertyOrdering: ['action', 'coordinate', 'coordinateEnd', 'clickCount', 'text', 'submit', 'clearBefore', 'key', 'scrollDirection', 'scrollAmount', 'url', 'tabIndex', 'ref', 'path', 'viewportPreset', 'colorScheme', 'durationMs', 'expectedFilename', 'sub_objective', 'reasoning', 'memory'],
+    propertyOrdering: ['action', 'coordinate', 'coordinateEnd', 'clickCount', 'button', 'modifiers', 'text', 'submit', 'clearBefore', 'key', 'scrollDirection', 'scrollAmount', 'url', 'tabIndex', 'ref', 'assetRef', 'path', 'paths', 'optionValues', 'checked', 'waitFor', 'waitState', 'viewportPreset', 'colorScheme', 'durationMs', 'expectedFilename', 'sub_objective', 'reasoning', 'memory'],
 } as const;
 
 export const BROWSER_ACTION_RESPONSE_JSON_SCHEMA = {

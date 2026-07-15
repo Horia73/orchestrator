@@ -20,6 +20,14 @@ export type BrowserFrameSource = 'agent' | 'live';
 export type BrowserCaptureMode = 'viewport' | 'overview';
 export type BrowserCoordinateSpace = 'normalized-viewport' | 'normalized-display';
 export type BrowserPointerActionKind = 'move' | 'click' | 'drag' | 'hold' | 'scroll';
+export type BrowserMouseButton = 'left' | 'middle' | 'right';
+export type BrowserKeyModifier = 'Alt' | 'Control' | 'Meta' | 'Shift';
+
+export interface BrowserClickOptions {
+    count?: number;
+    button?: BrowserMouseButton;
+    modifiers?: BrowserKeyModifier[];
+}
 
 /**
  * Last agent-driven pointer action in display pixels — the live view renders
@@ -146,10 +154,15 @@ export interface BrowserPageElementRef {
     ref: string;
     role: string;
     name: string;
+    tag: string;
+    kind?: string;
     href?: string;
+    sourceUrl?: string;
     value?: string;
     checked?: boolean;
     disabled?: boolean;
+    multiple?: boolean;
+    frame?: string;
     inViewport: boolean;
 }
 
@@ -171,6 +184,14 @@ export interface BrowserClickRefResult {
     error?: string;
 }
 
+export interface BrowserInspectAtResult extends BrowserClickRefResult {
+    supported: boolean;
+    surface: 'page' | 'native-browser-ui' | 'none';
+    ref?: string;
+    element?: BrowserPageElementRef;
+    bounds?: { x: number; y: number; width: number; height: number };
+}
+
 export interface BrowserUploadFileResult {
     success: boolean;
     /** True when a requested readPage ref no longer belongs to the active page. */
@@ -180,6 +201,63 @@ export interface BrowserUploadFileResult {
     /** Workspace-relative path; absolute runtime/profile paths are never exposed. */
     path?: string;
     filename?: string;
+    paths?: string[];
+    filenames?: string[];
+    error?: string;
+}
+
+export type BrowserWaitForKind = 'url' | 'text' | 'ref' | 'load';
+export type BrowserWaitForState = 'contains' | 'visible' | 'hidden' | 'enabled' | 'disabled' | 'domcontentloaded' | 'networkidle';
+
+export interface BrowserWaitForOptions {
+    kind: BrowserWaitForKind;
+    state?: BrowserWaitForState;
+    url?: string;
+    text?: string;
+    ref?: string;
+    timeoutMs?: number;
+}
+
+export interface BrowserWaitForResult {
+    success: boolean;
+    elapsedMs: number;
+    observation: string;
+    stale?: boolean;
+    error?: string;
+}
+
+export type BrowserPageAssetKind = 'image' | 'video' | 'audio' | 'font' | 'stylesheet' | 'svg' | 'media';
+
+export interface BrowserPageAsset {
+    ref: string;
+    kind: BrowserPageAssetKind;
+    url?: string;
+    name: string;
+    frame?: string;
+    width?: number;
+    height?: number;
+}
+
+export interface BrowserPageAssetsResult {
+    supported: boolean;
+    url: string;
+    total: number;
+    truncated: boolean;
+    assets: BrowserPageAsset[];
+    error?: string;
+}
+
+export interface BrowserDownloadMediaTarget {
+    ref?: string;
+    assetRef?: string;
+    coordinate?: [number, number];
+}
+
+export interface BrowserDownloadMediaResult {
+    success: boolean;
+    download?: BrowserDownloadFile;
+    sourceUrl?: string;
+    stale?: boolean;
     error?: string;
 }
 
@@ -251,7 +329,7 @@ export interface BrowserPageSession {
     captureLiveFrame(): Promise<BrowserFrameSnapshot>;
     captureOverviewFrame(): Promise<BrowserFrameSnapshot>;
     recordVideo(durationMs?: number): Promise<BrowserVideoRecording>;
-    clickCoordinate(x: number, y: number, count?: number): Promise<boolean>;
+    clickCoordinate(x: number, y: number, options?: number | BrowserClickOptions): Promise<boolean>;
     dragCoordinate(startX: number, startY: number, endX: number, endY: number, durationMs?: number): Promise<TracedActionResult>;
     holdCoordinate(x: number, y: number, durationMs?: number): Promise<TracedActionResult>;
     hoverCoordinate(x: number, y: number): Promise<void>;
@@ -259,7 +337,7 @@ export interface BrowserPageSession {
     paste(text: string): Promise<void>;
     readClipboard(): Promise<string | null>;
     clear(): Promise<void>;
-    pressKey(key: string): Promise<void>;
+    pressKey(key: string, modifiers?: BrowserKeyModifier[]): Promise<void>;
     findInPage(query: string, next?: boolean): Promise<{ found: boolean; count: number }>;
     scroll(direction: 'up' | 'down' | 'left' | 'right', amount?: number): Promise<void>;
     scrollToBottom(): Promise<void>;
@@ -284,8 +362,15 @@ export interface BrowserPageSession {
     getDiagnostics(): BrowserDiagnosticsSnapshot;
     getPointerState(): BrowserPointerState | null;
     readPage(): Promise<BrowserReadPageResult>;
-    clickRef(ref: string, count?: number): Promise<BrowserClickRefResult>;
-    uploadFile(filePath: string, ref?: string): Promise<BrowserUploadFileResult>;
+    inspectAt(x: number, y: number): Promise<BrowserInspectAtResult>;
+    clickRef(ref: string, options?: number | BrowserClickOptions): Promise<BrowserClickRefResult>;
+    hoverRef(ref: string): Promise<BrowserClickRefResult>;
+    selectOption(ref: string, values: string[]): Promise<BrowserClickRefResult>;
+    setChecked(ref: string, checked: boolean): Promise<BrowserClickRefResult>;
+    waitFor(options: BrowserWaitForOptions): Promise<BrowserWaitForResult>;
+    uploadFile(filePath: string | string[], ref?: string): Promise<BrowserUploadFileResult>;
+    listPageAssets(): Promise<BrowserPageAssetsResult>;
+    downloadMedia(target: BrowserDownloadMediaTarget): Promise<BrowserDownloadMediaResult>;
     setViewport(preset: ViewportPreset, colorScheme?: 'dark' | 'light' | 'auto'): Promise<BrowserSetViewportResult>;
     fetchUrl(url: string): Promise<BrowserFetchResult>;
     getLatestAgentFrame(): BrowserFrameSnapshot | null;

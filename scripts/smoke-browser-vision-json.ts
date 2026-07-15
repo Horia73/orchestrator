@@ -60,6 +60,40 @@ const uploadAction = parseAgentActionsFromModelText(JSON.stringify({
 assert.equal(uploadAction[0].action, 'uploadFile')
 assert.equal(uploadAction[0].path, 'files/Clienti_Oblio_TEST.xls')
 
+const preciseActions = parseAgentActionsFromModelText(JSON.stringify([
+    {
+        action: 'click',
+        ref: 'e7',
+        button: 'right',
+        modifiers: ['Shift'],
+        reasoning: 'Open the exact element context menu',
+    },
+    {
+        action: 'waitFor',
+        waitFor: 'ref',
+        ref: 'e8',
+        waitState: 'visible',
+        durationMs: 5_000,
+        reasoning: 'Wait for the result control',
+    },
+    {
+        action: 'uploadFile',
+        ref: 'e9',
+        paths: ['files/Clienti.xls', 'files/Produse.xls'],
+        reasoning: 'Attach the validated batch atomically',
+    },
+    {
+        action: 'downloadMedia',
+        assetRef: 'a3',
+        reasoning: 'Save the selected page image',
+    },
+]))
+assert.equal(preciseActions[0].ref, 'e7')
+assert.deepEqual(preciseActions[0].modifiers, ['Shift'])
+assert.equal(preciseActions[1].waitFor, 'ref')
+assert.deepEqual(preciseActions[2].paths, ['files/Clienti.xls', 'files/Produse.xls'])
+assert.equal(preciseActions[3].assetRef, 'a3')
+
 assert.throws(
     () => parseAgentActionsFromModelText('{ action: "click", reasoning: "bad JSON" }'),
     /Invalid JSON/,

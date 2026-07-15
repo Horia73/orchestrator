@@ -613,7 +613,10 @@ export function createAgentController(
                             url: action.url,
                             sub_objective: action.sub_objective,
                             expectedFilename: action.expectedFilename,
+                            ref: action.ref,
+                            assetRef: action.assetRef,
                             path: action.path?.split(/[\\/]/).filter(Boolean).pop(),
+                            paths: action.paths?.map(value => value.split(/[\\/]/).filter(Boolean).pop() || '').filter(Boolean),
                             observation: execution.observation,
                             reasoning: action.reasoning,
                             success,
@@ -641,7 +644,7 @@ export function createAgentController(
                             }
                         }
 
-                        if (action.action === 'inspectPage' || action.action === 'findInPage' || action.action === 'readPage') {
+                        if (action.action === 'inspectPage' || action.action === 'inspectAt' || action.action === 'findInPage' || action.action === 'readPage' || action.action === 'listPageAssets') {
                             shouldRestartLoop = true;
                             break;
                         }
@@ -893,6 +896,8 @@ function actionCanChangeVisualState(action: AgentAction): boolean {
     return [
         'click',
         'clickRef',
+        'selectOption',
+        'setChecked',
         'uploadFile',
         'clear',
         'pasteLink',
@@ -1114,7 +1119,7 @@ function summarizeReadPage(result: BrowserReadPageResult): string {
     }
 
     const lines = [
-        `Interactive elements on ${formatObservationUrl(result.url) || 'the current page'} (${result.elements.length}${result.truncated ? ` of ${result.total}, list truncated` : ''}). Click one precisely with {"action":"clickRef","ref":"<ref>"}:`,
+        `Interactive elements on ${formatObservationUrl(result.url) || 'the current page'} (${result.elements.length}${result.truncated ? ` of ${result.total}, list truncated` : ''}). Target one precisely with {"action":"click","ref":"<ref>"}:`,
     ];
     for (const element of result.elements) {
         const parts = [`${element.ref} [${element.role}]`];
@@ -1123,6 +1128,8 @@ function summarizeReadPage(result: BrowserReadPageResult): string {
         if (element.value) parts.push(`value="${element.value}"`);
         if (element.checked !== undefined) parts.push(element.checked ? 'checked' : 'unchecked');
         if (element.disabled) parts.push('disabled');
+        if (element.multiple) parts.push('multiple');
+        if (element.frame && element.frame !== 'main') parts.push(`(${element.frame})`);
         if (!element.inViewport) parts.push('(off-screen)');
         lines.push(`- ${parts.join(' ')}`);
     }
@@ -1255,19 +1262,48 @@ async function executeAction(
     try {
         switch (action.action) {
             case 'click':
+                if (action.ref) {
+                    const targetRef = String(action.ref).trim();
+                    const count = action.clickCount || 1;
+                    onStatusUpdate(`🖱️  Clicking element ${targetRef}${count > 1 ? ` (x${count})` : ''}`);
+                    const clickResult = await browser.clickRef(targetRef, {
+                        count,
+                        button: action.button,
+                        modifiers: action.modifiers,
+                    });
+                    await sleep(timing.actionSettleDelayMs);
+                    return {
+                        success: clickResult.success,
+                        trace: null,
+                        supplementalFrames: [],
+                        observation: clickResult.success
+                            ? `Clicked ${targetRef}${clickResult.label ? ` ("${clickResult.label}")` : ''}.`
+                            : `${clickResult.error || `Could not click ${targetRef}.`}${clickResult.stale ? ' Run readPage again for fresh refs, or click by coordinates.' : ''}`,
+                    };
+                }
                 if (action.coordinate) {
                     const resolved = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
                     const [x, y] = resolved;
                     const count = action.clickCount || 1;
                     const countStr = count > 1 ? ` (x${count})` : '';
                     onStatusUpdate(`🖱️  Clicking ${formatResolvedCoordinate(action.coordinate, resolved, timing.coordinateMode)}${countStr}`);
-                    const result = await browser.clickCoordinate(x, y, count);
+                    const result = await browser.clickCoordinate(x, y, {
+                        count,
+                        button: action.button,
+                        modifiers: action.modifiers,
+                    });
                     await sleep(timing.actionSettleDelayMs);
                     return { success: result, trace: null, supplementalFrames: [] };
                 }
                 return { success: false, trace: null, supplementalFrames: [] };
 
             case 'hover':
+                if (action.ref) {
+                    onStatusUpdate(`🖱️  Hovering element ${action.ref}`);
+                    const result = await browser.hoverRef(action.ref);
+                    await sleep(timing.actionSettleDelayMs);
+                    return { success: result.success, trace: null, supplementalFrames: [], observation: result.error };
+                }
                 if (action.coordinate) {
                     const resolved = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
                     const [x, y] = resolved;
@@ -1288,6 +1324,27 @@ async function executeAction(
                     ? inspectionFrame
                     : { ...inspectionFrame, label: 'current-display-inspection' };
                 return { success: true, trace: null, supplementalFrames: [supplementalFrame] };
+            }
+
+            case 'inspectAt': {
+                if (!action.coordinate) return { success: false, trace: null, supplementalFrames: [], observation: 'inspectAt needs a coordinate.' };
+                const resolved = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
+                onStatusUpdate(`🔎 Inspecting ${formatResolvedCoordinate(action.coordinate, resolved, timing.coordinateMode)}...`);
+                const inspection = await browser.inspectAt(resolved[0], resolved[1]);
+                const element = inspection.element;
+                const observation = inspection.success && element
+                    ? [
+                        `${inspection.ref} [${element.role}]${element.name ? ` "${element.name}"` : ''}`,
+                        `tag=${element.tag}${element.kind ? ` kind=${element.kind}` : ''}${element.frame ? ` frame=${element.frame}` : ''}`,
+                        inspection.bounds ? `bounds=${Math.round(inspection.bounds.x)},${Math.round(inspection.bounds.y)} ${Math.round(inspection.bounds.width)}x${Math.round(inspection.bounds.height)}` : '',
+                        element.href ? `href=${formatObservationUrl(element.href)}` : '',
+                        element.sourceUrl ? `source=${formatObservationUrl(element.sourceUrl)}` : '',
+                        element.value ? `value="${element.value}"` : '',
+                        element.checked !== undefined ? (element.checked ? 'checked' : 'unchecked') : '',
+                        element.disabled ? 'disabled' : '',
+                    ].filter(Boolean).join(' · ')
+                    : inspection.error || `Coordinate belongs to ${inspection.surface}.`;
+                return { success: inspection.success, trace: null, supplementalFrames: [], observation };
             }
 
             case 'findInPage': {
@@ -1331,7 +1388,11 @@ async function executeAction(
                 }
                 const count = action.clickCount || 1;
                 onStatusUpdate(`🖱️  Clicking element ${targetRef}${count > 1 ? ` (x${count})` : ''}`);
-                const clickResult = await browser.clickRef(targetRef, count);
+                const clickResult = await browser.clickRef(targetRef, {
+                    count,
+                    button: action.button,
+                    modifiers: action.modifiers,
+                });
                 await sleep(timing.actionSettleDelayMs);
                 if (clickResult.success) {
                     onStatusUpdate(`🖱️  Clicked ${targetRef}${clickResult.label ? ` ("${clickResult.label}")` : ''}`);
@@ -1345,9 +1406,45 @@ async function executeAction(
                 };
             }
 
+            case 'selectOption': {
+                const targetRef = String(action.ref || '').trim();
+                const values = (action.optionValues || (action.text ? [action.text] : [])).map(value => String(value).trim()).filter(Boolean);
+                if (!targetRef || values.length === 0) return { success: false, trace: null, supplementalFrames: [], observation: 'selectOption needs a ref and optionValues (or text).' };
+                onStatusUpdate(`▾ Selecting ${values.join(', ')} in ${targetRef}...`);
+                const result = await browser.selectOption(targetRef, values);
+                await sleep(timing.actionSettleDelayMs);
+                return { success: result.success, trace: null, supplementalFrames: [], observation: result.success ? `Selected ${values.join(', ')} in ${targetRef}.` : `${result.error || 'Selection failed.'}${result.stale ? ' Run readPage again.' : ''}` };
+            }
+
+            case 'setChecked': {
+                const targetRef = String(action.ref || '').trim();
+                if (!targetRef || action.checked === undefined) return { success: false, trace: null, supplementalFrames: [], observation: 'setChecked needs a ref and checked boolean.' };
+                onStatusUpdate(`${action.checked ? '☑️' : '☐'} Setting ${targetRef} ${action.checked ? 'checked' : 'unchecked'}...`);
+                const result = await browser.setChecked(targetRef, action.checked);
+                await sleep(timing.actionSettleDelayMs);
+                return { success: result.success, trace: null, supplementalFrames: [], observation: result.success ? `${targetRef} is now ${action.checked ? 'checked' : 'unchecked'}.` : `${result.error || 'Checkbox state change failed.'}${result.stale ? ' Run readPage again.' : ''}` };
+            }
+
+            case 'waitFor': {
+                const kind = action.waitFor;
+                if (!kind) return { success: false, trace: null, supplementalFrames: [], observation: 'waitFor needs waitFor=url|text|ref|load.' };
+                const timeoutMs = action.durationMs || 10_000;
+                onStatusUpdate(`⏳ Waiting up to ${Math.min(timeoutMs, 30_000)}ms for ${kind}${action.waitState ? ` (${action.waitState})` : ''}...`);
+                const result = await browser.waitFor({
+                    kind,
+                    state: action.waitState,
+                    url: action.url,
+                    text: action.text,
+                    ref: action.ref,
+                    timeoutMs,
+                });
+                return { success: result.success, trace: null, supplementalFrames: [], observation: result.observation };
+            }
+
             case 'uploadFile': {
-                const filePath = String(action.path || '').trim();
-                if (!filePath) {
+                const filePaths = action.paths?.map(value => String(value).trim()).filter(Boolean)
+                    || (action.path ? [String(action.path).trim()] : []);
+                if (filePaths.length === 0) {
                     return {
                         success: false,
                         trace: null,
@@ -1357,10 +1454,11 @@ async function executeAction(
                 }
                 const targetRef = String(action.ref || '').trim() || undefined;
                 onStatusUpdate(`📤 Attaching workspace file${targetRef ? ` to ${targetRef}` : ''}...`);
-                const uploadResult = await browser.uploadFile(filePath, targetRef);
+                const uploadResult = await browser.uploadFile(filePaths, targetRef);
                 await sleep(timing.actionSettleDelayMs);
                 if (uploadResult.success) {
-                    const observation = `Attached ${uploadResult.filename || 'workspace file'}${uploadResult.ref ? ` to ${uploadResult.ref}` : ''} from ${uploadResult.path}. No final submit/import control was clicked; verify the page because some sites begin transfer on file selection.`;
+                    const filenames = uploadResult.filenames?.join(', ') || uploadResult.filename || 'workspace file';
+                    const observation = `Attached ${filenames}${uploadResult.ref ? ` to ${uploadResult.ref}` : ''} from ${(uploadResult.paths || [uploadResult.path]).filter(Boolean).join(', ')}. The batch was validated before attachment. No final submit/import control was clicked; verify the page because some sites begin transfer on file selection.`;
                     onStatusUpdate(`📤 ${observation}`);
                     return { success: true, trace: null, supplementalFrames: [], observation };
                 }
@@ -1370,6 +1468,28 @@ async function executeAction(
                     supplementalFrames: [],
                     observation: `${uploadResult.error || 'Could not attach the workspace file.'}${uploadResult.stale ? ' Run readPage again for fresh refs.' : ''}`,
                 };
+            }
+
+            case 'listPageAssets': {
+                onStatusUpdate('🧩 Inventorying page images, media, fonts, stylesheets, and inline SVGs...');
+                const result = await browser.listPageAssets();
+                const lines = result.assets.map(asset => `- ${asset.ref} [${asset.kind}] ${asset.name}${asset.url ? ` → ${formatObservationUrl(asset.url)}` : ' (inline)'}${asset.width && asset.height ? ` ${asset.width}x${asset.height}` : ''}${asset.frame && asset.frame !== 'main' ? ` (${asset.frame})` : ''}`);
+                const observation = result.supported
+                    ? `Page assets (${result.assets.length}${result.truncated ? ` of ${result.total}, truncated` : ''}):\n${lines.join('\n') || '(none)'}`
+                    : `listPageAssets failed: ${result.error || 'unsupported'}`;
+                return { success: result.supported, trace: null, supplementalFrames: [], observation: trimObservation(observation, 12_000) };
+            }
+
+            case 'downloadMedia': {
+                let coordinate: [number, number] | undefined;
+                if (action.coordinate) coordinate = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
+                if (!action.ref && !action.assetRef && !coordinate) return { success: false, trace: null, supplementalFrames: [], observation: 'downloadMedia needs a ref, assetRef, or coordinate.' };
+                onStatusUpdate(`⬇️ Downloading selected page media${action.assetRef ? ` ${action.assetRef}` : action.ref ? ` ${action.ref}` : ''}...`);
+                const result = await browser.downloadMedia({ ref: action.ref, assetRef: action.assetRef, coordinate });
+                const observation = result.success && result.download
+                    ? `Saved ${result.download.suggestedFilename} (${result.download.size || 0} bytes) to managed browser downloads.`
+                    : `${result.error || 'Media download failed.'}${result.stale ? ' Refresh refs/assets and retry.' : ''}`;
+                return { success: result.success, trace: null, supplementalFrames: [], observation };
             }
 
             case 'setViewport': {
@@ -1501,6 +1621,12 @@ async function executeAction(
                 return { success: false, trace: null, supplementalFrames: [] };
 
             case 'clear':
+                if (action.ref) {
+                    onStatusUpdate(`🖱️  Focusing ${action.ref} before clearing`);
+                    const focused = await browser.clickRef(action.ref);
+                    if (!focused.success) return { success: false, trace: null, supplementalFrames: [], observation: focused.error };
+                    await sleep(timing.actionSettleDelayMs);
+                }
                 if (action.coordinate) {
                     const resolved = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
                     const [x, y] = resolved;
@@ -1514,7 +1640,12 @@ async function executeAction(
 
             case 'type':
                 if (action.text) {
-                    if (action.coordinate) {
+                    if (action.ref) {
+                        onStatusUpdate(`🖱️  Focusing element ${action.ref}`);
+                        const focused = await browser.clickRef(action.ref);
+                        if (!focused.success) return { success: false, trace: null, supplementalFrames: [], observation: focused.error };
+                        await sleep(timing.actionSettleDelayMs);
+                    } else if (action.coordinate) {
                         const resolved = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
                         const [x, y] = resolved;
                         onStatusUpdate(`🖱️  Clicking ${formatResolvedCoordinate(action.coordinate, resolved, timing.coordinateMode)} to focus`);
@@ -1549,8 +1680,13 @@ async function executeAction(
 
             case 'key':
                 if (action.key) {
-                    onStatusUpdate(`⌨️  Pressing: ${action.key}`);
-                    await browser.pressKey(action.key);
+                    if (action.ref) {
+                        const focused = await browser.clickRef(action.ref);
+                        if (!focused.success) return { success: false, trace: null, supplementalFrames: [], observation: focused.error };
+                    }
+                    const shortcut = [...(action.modifiers || []), action.key].join('+');
+                    onStatusUpdate(`⌨️  Pressing: ${shortcut}`);
+                    await browser.pressKey(action.key, action.modifiers);
                     await sleep(timing.actionSettleDelayMs);
                     return { success: true, trace: null, supplementalFrames: [] };
                 }
@@ -1558,7 +1694,12 @@ async function executeAction(
 
             case 'scroll': {
                 const amountText = action.scrollAmount ? ` by ${action.scrollAmount}px` : '';
-                if (action.coordinate) {
+                if (action.ref) {
+                    onStatusUpdate(`🖱️  Hovering ${action.ref} before scroll`);
+                    const hovered = await browser.hoverRef(action.ref);
+                    if (!hovered.success) return { success: false, trace: null, supplementalFrames: [], observation: hovered.error };
+                    await sleep(300);
+                } else if (action.coordinate) {
                     const resolved = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
                     const [x, y] = resolved;
                     onStatusUpdate(`🖱️  Hovering ${formatResolvedCoordinate(action.coordinate, resolved, timing.coordinateMode)} before scroll`);

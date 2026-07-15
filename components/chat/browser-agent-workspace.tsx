@@ -5,6 +5,11 @@ import * as React from "react"
 import { BrowserAgentLiveView } from "@/components/browser-agent-live-view"
 import { TodoBar } from "@/components/todo-bar"
 import { appPath } from "@/lib/app-path"
+import {
+  browserAgentRunPauseKind,
+  browserSessionIdFromRunContent,
+  isBrowserAgentRunLive,
+} from "@/lib/browser-agent-run-state"
 import { cn } from "@/lib/utils"
 import type {
   AgentCallReasoningEntry,
@@ -28,15 +33,6 @@ const UPLOAD_MARKDOWN_RE =
   /(!?)\[([^\]]*)\]\([^)]*?\/api\/uploads\/([A-Za-z0-9._%-]+)[^)]*\)/g
 
 const SAVED_BROWSER_EVIDENCE_RE = /^Saved browser (screenshot|video)\b/i
-
-export function isBrowserAgentRunAwaitingUser(entry: AgentCallReasoningEntry): boolean {
-  return /\bSession status:\s*awaiting_user\b/i.test(entry.content)
-}
-
-export function browserSessionIdFromRunContent(content: string): string | null {
-  const match = content.match(/\bBrowser session:\s*([A-Za-z0-9_.:-]+)/i)
-  return match?.[1] ?? null
-}
 
 // ---------------------------------------------------------------------------
 // BrowserAgentWorkspace — the desktop side-panel layout for a browser run:
@@ -130,9 +126,9 @@ export function BrowserAgentWorkspace({
   run: AgentCallReasoningEntry
   onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
 }) {
-  const awaitingUser = isBrowserAgentRunAwaitingUser(run)
+  const pauseKind = browserAgentRunPauseKind(run)
   const sessionId = browserSessionIdFromRunContent(run.content)
-  const active = run.status === "running" || awaitingUser
+  const active = isBrowserAgentRunLive(run)
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 px-4 pt-3 pb-4 [container-type:inline-size]">
@@ -149,9 +145,14 @@ export function BrowserAgentWorkspace({
           {run.error}
         </div>
       )}
-      {awaitingUser && (
+      {pauseKind === "takeover" && (
         <div className="shrink-0 rounded-md border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-800 dark:text-amber-200">
-          Browser is waiting for user input or confirmation.
+          Browser needs you to continue this step. Its live view has been brought forward; click inside it when you are ready to take over.
+        </div>
+      )}
+      {pauseKind === "checkpoint" && (
+        <div className="shrink-0 rounded-md border border-sky-500/20 bg-sky-500/10 px-3 py-2 text-[13px] text-sky-800 dark:text-sky-200">
+          Browser agent paused at an internal checkpoint. No user action is required.
         </div>
       )}
       <TodoBar

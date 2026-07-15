@@ -156,6 +156,44 @@ def image_supports_durable_ai_worker(image: str) -> bool:
     return value.strip() == "1"
 
 
+def running_service_metadata() -> dict:
+    """Read rollback provenance from the container actually serving traffic.
+
+    The host checkout may already point at the target release during a manual
+    deploy, so git/package.json on disk cannot describe the image we are about
+    to preserve. `.build-info.json` is baked into that image specifically to be
+    immune to stale runtime env overrides; read it together with the package
+    version from the live container and fall back only on malformed/legacy
+    images.
+    """
+    container_id = capture_optional([
+        *compose_command(), "ps", "-q", SERVICE_NAME,
+    ])
+    if not container_id:
+        return {}
+    script = (
+        "const fs=require('fs');"
+        "let build={};let version=null;"
+        "try{build=JSON.parse(fs.readFileSync('/app/.build-info.json','utf8'))}catch{};"
+        "try{version=JSON.parse(fs.readFileSync('/app/package.json','utf8')).version||null}catch{};"
+        "process.stdout.write(JSON.stringify({version,commit:build.commit||null,ref:build.ref||null}))"
+    )
+    raw = capture_optional([
+        docker_command(), "exec", container_id, "node", "-e", script,
+    ])
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {
+        key: value.strip()
+        for key, value in parsed.items()
+        if key in {"version", "commit", "ref"} and isinstance(value, str) and value.strip()
+    }
+
+
 def read_package_version() -> Optional[str]:
     try:
         parsed = json.loads((APP_DIR / "package.json").read_text(encoding="utf-8"))
@@ -208,9 +246,12 @@ def save_current_image_for_rollback(job_id: str, target_ref: str) -> None:
         write_log(f"Rollback slot not updated: current image {IMAGE_NAME} does not exist.")
         return
 
-    commit = capture_optional(["git", "-C", str(APP_DIR), "rev-parse", "--short=12", "HEAD"]) or None
-    ref = current_git_ref()
-    version = read_package_version()
+    running = running_service_metadata()
+    commit = running.get("commit") or capture_optional([
+        "git", "-C", str(APP_DIR), "rev-parse", "--short=12", "HEAD",
+    ]) or None
+    ref = running.get("ref") or current_git_ref()
+    version = running.get("version") or read_package_version()
     run([docker_command(), "tag", IMAGE_NAME, ROLLBACK_IMAGE_NAME])
     rollback_image_id = docker_image_id(ROLLBACK_IMAGE_NAME)
     saved_at = int(time.time() * 1000)

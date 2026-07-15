@@ -4,8 +4,11 @@ import * as React from "react"
 import { ArrowDown, ChevronDown, Loader2, Monitor } from "lucide-react"
 import { ArtifactPanel, artifactKey } from "@/components/artifact-panel"
 import { AgentWorkspacePanel } from "@/components/chat/agent-workspace-panel"
-import { isBrowserAgentRunAwaitingUser } from "@/components/chat/browser-agent-workspace"
 import { BrowserPanelProvider } from "@/components/chat/browser-panel-context"
+import {
+  isBrowserAgentRunAwaitingUser,
+  isBrowserAgentRunLive,
+} from "@/lib/browser-agent-run-state"
 import {
   ARTIFACT_PANEL_DEFAULT_WIDTH,
   ARTIFACT_PANEL_MAX_WIDTH,
@@ -427,6 +430,7 @@ export function ChatView() {
     isStreamingThisConversation,
     state.streamingReasoning,
   ])
+
   const [activeAgentRunId, setActiveAgentRunId] = React.useState<string | null>(
     null
   )
@@ -445,6 +449,39 @@ export function ChatView() {
     cachedActiveAgentRun.run.runId === activeAgentRunId
       ? cachedActiveAgentRun.run
       : null)
+
+  // A real `ask` pause is different from a background checkpoint: it means
+  // the user must operate the live browser (typically login or confirmation).
+  // Surface that workspace once per run even when another artifact/worker is
+  // open. On mobile the existing active-agent dialog becomes full screen.
+  const autoSurfacedBrowserTakeoverIdsRef = React.useRef<Set<string>>(new Set())
+  React.useEffect(() => {
+    const takeoverRun = [...agentRuns].reverse().find(
+      (run) =>
+        run.agentId === "browser_agent" &&
+        isBrowserAgentRunAwaitingUser(run) &&
+        !autoSurfacedBrowserTakeoverIdsRef.current.has(run.runId)
+    )
+    if (!takeoverRun) return
+
+    autoSurfacedBrowserTakeoverIdsRef.current.add(takeoverRun.runId)
+    const panelAlreadyOpen =
+      artifactOpen || Boolean(genArtifact) || Boolean(activePanelAgentRun)
+    if (!panelAlreadyOpen) {
+      sidebarWasOpenRef.current = sidebarOpen
+    }
+    setActiveAgentRunId(takeoverRun.runId)
+    setArtifactOpen(false)
+    setGenArtifact(null)
+    setSidebarOpen(false)
+  }, [
+    agentRuns,
+    artifactOpen,
+    genArtifact,
+    activePanelAgentRun,
+    sidebarOpen,
+    setSidebarOpen,
+  ])
   const activeChildAgentRuns = React.useMemo(
     () =>
       activePanelAgentRun
@@ -2820,7 +2857,7 @@ export function ChatView() {
     const liveRuns = agentRuns.filter(
       (run) =>
         run.agentId === "browser_agent" &&
-        (run.status === "running" || isBrowserAgentRunAwaitingUser(run))
+        isBrowserAgentRunLive(run)
     )
     const run = liveRuns[liveRuns.length - 1] ?? null
     return run && run.runId !== browserPanelRunId ? run : null

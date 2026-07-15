@@ -35,6 +35,24 @@ def main() -> None:
         response_waits: list[bool] = []
         notifications: list[tuple[str, str]] = []
 
+        bridge.docker_image_id = lambda image: {
+            "orchestrator:local": "sha256:live",
+            "orchestrator:rollback": "sha256:rollback",
+        }.get(image, "")
+        bridge.running_service_metadata = lambda: {
+            "version": "1.2.3",
+            "commit": "old123commit",
+            "ref": "v1.2.3",
+        }
+        bridge.run = lambda command, env=None: commands.append(list(command))
+        bridge.save_current_image_for_rollback("metadata-smoke", "v9.9.9")
+        saved = json.loads(bridge.ROLLBACK_STATE_PATH.read_text(encoding="utf-8"))
+        assert saved["version"] == "1.2.3", saved
+        assert saved["commit"] == "old123commit", saved
+        assert saved["ref"] == "v1.2.3", saved
+        assert saved["savedBeforeTarget"] == "v9.9.9", saved
+        commands.clear()
+
         bridge.compose_command = lambda: ["docker", "compose"]
         bridge.current_git_ref = lambda: "master"
         bridge.drain_ai_worker_before_update = lambda: True

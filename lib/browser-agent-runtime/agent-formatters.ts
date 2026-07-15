@@ -24,13 +24,15 @@ export function formatAction(action: AgentAction, coordinateMode: VisionCoordina
     switch (action.action) {
         case 'click': {
             const count = action.clickCount && action.clickCount > 1 ? ' (Double Click)' : '';
-            return `Click ${formatCoordinate(action.coordinate, coordinateMode)}${count} - ${reason(action)}`;
+            return `Click ${action.ref ? `element ${action.ref}` : formatCoordinate(action.coordinate, coordinateMode)}${count} - ${reason(action)}`;
         }
         case 'hover': {
             return `Hover ${formatCoordinate(action.coordinate, coordinateMode)} - ${reason(action)}`;
         }
         case 'inspectPage':
             return `Inspect Page Context - ${reason(action)}`;
+        case 'inspectAt':
+            return `Inspect ${formatCoordinate(action.coordinate, coordinateMode)} - ${reason(action)}`;
         case 'readPage':
             return `Read Page Elements - ${reason(action)}`;
         case 'clickRef': {
@@ -38,7 +40,15 @@ export function formatAction(action: AgentAction, coordinateMode: VisionCoordina
             return `Click element ${action.ref || '[?]'}${count} - ${reason(action)}`;
         }
         case 'uploadFile':
-            return `Attach workspace file ${uploadFilename(action.path)}${action.ref ? ` to ${action.ref}` : ''} - ${reason(action)}`;
+            return `Attach workspace file(s) ${(action.paths || [action.path]).map(uploadFilename).join(', ')}${action.ref ? ` to ${action.ref}` : ''} - ${reason(action)}`;
+        case 'selectOption':
+            return `Select ${(action.optionValues || [action.text]).filter(Boolean).join(', ')} in ${action.ref || '[?]'} - ${reason(action)}`;
+        case 'setChecked':
+            return `Set ${action.ref || '[?]'} ${action.checked ? 'checked' : 'unchecked'} - ${reason(action)}`;
+        case 'listPageAssets':
+            return `List Page Assets - ${reason(action)}`;
+        case 'downloadMedia':
+            return `Download Page Media ${action.assetRef || action.ref || formatCoordinate(action.coordinate, coordinateMode)} - ${reason(action)}`;
         case 'setViewport': {
             const scheme = action.colorScheme && action.colorScheme !== 'auto' ? `, ${action.colorScheme} mode` : '';
             return `Set Viewport ${action.viewportPreset || 'desktop'}${scheme} - ${reason(action)}`;
@@ -89,6 +99,8 @@ export function formatAction(action: AgentAction, coordinateMode: VisionCoordina
             const duration = action.durationMs ? ` for ${action.durationMs}ms` : '';
             return `Wait${duration} - ${reason(action)}`;
         }
+        case 'waitFor':
+            return `Wait for ${action.waitFor || '[?]'}${action.waitState ? ` (${action.waitState})` : ''} - ${reason(action)}`;
         case 'navigate':
             return `Navigate to ${action.url} - ${reason(action)}`;
         case 'done':

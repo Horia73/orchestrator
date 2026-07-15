@@ -21,6 +21,11 @@ import { useTrapWheel } from "@/components/use-trap-wheel"
 import type { ArtifactRow } from "@/lib/artifacts/schema"
 import { appPath } from "@/lib/app-path"
 import { agentFullLabel } from "@/lib/agent-label"
+import {
+    browserAgentRunPauseKind,
+    browserSessionIdFromRunContent,
+    isBrowserAgentRunLive,
+} from "@/lib/browser-agent-run-state"
 import { isDesktopViewport } from "@/lib/desktop-viewport"
 import { hideInlineImageAttachments } from "@/lib/chat-attachment-display"
 
@@ -252,18 +257,8 @@ function hasLiveBrowserAgent(reasoning: ReasoningEntry[]): boolean {
         if (entry.type !== "agent_call" || entry.agentId !== "browser_agent") {
             return false
         }
-        if (entry.status === "running") return true
-        return isBrowserAgentAwaitingUser(entry)
+        return isBrowserAgentRunLive(entry)
     })
-}
-
-function isBrowserAgentAwaitingUser(entry: AgentCallReasoningEntry): boolean {
-    return /\bSession status:\s*awaiting_user\b/i.test(entry.content)
-}
-
-function browserSessionIdFromContent(content: string): string | null {
-    const match = content.match(/\bBrowser session:\s*([A-Za-z0-9_.:-]+)/i)
-    return match?.[1] ?? null
 }
 
 // ---------------------------------------------------------------------------
@@ -1304,8 +1299,8 @@ function BrowserAgentCallBlock({
     onOpen?: (entry: AgentCallReasoningEntry) => void
     onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
 }) {
-    const awaitingUser = isBrowserAgentAwaitingUser(entry)
-    const browserSessionId = browserSessionIdFromContent(entry.content)
+    const pauseKind = browserAgentRunPauseKind(entry)
+    const browserSessionId = browserSessionIdFromRunContent(entry.content)
     const { panelRunId } = useBrowserPanelState()
     // While the desktop side panel hosts this run, collapse the inline block
     // to a chip so only one live-view (noVNC) connection is mounted at a time.
@@ -1330,11 +1325,16 @@ function BrowserAgentCallBlock({
                         </span>
                     </button>
                 ) : (
-                    <BrowserAgentLiveView active={entry.status === "running" || awaitingUser} sessionId={browserSessionId} onOpenDetails={onOpen ? () => onOpen(entry) : undefined} />
+                    <BrowserAgentLiveView active={isBrowserAgentRunLive(entry)} sessionId={browserSessionId} onOpenDetails={onOpen ? () => onOpen(entry) : undefined} />
                 )}
-                {awaitingUser && (
+                {pauseKind === "takeover" && (
                     <div className="rounded-md border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-800 dark:text-amber-200">
-                        Browser is waiting for user input or confirmation.
+                        Browser needs you to continue this step. Open the live view and click inside it when you are ready to take over.
+                    </div>
+                )}
+                {pauseKind === "checkpoint" && (
+                    <div className="rounded-md border border-sky-500/20 bg-sky-500/10 px-3 py-2 text-[13px] text-sky-800 dark:text-sky-200">
+                        Browser agent paused at an internal checkpoint. No user action is required.
                     </div>
                 )}
                 {entry.status === "error" && entry.error && (
