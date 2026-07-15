@@ -33,7 +33,69 @@ export function shouldSendAsSteering(args: {
   )
 }
 
-export type StreamingStatus = "connecting" | "recovering" | "offline" | null
+export type StreamingStatus =
+  | "connecting"
+  | "recovering"
+  | "offline"
+  | "updating"
+  | null
+
+const CHAT_UPDATE_RETRY_DEFAULT_MS = 5_000
+const CHAT_UPDATE_RETRY_MIN_MS = 1_000
+const CHAT_UPDATE_RETRY_MAX_MS = 30_000
+
+export function isChatUpdateInProgressResponse(
+  status: number,
+  payload: unknown
+): boolean {
+  if (status !== 503 || !payload || typeof payload !== "object") return false
+  const candidate = payload as { code?: unknown; error?: unknown }
+  if (candidate.code === "update_in_progress") return true
+  return (
+    typeof candidate.error === "string" &&
+    candidate.error.toLowerCase().includes("update in progress")
+  )
+}
+
+export function chatUpdateRetryDelayMs(
+  retryAfter: string | null,
+  now = Date.now()
+): number {
+  const value = retryAfter?.trim()
+  if (!value) return CHAT_UPDATE_RETRY_DEFAULT_MS
+
+  const seconds = Number(value)
+  const parsedMs = Number.isFinite(seconds)
+    ? seconds * 1_000
+    : Date.parse(value) - now
+  if (!Number.isFinite(parsedMs)) return CHAT_UPDATE_RETRY_DEFAULT_MS
+  return Math.min(
+    CHAT_UPDATE_RETRY_MAX_MS,
+    Math.max(CHAT_UPDATE_RETRY_MIN_MS, parsedMs)
+  )
+}
+
+export function sleepWithAbortSignal(
+  ms: number,
+  signal: AbortSignal
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException("The operation was aborted.", "AbortError"))
+      return
+    }
+    const abort = () => {
+      globalThis.clearTimeout(timer)
+      signal.removeEventListener("abort", abort)
+      reject(new DOMException("The operation was aborted.", "AbortError"))
+    }
+    const timer = globalThis.setTimeout(() => {
+      signal.removeEventListener("abort", abort)
+      resolve()
+    }, ms)
+    signal.addEventListener("abort", abort, { once: true })
+  })
+}
 
 export function updateAgentEntry(
   reasoning: StreamingReasoning,

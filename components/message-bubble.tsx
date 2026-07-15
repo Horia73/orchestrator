@@ -1986,7 +1986,12 @@ interface StreamingBubbleProps {
     content: string
     contentSegments: ContentSegment[]
     streamingMode: "reasoning" | "content" | null
-    streamingStatus?: "connecting" | "recovering" | "offline" | null
+    streamingStatus?:
+        | "connecting"
+        | "recovering"
+        | "offline"
+        | "updating"
+        | null
     compact?: boolean
     suppressArtifactTypes?: string[]
     showCursor?: boolean
@@ -2018,6 +2023,7 @@ function streamingStatusLabel(
     const suffix = roundedSeconds > 0 ? ` (${roundedSeconds}s)` : ""
     if (status === "offline") return `Waiting for connection${suffix}`
     if (status === "recovering") return `Reconnecting${suffix}`
+    if (status === "updating") return `Waiting for update${suffix}`
     return `Connecting${suffix}`
 }
 
@@ -2088,8 +2094,14 @@ export function StreamingBubble({ reasoning, content, contentSegments, streaming
                         <span className="size-1.5 rounded-full bg-muted-foreground/40 animate-pulse [animation-delay:0.2s]" />
                         <span className="size-1.5 rounded-full bg-muted-foreground/40 animate-pulse [animation-delay:0.4s]" />
                     </span>
-                    {showStreamingStatusLabel && (
-                        <span>{streamingStatusLabel(streamingStatus, thinkingSeconds)}</span>
+                    {(showStreamingStatusLabel ||
+                        streamingStatus === "updating") && (
+                        <span>
+                            {streamingStatusLabel(
+                                streamingStatus,
+                                thinkingSeconds
+                            )}
+                        </span>
                     )}
                 </div>
             )}

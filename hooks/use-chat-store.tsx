@@ -61,8 +61,10 @@ import {
   agentCallEntryFromStartEvent,
   appendAgentContent,
   appendAgentThought,
+  chatUpdateRetryDelayMs,
   deriveUnreadConversationIds,
   errorMessageFromUnknown,
+  isChatUpdateInProgressResponse,
   isConversationUnread,
   isOwnedAssistantStreamMessage,
   isLikelyStreamInterruption,
@@ -72,6 +74,7 @@ import {
   readUnreadConversationIds,
   showChatCompletionNotification,
   sleep,
+  sleepWithAbortSignal,
   sleepUntilOnline,
   shouldSendAsSteering,
   unreadSetsEqual,
@@ -2481,6 +2484,32 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
               const err = await response
                 .json()
                 .catch(() => ({ error: "Unknown error" }))
+              if (isChatUpdateInProgressResponse(response.status, err)) {
+                // The user's row is already persisted. Keep this exact turn
+                // alive across the managed restart and retry with the same
+                // conversation/message ids, so reconnect cannot duplicate it.
+                dispatch({
+                  type: "SET_STREAMING",
+                  isStreaming: true,
+                  conversationId: finalConvId,
+                  messageId: assistantMsgId,
+                  status: "updating",
+                })
+                streamLastActivityRef.current = Date.now()
+                await sleepWithAbortSignal(
+                  chatUpdateRetryDelayMs(response.headers.get("Retry-After")),
+                  attemptController.signal
+                )
+                if (
+                  !streamingRef.current ||
+                  clientStreamMessageIdRef.current !== assistantMsgId ||
+                  activeConversationIdRef.current !== finalConvId
+                ) {
+                  return
+                }
+                streamLastActivityRef.current = Date.now()
+                return runStreamTurn()
+              }
               if (
                 response.status === 409 &&
                 err?.code === "stream_already_active" &&

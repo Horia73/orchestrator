@@ -15,6 +15,34 @@ import {
 import { runWithProfileContext } from '@/lib/profiles/context'
 import { ADMIN_PROFILE_ID } from '@/lib/profiles/constants'
 import { canProfileReceivePendingUpdate } from '@/lib/update/manager'
+import {
+    chatUpdateRetryDelayMs,
+    isChatUpdateInProgressResponse,
+    sleepWithAbortSignal,
+} from '@/hooks/chat-store-utils'
+
+assert.equal(
+    isChatUpdateInProgressResponse(503, { code: 'update_in_progress' }),
+    true,
+)
+assert.equal(
+    isChatUpdateInProgressResponse(503, {
+        error: 'Update in progress. The app will reconnect after restart.',
+    }),
+    true,
+)
+assert.equal(isChatUpdateInProgressResponse(500, { code: 'update_in_progress' }), false)
+assert.equal(chatUpdateRetryDelayMs('30'), 30_000)
+assert.equal(chatUpdateRetryDelayMs('0'), 1_000)
+assert.equal(chatUpdateRetryDelayMs(null), 5_000)
+
+const retryAbort = new AbortController()
+const abortedRetry = sleepWithAbortSignal(30_000, retryAbort.signal)
+retryAbort.abort()
+await assert.rejects(
+    abortedRetry,
+    (error: unknown) => error instanceof DOMException && error.name === 'AbortError',
+)
 
 const stamp = Date.now()
 const adminConversation = `update_admission_admin_${stamp}`

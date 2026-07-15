@@ -180,6 +180,7 @@ export async function POST(request: Request) {
         return new Response(
           JSON.stringify({
             error: "Update in progress. The app will reconnect after restart.",
+            code: "update_in_progress",
           }),
           {
             status: 503,

@@ -886,7 +886,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // arrives. A brand-new send uses "connecting" (not a reconnect status), so
       // it still starts clean.
       const isReconnectStatus =
-        action.status === "recovering" || action.status === "offline"
+        action.status === "recovering" ||
+        action.status === "offline" ||
+        action.status === "updating"
       const hasExistingStreamPayload =
         state.streamingContent.length > 0 ||
         state.streamingContentSegments.some(
