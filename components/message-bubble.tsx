@@ -797,6 +797,12 @@ function WorkedForBlock({
         () => sliceTimelineByRenderBudget(items, renderBudget),
         [items, renderBudget]
     )
+    const hasParentAgentTools = React.useMemo(
+        () => items.some(item => (
+            item.type === "reasoning" && item.entries.some(entry => entry.type === "agent_call")
+        )),
+        [items]
+    )
     const hasMoreDetails = renderBudget < totalRenderUnits
 
     const [isMounted, setIsMounted] = React.useState(false)
@@ -891,6 +897,7 @@ function WorkedForBlock({
                                             onAttachmentClick={onAttachmentClick}
                                             searchToolDisplay="expanded"
                                             hiddenAgentRunIds={hiddenAgentRunIds}
+                                            toolOwnerLabel={hasParentAgentTools ? "Parent agent" : undefined}
                                         />
                                     ) : item.type === "steered" ? (
                                         // Steered messages are section barriers —
@@ -949,6 +956,7 @@ function ReasoningEntryList({
     onAttachmentClick,
     searchToolDisplay,
     hiddenAgentRunIds,
+    toolOwnerLabel,
 }: {
     reasoning: ReasoningEntry[]
     onArtifactClick?: (artifact: ArtifactPayload) => void
@@ -956,8 +964,12 @@ function ReasoningEntryList({
     onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
     searchToolDisplay: SearchToolDisplay
     hiddenAgentRunIds?: ReadonlySet<string>
+    toolOwnerLabel?: string
 }) {
     const nodes: React.ReactNode[] = []
+    const resolvedToolOwnerLabel = toolOwnerLabel ?? (
+        reasoning.some(entry => entry.type === "agent_call") ? "Parent agent" : undefined
+    )
 
     // Agents spawned by another agent in this same reasoning list (their
     // parentRunId is a sibling agent_call's runId) are nested sub-agents. They
@@ -993,6 +1005,7 @@ function ReasoningEntryList({
                 <InlineWebSearchGroup
                     key={`web-search-${entry.id}-${index}-${entries.length}`}
                     entries={entries}
+                    ownerLabel={resolvedToolOwnerLabel}
                 />
             )
             index = nextIndex - 1
@@ -1015,6 +1028,7 @@ function ReasoningEntryList({
                     entry={entry}
                     onArtifactClick={onArtifactClick}
                     searchToolDisplay={searchToolDisplay}
+                    ownerLabel={resolvedToolOwnerLabel}
                 />
             )
         } else if (entry.type === "context_compaction") {
@@ -1208,15 +1222,17 @@ function ToolCallBlock({
     entry,
     onArtifactClick,
     searchToolDisplay,
+    ownerLabel,
 }: {
     entry: ToolCallReasoningEntry
     onArtifactClick?: (artifact: ArtifactPayload) => void
     searchToolDisplay?: SearchToolDisplay
+    ownerLabel?: string
     thoughtAutoOpen?: boolean
     thoughtAutoExpandTools?: boolean
     liveCollapsedTitle?: boolean
 }) {
-    return <InlineToolCallView entry={entry} onOpen={onArtifactClick} searchDisplay={searchToolDisplay} />
+    return <InlineToolCallView entry={entry} onOpen={onArtifactClick} searchDisplay={searchToolDisplay} ownerLabel={ownerLabel} />
 }
 
 function formatAgentStatus(status: AgentCallReasoningEntry["status"], queued?: boolean): string {
@@ -1258,7 +1274,7 @@ function GenericAgentCallBlock({
     const outputChars = entry.content.length
     const details = [
         statusText,
-        toolCount > 0 ? `${toolCount} tool${toolCount === 1 ? "" : "s"}` : "",
+        toolCount > 0 ? `${toolCount} child tool${toolCount === 1 ? "" : "s"}` : "",
         outputChars > 0 ? `${formatCompactCount(outputChars)} output` : "",
         outputChars > 0 && entry.agentThreadId ? "full transcript saved" : "",
     ].filter(Boolean)

@@ -41,7 +41,7 @@ CLI_UPDATE_PACKAGES = [
     pkg.strip()
     for pkg in os.environ.get(
         "ORCHESTRATOR_CLI_UPDATE_PACKAGES",
-        "@anthropic-ai/claude-code@latest,@openai/codex@latest",
+        "@anthropic-ai/claude-code@latest,@openai/codex@0.144.4",
     ).split(",")
     if pkg.strip()
 ]

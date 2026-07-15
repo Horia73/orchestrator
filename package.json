@@ -75,6 +75,7 @@
     "smoke:tool-registry": "tsx scripts/smoke-tool-registry.ts",
     "smoke:tool-name-prefix": "tsx scripts/smoke-tool-name-prefix.ts",
     "smoke:codex-provider": "tsx scripts/smoke-codex-provider.ts",
+    "smoke:codex-appserver-live": "tsx scripts/smoke-codex-appserver-live.ts",
     "smoke:env-tools": "tsx scripts/smoke-env-tools.ts",
     "smoke:remote-sudo": "tsx scripts/smoke-remote-sudo.ts",
     "smoke:app-ai": "tsx scripts/smoke-app-ai.ts",

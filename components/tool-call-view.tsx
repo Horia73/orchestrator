@@ -23,6 +23,7 @@ interface InlineToolCallViewProps {
     entry: ToolCallReasoningEntry
     onOpen?: (artifact: ArtifactPayload) => void
     searchDisplay?: "expanded" | "compact"
+    ownerLabel?: string
 }
 
 type ParsedData = Record<string, unknown> | null
@@ -41,7 +42,7 @@ const TOOL_CALL_PANEL_STYLE: React.CSSProperties = {
 }
 const TOOL_CALL_INSET_CLASS = "ml-7 w-[calc(100%_-_1.75rem)] max-w-[760px]"
 
-export function InlineToolCallView({ entry, searchDisplay = "expanded" }: InlineToolCallViewProps) {
+export function InlineToolCallView({ entry, searchDisplay = "expanded", ownerLabel }: InlineToolCallViewProps) {
     const status = entry.status ?? (entry.content ? (entry.success === false ? "error" : "ok") : "running")
     const data = parseToolData(entry.content)
     const terminalWrapRef = useTrapWheel<HTMLDivElement>()
@@ -58,6 +59,11 @@ export function InlineToolCallView({ entry, searchDisplay = "expanded" }: Inline
                 )}
                 style={TOOL_CALL_PANEL_STYLE}
             >
+                {ownerLabel && (
+                    <div className="flex shrink-0 items-center justify-end border-b border-[#24242a] px-2 py-1.5">
+                        <ToolOwnerPill label={ownerLabel} />
+                    </div>
+                )}
                 <LiveTerminal entry={entry} data={data} className={TERMINAL_MIN_WIDTH_CLASS} />
             </div>
         )
@@ -67,15 +73,15 @@ export function InlineToolCallView({ entry, searchDisplay = "expanded" }: Inline
         if (searchDisplay === "compact") {
             return (
                 <div className={cn("relative z-10 py-1 text-left", TOOL_CALL_INSET_CLASS)}>
-                    <CompactSearchPreview entry={entry} status={status} data={data} />
+                    <CompactSearchPreview entry={entry} status={status} data={data} ownerLabel={ownerLabel} />
                 </div>
             )
         }
-        return <InlineWebSearchGroup entries={[entry]} />
+        return <InlineWebSearchGroup entries={[entry]} ownerLabel={ownerLabel} />
     }
 
     return (
-        <ToolFrame>
+        <ToolFrame ownerLabel={ownerLabel}>
             <ToolPreview entry={entry} data={data} />
         </ToolFrame>
     )
@@ -110,7 +116,7 @@ export function isWebSearchToolCall(entry: ToolCallReasoningEntry): boolean {
     return isSearchTool(entry.toolName)
 }
 
-export function InlineWebSearchGroup({ entries }: { entries: ToolCallReasoningEntry[] }) {
+export function InlineWebSearchGroup({ entries, ownerLabel }: { entries: ToolCallReasoningEntry[]; ownerLabel?: string }) {
     const requests: WebRequestItem[] = []
     const websites: SearchWebsite[] = []
     let hasRunning = false
@@ -132,6 +138,7 @@ export function InlineWebSearchGroup({ entries }: { entries: ToolCallReasoningEn
                 requests={dedupeWebRequests(requests)}
                 websites={dedupeWebsites(websites, requests)}
                 status={hasRunning ? "running" : hasError ? "error" : "ok"}
+                ownerLabel={ownerLabel}
             />
         </div>
     )
@@ -140,21 +147,38 @@ export function InlineWebSearchGroup({ entries }: { entries: ToolCallReasoningEn
 function ToolFrame({
     bodyClassName,
     children,
+    ownerLabel,
 }: {
     bodyClassName?: string
     children: React.ReactNode
+    ownerLabel?: string
 }) {
     const bodyRef = useTrapWheel<HTMLDivElement>()
     return (
-        <div className={cn("relative z-10 overflow-hidden rounded-md border border-border bg-background text-left shadow-sm", TOOL_CALL_INSET_CLASS)}>
+        <div
+            className={cn("relative z-10 flex flex-col overflow-hidden rounded-md border border-border bg-background text-left shadow-sm", TOOL_CALL_INSET_CLASS)}
+            style={TOOL_CALL_PANEL_STYLE}
+        >
+            {ownerLabel && (
+                <div className="flex shrink-0 items-center justify-end border-b border-border/60 px-2 py-1.5">
+                    <ToolOwnerPill label={ownerLabel} />
+                </div>
+            )}
             <div
                 ref={bodyRef}
-                className={cn("tool-call-scroll overflow-auto bg-background", bodyClassName)}
-                style={TOOL_CALL_PANEL_STYLE}
+                className={cn("tool-call-scroll min-h-0 flex-1 overflow-auto bg-background", bodyClassName)}
             >
                 {children}
             </div>
         </div>
+    )
+}
+
+function ToolOwnerPill({ label }: { label: string }) {
+    return (
+        <span className="rounded border border-border/70 bg-muted/45 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+            {label}
+        </span>
     )
 }
 
@@ -174,7 +198,7 @@ function StatusPill({ status }: { status: "running" | "ok" | "error" }) {
     )
 }
 
-function CompactSearchPreview({ entry, status, data }: { entry: ToolCallReasoningEntry; status: "running" | "ok" | "error"; data: ParsedData }) {
+function CompactSearchPreview({ entry, status, data, ownerLabel }: { entry: ToolCallReasoningEntry; status: "running" | "ok" | "error"; data: ParsedData; ownerLabel?: string }) {
     const queries = searchQueries(data, entry.args, entry.content)
     const websites = searchWebsites(data, entry.content)
     const requests = webRequestItems(data, entry.args, entry.content)
@@ -221,6 +245,7 @@ function CompactSearchPreview({ entry, status, data }: { entry: ToolCallReasonin
                 </span>
                 <span className="block truncate text-[11px] text-muted-foreground">{detail}</span>
             </span>
+            {ownerLabel && <ToolOwnerPill label={ownerLabel} />}
             <StatusPill status={status} />
         </div>
     )
@@ -690,10 +715,12 @@ function WebActivityCard({
     requests,
     websites,
     status,
+    ownerLabel,
 }: {
     requests: WebRequestItem[]
     websites: SearchWebsite[]
     status: "running" | "ok" | "error"
+    ownerLabel?: string
 }) {
     const queryCount = requests.filter(item => item.kind === "search" || item.kind === "image").length
     const actionCount = requests.length - queryCount
@@ -717,6 +744,7 @@ function WebActivityCard({
                     <span className="block truncate text-[13px] font-medium text-foreground/85">Web activity</span>
                     <span className="block truncate text-[11px] text-muted-foreground">{summary || "Web action"}</span>
                 </span>
+                {ownerLabel && <ToolOwnerPill label={ownerLabel} />}
                 <StatusPill status={status} />
             </div>
             <div ref={listRef} className="tool-call-scroll min-h-0 flex-1 divide-y divide-border/45 overflow-y-auto overscroll-contain [touch-action:pan-y]">

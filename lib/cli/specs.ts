@@ -14,6 +14,11 @@
 
 export type CliId = 'claude-code' | 'codex'
 
+/** Verified app-server baseline for Orchestrator's namespaced dynamic-tool
+ * integration. Keep the Settings installer aligned with the Docker host
+ * bridge default in scripts/docker-update-bridge.py. */
+export const CODEX_CLI_PACKAGE = '@openai/codex@0.144.4'
+
 export interface CliStatus {
     /** True if the binary is on PATH. */
     installed: boolean
@@ -152,8 +157,8 @@ export const CLI_SPECS: Record<CliId, CliSpec> = {
         bin: 'codex',
         description: 'OpenAI Codex CLI subscription. Used alongside Claude Code for coding tasks.',
         installBin: 'npm',
-        installArgs: ['install', '-g', '@openai/codex'],
-        installHint: 'Installs the OpenAI Codex CLI with npm into the app user prefix (~/.npm-global), no sudo required. Node.js 22 is recommended for this app.',
+        installArgs: ['install', '-g', CODEX_CLI_PACKAGE],
+        installHint: 'Installs the production-verified OpenAI Codex CLI into the app user prefix (~/.npm-global), no sudo required. Node.js 22 is recommended for this app.',
         installDocsUrl: 'https://help.openai.com/en/articles/11096431',
         loginHint: 'Browser will open for OpenAI OAuth. Complete sign-in there, then close this window.',
         loginArgs: ['login'],

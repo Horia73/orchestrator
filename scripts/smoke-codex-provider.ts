@@ -15,6 +15,7 @@ import { imageGenerator } from "@/lib/ai/agents/image-generator"
 import { migrateLegacyAgentModelSelection } from "@/lib/config"
 import { clearCodexAuthFiles, codexAuthRejectedByBoth } from "@/lib/cli/codex-env"
 import { codexModelsToLiveEntries, type CodexListedModel } from "@/lib/cli/codex-model-probe"
+import { CODEX_CLI_PACKAGE } from "@/lib/cli/specs"
 import { getEffectiveModel } from "@/lib/models/registry"
 
 assert.ok(
@@ -63,31 +64,46 @@ assert.equal(mapEffortForCodex("ultra"), "ultra", "New Codex effort ids should p
 
 const managedAppServerArgs = codexProviderTestHooks.buildAppServerArgs(false, ["web_search"])
 assert.ok(
-  managedAppServerArgs.includes("features.code_mode_host=false"),
-  "Managed Codex runs must keep dynamic tools direct and blocking"
+  managedAppServerArgs.includes('features.code_mode.direct_only_tool_namespaces=["orchestrator"]'),
+  "Managed Codex runs must keep the Orchestrator namespace direct and blocking"
 )
 const nativeCoderAppServerArgs = codexProviderTestHooks.buildAppServerArgs(true, [])
 assert.equal(
-  nativeCoderAppServerArgs.includes("features.code_mode_host=false"),
+  nativeCoderAppServerArgs.some(arg => arg.includes("direct_only_tool_namespaces")),
   false,
-  "Native coder runs may retain Codex code mode because they have no Orchestrator dynamic tools"
+  "Native coder runs have no Orchestrator dynamic-tool namespace override"
 )
 const managedThreadParams = codexProviderTestHooks.buildThreadParams({
   model: "gpt-5.6-sol",
-  tools: [],
+  tools: [delegateToTool],
   builtins: ["web_search"],
   nativeCoderRun: false,
   cwd: "/tmp/orchestrator-codex-provider-smoke",
 })
 type CodexThreadConfig = {
-  features?: { code_mode_host?: boolean }
+  features?: { code_mode?: { direct_only_tool_namespaces?: string[] } }
   multi_agent_v2?: { multi_agent_mode_hint_text?: string }
 }
 const managedThreadConfig = managedThreadParams.config as CodexThreadConfig
-assert.equal(
-  managedThreadConfig.features?.code_mode_host,
-  false,
-  "Managed thread configuration must also disable the code-mode host"
+assert.deepEqual(
+  managedThreadConfig.features?.code_mode?.direct_only_tool_namespaces,
+  ["orchestrator"],
+  "Managed thread configuration must keep Orchestrator tools direct even when the model forces code_mode_only"
+)
+assert.deepEqual(
+  managedThreadParams.dynamicTools,
+  [{
+    type: "namespace",
+    name: "orchestrator",
+    description: "Tools provided by Orchestrator for managed workflows, integrations, and specialist delegation.",
+    tools: [{
+      type: "function",
+      name: delegateToTool.name,
+      description: delegateToTool.description,
+      inputSchema: delegateToTool.input_schema,
+    }],
+  }],
+  "Managed dynamic tools must use the official namespaced app-server schema"
 )
 assert.match(
   managedThreadConfig.multi_agent_v2?.multi_agent_mode_hint_text ?? "",
@@ -107,9 +123,9 @@ const nativeCoderThreadParams = codexProviderTestHooks.buildThreadParams({
 })
 const nativeCoderThreadConfig = nativeCoderThreadParams.config as CodexThreadConfig
 assert.equal(
-  nativeCoderThreadConfig.features?.code_mode_host,
+  nativeCoderThreadConfig.features?.code_mode,
   undefined,
-  "Native coder thread configuration should not override Codex code mode"
+  "Native coder thread configuration should not override Codex tool exposure"
 )
 assert.equal(
   nativeCoderThreadConfig.multi_agent_v2,
@@ -120,28 +136,21 @@ assert.equal(
 const legacyManagedSession = codexProviderTestHooks.decodeAppServerSessionId("appserver:legacy-thread")
 assert.deepEqual(
   legacyManagedSession,
-  { threadId: "legacy-thread", directToolMode: false },
-  "Unversioned app-server sessions must be recognized as legacy managed threads"
+  { threadId: "legacy-thread" },
+  "Unversioned app-server sessions must remain resumable"
 )
-const directManagedSessionId = codexProviderTestHooks.encodeAppServerSessionId("direct-thread", true)
-assert.equal(directManagedSessionId, "appserver:direct:direct-thread")
+const directManagedSessionId = codexProviderTestHooks.encodeAppServerSessionId("direct-thread")
+assert.equal(directManagedSessionId, "appserver:direct-thread")
 assert.deepEqual(
-  codexProviderTestHooks.decodeAppServerSessionId(directManagedSessionId),
-  { threadId: "direct-thread", directToolMode: true },
-  "Migrated managed sessions must not be forked again"
+  codexProviderTestHooks.decodeAppServerSessionId("appserver:direct:legacy-direct-thread"),
+  { threadId: "legacy-direct-thread" },
+  "Former appserver:direct sessions must migrate through normal resume"
 )
-const managedForkParams = codexProviderTestHooks.buildThreadForkParams(managedThreadParams)
-assert.equal(managedForkParams.dynamicTools, undefined, "thread/fork must not receive thread/start-only dynamicTools")
-assert.equal(managedForkParams.serviceName, undefined, "thread/fork must not receive thread/start-only serviceName")
-assert.equal(
-  (managedForkParams.config as { features?: { code_mode_host?: boolean } }).features?.code_mode_host,
-  false,
-  "Legacy thread forks must carry the direct-tool configuration override"
-)
-assert.equal(
-  (managedForkParams.config as CodexThreadConfig).multi_agent_v2?.multi_agent_mode_hint_text,
-  managedThreadConfig.multi_agent_v2?.multi_agent_mode_hint_text,
-  "Legacy thread forks must carry the Orchestrator delegation policy override"
+assert.equal(CODEX_CLI_PACKAGE, "@openai/codex@0.144.4", "Codex installer must use the production-verified release")
+assert.match(
+  readFileSync(join(process.cwd(), "scripts/docker-update-bridge.py"), "utf8"),
+  /@openai\/codex@0\.144\.4/,
+  "Docker CLI updates must use the same production-verified Codex release"
 )
 
 const directToolFixtureRoot = mkdtempSync(join(tmpdir(), "orchestrator-codex-direct-tools-"))
@@ -153,37 +162,59 @@ import readline from "node:readline"
 import { writeFileSync } from "node:fs"
 
 const send = value => process.stdout.write(JSON.stringify(value) + "\\n")
+const parentViolation = process.env.FAKE_PARENT_VIOLATION === "1"
 const rl = readline.createInterface({ input: process.stdin })
 rl.on("line", line => {
   const message = JSON.parse(line)
   if (message.id === 700 && !message.method) {
     send({ method: "item/completed", params: { item: {
-      id: "delegate-call", type: "dynamicToolCall", tool: "delegate_to",
+      id: "delegate-call", type: "dynamicToolCall", namespace: "orchestrator", tool: "delegate_to",
       status: "completed", success: false, contentItems: [{ type: "inputText", text: "diagnostic failure" }],
     } } })
-    send({ method: "item/agentMessage/delta", params: { itemId: "final-message", delta: "DONE" } })
-    send({ method: "item/completed", params: { item: { id: "final-message", type: "agentMessage", text: "DONE" } } })
-    send({ method: "turn/completed", params: { turn: { id: "fake-turn", status: "completed" } } })
+    if (!parentViolation) {
+      send({ method: "item/agentMessage/delta", params: { itemId: "final-message", delta: "DONE" } })
+      send({ method: "item/completed", params: { item: { id: "final-message", type: "agentMessage", text: "DONE" } } })
+      send({ method: "turn/completed", params: { turn: { id: "fake-turn", status: "completed" } } })
+    }
     return
   }
   if (message.method === "initialize") {
     send({ id: message.id, result: { userAgent: "fake" } })
     return
   }
-  if (message.method === "thread/fork") {
+  if (message.method === "thread/resume") {
     writeFileSync(process.env.FAKE_CAPTURE_PATH, JSON.stringify({ method: message.method, params: message.params }))
-    send({ id: message.id, result: { thread: { id: "migrated-thread" } } })
+    send({ id: message.id, result: { thread: { id: message.params.threadId } } })
+    return
+  }
+  if (message.method === "thread/start") {
+    send({ id: message.id, result: { thread: { id: "fresh-thread" } } })
+    return
+  }
+  if (message.method === "turn/interrupt") {
+    send({ id: message.id, result: {} })
+    send({ method: "turn/completed", params: { turn: { id: "fake-turn", status: "interrupted" } } })
     return
   }
   if (message.method === "turn/start") {
     send({ id: message.id, result: { turn: { id: "fake-turn" } } })
-    send({ id: 700, method: "item/tool/call", params: {
-      callId: "delegate-call", tool: "delegate_to", arguments: { agent_id: "browser_agent", prompt: "diagnostic" },
-    } })
-    send({ method: "item/agentMessage/delta", params: { itemId: "blocked-message", delta: "SHOULD_NOT_SURFACE" } })
-    send({ method: "item/completed", params: { item: {
-      id: "blocked-message", type: "agentMessage", text: "SHOULD_NOT_SURFACE",
+    send({ method: "turn/started", params: { turn: { id: "fake-turn" } } })
+    send({ method: "item/started", params: { item: {
+      id: "delegate-call", type: "dynamicToolCall", namespace: "orchestrator", tool: "delegate_to",
+      status: "inProgress", arguments: { agent_id: "browser_agent", prompt: "diagnostic" },
     } } })
+    send({ id: 700, method: "item/tool/call", params: {
+      callId: "delegate-call", namespace: "orchestrator", tool: "delegate_to",
+      arguments: { agent_id: "browser_agent", prompt: "diagnostic" },
+    } })
+    if (parentViolation) {
+      send({ method: "item/started", params: { item: {
+        id: "forbidden-shell", type: "commandExecution", command: "git status --short", cwd: "/tmp",
+      } } })
+      send({ method: "item/commandExecution/outputDelta", params: {
+        itemId: "forbidden-shell", delta: "M package.json\\n",
+      } })
+    }
   }
 })
 `)
@@ -192,6 +223,7 @@ rl.on("line", line => {
   const content: string[] = []
   const sessions: string[] = []
   const errors: string[] = []
+  const toolCalls: string[] = []
   const previousCapturePath = process.env.FAKE_CAPTURE_PATH
   process.env.FAKE_CAPTURE_PATH = capturePath
   try {
@@ -201,13 +233,13 @@ rl.on("line", line => {
       model: "gpt-5.6-sol",
       tools: [delegateToTool],
       builtins: [],
-      prevSession: { threadId: "legacy-thread", directToolMode: false },
+      prevSession: { threadId: "legacy-thread" },
       nativeCoderRun: false,
       callbacks: {
         onThinking() {},
         onThinkingDone() {},
         onContent(text) { content.push(text) },
-        onToolCall() {},
+        onToolCall(call) { toolCalls.push(call.name) },
         onToolResult() {},
         onDone(meta) { if (meta.sessionId) sessions.push(meta.sessionId) },
         onError(error) { errors.push(error) },
@@ -218,17 +250,60 @@ rl.on("line", line => {
     else process.env.FAKE_CAPTURE_PATH = previousCapturePath
   }
 
-  assert.deepEqual(errors, [], "The legacy-thread migration fixture must finish without provider errors")
-  assert.equal(content.join(""), "DONE", "Parent commentary emitted during delegate_to must stay suppressed")
-  assert.deepEqual(sessions, ["appserver:direct:migrated-thread"])
+  assert.deepEqual(errors, [], "A direct namespaced delegation must finish without provider errors")
+  assert.equal(content.join(""), "DONE", "The parent may resume only after the delegation item completes")
+  assert.deepEqual(toolCalls, ["delegate_to"], "The direct path must not create an exec/wait/shell wrapper")
+  assert.deepEqual(sessions, ["appserver:legacy-thread"])
   const capture = JSON.parse(readFileSync(capturePath, "utf8")) as {
     method: string
-    params: { threadId: string; dynamicTools?: unknown; config?: { features?: { code_mode_host?: boolean } } }
+    params: {
+      threadId: string
+      dynamicTools?: Array<{ type?: string; name?: string; tools?: Array<{ name?: string }> }>
+      config?: { features?: { code_mode?: { direct_only_tool_namespaces?: string[] } } }
+    }
   }
-  assert.equal(capture.method, "thread/fork")
+  assert.equal(capture.method, "thread/resume")
   assert.equal(capture.params.threadId, "legacy-thread")
-  assert.equal(capture.params.dynamicTools, undefined)
-  assert.equal(capture.params.config?.features?.code_mode_host, false)
+  assert.equal(capture.params.dynamicTools?.[0]?.type, "namespace")
+  assert.equal(capture.params.dynamicTools?.[0]?.name, "orchestrator")
+  assert.equal(capture.params.dynamicTools?.[0]?.tools?.[0]?.name, "delegate_to")
+  assert.deepEqual(
+    capture.params.config?.features?.code_mode?.direct_only_tool_namespaces,
+    ["orchestrator"],
+    "thread/resume must replace a legacy flat catalog with direct-only namespaced tools"
+  )
+
+  const violationErrors: string[] = []
+  const violationToolCalls: string[] = []
+  process.env.FAKE_PARENT_VIOLATION = "1"
+  try {
+    await codexProviderTestHooks.runCodexAppServer({
+      bin: fakeCodex,
+      prompt: "Exercise the fail-closed guard.",
+      model: "gpt-5.6-sol",
+      tools: [delegateToTool],
+      builtins: [],
+      nativeCoderRun: false,
+      callbacks: {
+        onThinking() {},
+        onThinkingDone() {},
+        onContent() {},
+        onToolCall(call) { violationToolCalls.push(call.name) },
+        onToolResult() {},
+        onDone() {},
+        onError(error) { violationErrors.push(error) },
+      },
+    })
+  } finally {
+    delete process.env.FAKE_PARENT_VIOLATION
+  }
+  assert.equal(violationErrors.length, 1, "A resumed parent must fail closed exactly once")
+  assert.match(violationErrors[0] ?? "", /resumed the parent while a synchronous delegation was still running/)
+  assert.deepEqual(
+    violationToolCalls,
+    ["delegate_to"],
+    "Forbidden parent shell activity must be interrupted before it reaches the UI/tool log"
+  )
 } finally {
   rmSync(directToolFixtureRoot, { recursive: true, force: true })
 }
