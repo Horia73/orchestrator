@@ -514,10 +514,11 @@ export function ChatView() {
   // switch. It runs before paint (layout effect) and before the scroll-restore
   // layout effect below, so geometry is correct when restore reads it. Skips
   // the first mount — the useState initializers already handled that.
-  const resetPrevConversationIdRef = React.useRef(conversationId)
+  const [resetConversationId, setResetConversationId] =
+    React.useState(conversationId)
   React.useLayoutEffect(() => {
-    if (resetPrevConversationIdRef.current === conversationId) return
-    resetPrevConversationIdRef.current = conversationId
+    if (resetConversationId === conversationId) return
+    setResetConversationId(conversationId)
     if (!conversationId) return
 
     const savedMinHeight = readSavedMinHeightState(conversationId)
@@ -563,7 +564,7 @@ export function ChatView() {
     lastObservedScrollTopRef.current = null
     spacerBurstScrollTopRef.current = null
     spacerBurstLastRecomputeAtRef.current = 0
-  }, [conversationId])
+  }, [conversationId, resetConversationId])
 
   const scrollToBottom = React.useCallback(
     (behavior: ScrollBehavior = "smooth", options?: { settle?: boolean }) => {
@@ -2902,10 +2903,20 @@ export function ChatView() {
     : null
   const isAwaitingInitialMessages =
     conversationLoadStatus === "summary" || conversationLoadStatus === "loading"
+  // On the first render for a different conversation, the state below can
+  // still contain the id restored by the previous visit. In particular, a
+  // quick A -> B -> A switch can return to A before B finishes restoring, so
+  // `restoredScrollConversationId === conversationId` is stale for this one
+  // commit. Treat the id change itself as unsettled; the reset layout effect
+  // above then clears the stale state before paint and the normal restore path
+  // releases the view once its geometry is final.
+  const conversationChangedThisCommit =
+    resetConversationId !== conversationId
   const isAwaitingInitialScrollRestore = Boolean(
     conversationId &&
-    restoredScrollConversationId !== conversationId &&
-    (messageCount > 0 || isAwaitingInitialMessages)
+    (conversationChangedThisCommit ||
+      (restoredScrollConversationId !== conversationId &&
+        (messageCount > 0 || isAwaitingInitialMessages)))
   )
   const isRestoringInitialFrame =
     isAwaitingInitialScrollRestore || isRestoringScroll

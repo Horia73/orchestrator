@@ -24,6 +24,7 @@ const devCommandArg = stringArg('dev-command')
 const testCommandArg = stringArg('test-command')
 const buildCommandArg = stringArg('build-command')
 const deployTarget = stringArg('deploy-target') || 'none'
+const deliveryKind = stringArg('delivery') || stringArg('delivery-kind') || 'auto'
 const pushPolicy = stringArg('push-policy') || (kind === 'existing-git' ? 'agent-branch' : 'manual')
 const portStart = intArg('port-start', 3101)
 const portEnd = intArg('port-end', 3999)
@@ -40,6 +41,9 @@ const portStatePath = path.join(stateRoot, 'ports.json')
 
 if (kind !== 'existing-git' && kind !== 'new') {
   fail('kind must be existing-git or new.')
+}
+if (!['auto', 'static', 'server'].includes(deliveryKind)) {
+  fail('delivery must be auto, static, or server.')
 }
 if (kind === 'existing-git' && !sourceArg) {
   fail('existing-git runs require --source <git-url-or-local-path>.')
@@ -87,6 +91,7 @@ try {
     preview,
     template,
     deployTarget,
+    deliveryKind,
     pushPolicy,
     hints,
   }), 'utf-8')
@@ -104,6 +109,7 @@ try {
     preview,
     template,
     deployTarget,
+    deliveryKind,
     pushPolicy,
     hints,
   })
@@ -132,6 +138,7 @@ try {
     clonedFrom: prepared.clonedFrom,
     remote: prepared.remote,
     deployTarget,
+    deliveryKind,
     pushPolicy,
     buildCommand: buildCommandArg || null,
     devCommand: devCommandArg || null,
@@ -153,7 +160,8 @@ try {
     console.log(`Repo: ${repoDir}`)
     console.log(`Branch: ${branch}`)
     console.log(`Base: ${prepared.baseRef || '(none)'}`)
-    console.log(`Managed preview: ${preview ? 'enabled' : 'disabled (standalone projects publish through /published-apps/<slug>/)'}`)
+    console.log(`Delivery: ${deliveryKind}`)
+    console.log(`Managed preview: ${preview ? 'enabled' : 'disabled'}`)
     if (preview) {
       console.log(`Port: ${port}`)
       console.log(`Dev URL: ${devUrl}`)
@@ -362,7 +370,7 @@ function buildInstructions(values) {
   const basePathIntro = values.preview
     ? `This run has an explicit managed preview under \`${values.preview.basePath}/\`, and static publishes are served under \`/published-apps/<slug>/\`. Web apps MUST honour \`PREVIEW_BASE_PATH\` for preview and \`PUBLISHED_BASE_PATH\` for publish so assets/routes resolve under those subpaths.`
     : 'Durable static apps are served under `/published-apps/<slug>/` rather than `/`. Web apps that emit root-absolute assets/routes MUST honour `PUBLISHED_BASE_PATH` at build time so the published app works after the container restarts.'
-  const basePathBlock = [
+  const basePathBlock = values.deliveryKind === 'server' ? [] : [
     values.preview
       ? '### Base-path contract (preview and publish)'
       : '### Base-path contract (published static apps)',
@@ -435,9 +443,66 @@ function buildInstructions(values) {
       '',
       'This standalone project run is not assigned a managed dev preview. Do not leave long-running dev servers behind, do not edit host nginx/systemd/Docker services on your own, and do not report raw localhost/127.0.0.1 links to the user.',
       '',
-      'For user-facing static sites/apps, the durable surface is the Orchestrator-published URL returned by `publish-static`. Use package scripts, builds, and short-lived local checks as needed, then stop anything you start before returning.',
+      values.deliveryKind === 'server'
+        ? 'Use package scripts, tests, builds, and short-lived local server checks as needed. Stop anything you start before returning; deployment is a separate orchestrator approval gate.'
+        : 'For user-facing static sites/apps, the durable surface is the Orchestrator-published URL returned by `publish-static`. Use package scripts, builds, and short-lived local checks as needed, then stop anything you start before returning.',
       '',
       ...basePathBlock,
+    ]
+
+  const deliveryContractBlock = values.deliveryKind === 'static'
+    ? [
+      '## Selected Delivery: Static',
+      '',
+      'This run is explicitly browser-only/static. It must not require a server runtime, private API, database, secrets, SSR, WebSockets, workers, or cron. Build and test for the `/published-apps/<slug>/` contract below.',
+      '',
+    ]
+    : values.deliveryKind === 'server'
+      ? [
+        '## Selected Delivery: Server-backed',
+        '',
+        'This run is explicitly full-stack/server-backed. Use the product\'s own runtime and deployment contract, not Orchestrator\'s static publisher or private APIs as an improvised backend. Implement and test the complete product in this isolated repo, but do not deploy or edit Orchestrator/nginx/systemd/Docker/host services.',
+        '',
+        'The implementation and final report must define: production build/start commands, health endpoint, environment variables/secrets contract, database schema and migrations, persistent storage/volume, authentication/session security, server-side authorization, backup/restore, audit needs, focused tests, and an exact deployment/migration/cutover/rollback plan for later approval.',
+        '',
+      ]
+      : [
+        '## Selected Delivery: Auto (decide before coding)',
+        '',
+        'Inspect the requirements before delegating. If the product needs a backend, database, authentication, roles, secrets, SSR, WebSockets, workers, or cron, treat it as server-backed and follow the server contract below; do not force it into `publish-static`. Use static delivery only when the finished product is genuinely browser-only.',
+        '',
+      ]
+
+  const serverDeliveryBlock = values.deliveryKind === 'static'
+    ? []
+    : [
+      '## Server-backed Delivery',
+      '',
+      'For a server-backed/full-stack product:',
+      '',
+      '- keep all source and implementation inside this isolated repo; do not modify Orchestrator source or call private Orchestrator APIs;',
+      '- implement backend, database, authentication, sessions, and authorization in this product when required;',
+      '- protect every server route/API; hiding UI controls is not authorization;',
+      '- make migrations, persistent storage, backup/restore, health checks, and security tests reproducible;',
+      '- use short-lived local verification only and stop any server you start before returning;',
+      '- return the exact target service/provider, port, route/subdomain, reverse proxy/TLS, secrets, volume, migration/cutover, backup, and rollback plan;',
+      '- do not deploy, edit host services, or create paid/external resources without a separate explicit approval.',
+      '',
+    ]
+
+  const staticPublishBlock = values.deliveryKind === 'server'
+    ? []
+    : [
+      '## Durable Static Publish',
+      '',
+      'If the finished project is a static web app/site (typical Vite quiz, dashboard, landing page, or exported Next.js app), the orchestrator can publish the verified build into the active profile workspace and serve it through the live Orchestrator reverse proxy:',
+      '',
+      '```bash',
+      `npm run project-run:run -- publish-static --run-id ${values.runId} --slug <stable-app-slug>`,
+      '```',
+      '',
+      'That command runs the build with `PUBLISHED_BASE_PATH=/published-apps/<slug>`, copies `dist/`, `out/`, or `build/` into `workspace/published-apps/<slug>/`, returns stable Public/LAN URLs such as `/published-apps/<slug>/`, and asks the host bridge to create a Tailscale Funnel scoped only to that same path. The final orchestrator response should include `lanUrl` and `tailscaleFunnelUrl` when present; if the Funnel URL is unavailable, it should report the returned status/error. Do not put interactive apps under `/files/`: that file route deliberately blocks script execution. Published static apps run without Orchestrator API/network permissions; if the project requires fetch/XHR/WebSocket calls, a backend, SSR server, database, secrets, cron, or paid deployment, report that it is not a static publish and ask the orchestrator for an explicit deployment target/policy instead of editing nginx or host services on your own.',
+      '',
     ]
 
   return [
@@ -473,6 +538,7 @@ function buildInstructions(values) {
     '',
     `Push policy hint: \`${values.pushPolicy}\`. Deployment target hint: \`${values.deployTarget}\`. Treat these as policy inputs for the orchestrator gate, not as permission to push or deploy on your own.`,
     '',
+    ...deliveryContractBlock,
     '## Git Preflight',
     '',
     'Before editing, confirm you are in the isolated repository and inspect branch/status:',
@@ -486,16 +552,8 @@ function buildInstructions(values) {
     'Do not pull, rebase, reset, stash, or discard local work unless the orchestrator explicitly asks you to.',
     '',
     ...previewBlock,
-    '## Durable Static Publish',
-    '',
-    'If the finished project is a static web app/site (typical Vite quiz, dashboard, landing page, or exported Next.js app), the orchestrator can publish the verified build into the active profile workspace and serve it through the live Orchestrator reverse proxy:',
-    '',
-    '```bash',
-    `npm run project-run:run -- publish-static --run-id ${values.runId} --slug <stable-app-slug>`,
-    '```',
-    '',
-    'That command runs the build with `PUBLISHED_BASE_PATH=/published-apps/<slug>`, copies `dist/`, `out/`, or `build/` into `workspace/published-apps/<slug>/`, returns stable Public/LAN URLs such as `/published-apps/<slug>/`, and asks the host bridge to create a Tailscale Funnel scoped only to that same path. The final orchestrator response should include `lanUrl` and `tailscaleFunnelUrl` when present; if the Funnel URL is unavailable, it should report the returned status/error. Do not put interactive apps under `/files/`: that file route deliberately blocks script execution. Published static apps run without Orchestrator API/network permissions; if the project requires fetch/XHR/WebSocket calls, a backend, SSR server, database, secrets, cron, or paid deployment, report that it is not a static publish and ask the orchestrator for an explicit deployment target/policy instead of editing nginx or host services on your own.',
-    '',
+    ...serverDeliveryBlock,
+    ...staticPublishBlock,
     '## Verification',
     '',
     'Inspect the project and choose the checks that match the change. Prefer existing package scripts, framework checks, and targeted smoke tests.',
@@ -518,6 +576,7 @@ function buildInstructions(values) {
     '- commands run;',
     '- public preview URL and LAN preview URL used, if any;',
     '- static published lanUrl and tailscaleFunnelUrl if the orchestrator published the build;',
+    '- for server-backed delivery: runtime, persistence, security, migration, deployment, and rollback contract;',
     '- blockers or residual risks.',
     '',
   ].join('\n')
@@ -530,13 +589,27 @@ function buildCoderPrompt(values) {
       `- Assigned dev URL (loopback): ${values.devUrl}`,
       values.preview.publicUrl ? `- Managed preview public URL: ${values.preview.publicUrl}` : '- Managed preview public URL: unavailable because ORCHESTRATOR_PUBLIC_URL is not configured.',
       values.preview.lanUrl ? `- Managed preview LAN URL: ${values.preview.lanUrl}` : '- Managed preview LAN URL: unavailable because no LAN origin is configured.',
-      `- Preview builds must honour PREVIEW_BASE_PATH=${values.preview.basePath}. Static-published apps must honour PUBLISHED_BASE_PATH=/published-apps/<slug>. See the instructions file.`,
+      `- Preview builds must honour PREVIEW_BASE_PATH=${values.preview.basePath}. Static delivery must also honour PUBLISHED_BASE_PATH=/published-apps/<slug>. See the instructions file.`,
     ]
     : [
       '- Managed preview: disabled for this standalone project run.',
-      '- Durable user-facing target: /published-apps/<slug>/ via `project-run:run publish-static` after build/test verification.',
-      '- Static-published apps must honour PUBLISHED_BASE_PATH=/published-apps/<slug>. The final publish returns lanUrl and, when Tailscale is ready, tailscaleFunnelUrl for the same path. Do not use /files for interactive apps and do not report raw localhost links as the final result.',
     ]
+  const deliveryLines = values.deliveryKind === 'static'
+    ? [
+      '- Delivery: static/browser-only.',
+      '- Durable user-facing target: /published-apps/<slug>/ via `project-run:run publish-static` after build/test verification.',
+      '- Honour PUBLISHED_BASE_PATH=/published-apps/<slug>. The final publish returns lanUrl and, when Tailscale is ready, tailscaleFunnelUrl. Do not use /files for interactive apps or report raw localhost links.',
+    ]
+    : values.deliveryKind === 'server'
+      ? [
+        '- Delivery: server-backed/full-stack.',
+        '- Use this product\'s own server runtime and deployment contract, not Orchestrator\'s static publisher, private APIs, or source code.',
+        '- Implement and test in this repo. Do not deploy or edit host services. Return production build/start, health, env/secrets, database/migrations, persistence, auth/RBAC, backup, deployment, cutover, and rollback contracts for orchestrator approval.',
+      ]
+      : [
+        '- Delivery: auto — inspect and choose before coding.',
+        '- Backend/database/auth/roles/secrets/SSR/WebSockets/workers/cron means server-backed: do not force it into `publish-static` or Orchestrator APIs. Browser-only output may use the static publish contract.',
+      ]
 
   return [
     `Task: ${values.task}`,
@@ -550,6 +623,7 @@ function buildCoderPrompt(values) {
     `- Branch: ${branch}`,
     `- Base: ${values.baseRef || values.baseBranch || '(new project)'}`,
     ...previewLines,
+    ...deliveryLines,
     `- Push policy hint: ${values.pushPolicy}`,
     `- Deployment target hint: ${values.deployTarget}`,
     values.clonedFrom ? `- Cloned from: ${values.clonedFrom}` : null,
@@ -559,9 +633,13 @@ function buildCoderPrompt(values) {
     values.template ? `- Template hint: ${values.template}` : null,
     '- Before editing, run `git branch --show-current` and `git status --short` in the isolated repository.',
     '',
-    'You own implementation and testing. Inspect the repo yourself, choose the needed commands, and fix failures you introduce. Do not leave long-running dev servers behind. For production-ready static apps, make the build portable under PUBLISHED_BASE_PATH so the orchestrator can publish it at /published-apps/<slug>/ after checks pass. If this run has an explicit managed preview, use its public/LAN URL for visual checks; otherwise rely on build/test plus static publish for user review.',
+    values.deliveryKind === 'server'
+      ? 'You own implementation and testing. Inspect the repo, implement the complete server-backed product, run relevant checks, and fix failures you introduce. Do not leave long-running servers behind and do not deploy. Stop at a reproducible deployment/migration/rollback contract for orchestrator approval.'
+      : 'You own implementation and testing. Inspect the repo yourself, choose the needed commands, and fix failures you introduce. Do not leave long-running dev servers behind. For a verified static app, make the build portable under PUBLISHED_BASE_PATH so the orchestrator can publish it at /published-apps/<slug>/ after checks pass. If requirements prove server-backed, stop treating it as static and return the server runtime/deployment contract instead.',
     '',
-    'Do not commit or push unless explicitly asked. When done, report files changed, checks run, published lanUrl/tailscaleFunnelUrl if published, any managed public/LAN preview URL if used, and blockers/risks.',
+    values.deliveryKind === 'server'
+      ? 'Do not commit, push, or deploy unless explicitly asked. When done, report files changed, checks run, any short-lived local verification, the runtime/persistence/security/migration/deployment/rollback contract, and blockers/risks.'
+      : 'Do not commit or push unless explicitly asked. When done, report files changed, checks run, published lanUrl/tailscaleFunnelUrl if published, any managed public/LAN preview URL if used, and blockers/risks.',
   ].filter(Boolean).join('\n')
 }
 

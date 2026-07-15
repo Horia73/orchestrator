@@ -39,6 +39,10 @@ export function formatAction(action: AgentAction, coordinateMode: VisionCoordina
             const count = action.clickCount && action.clickCount > 1 ? ' (Double Click)' : '';
             return `Click element ${action.ref || '[?]'}${count} - ${reason(action)}`;
         }
+        case 'chooseFile':
+            return `Choose workspace file(s) ${(action.paths || [action.path]).map(uploadFilename).join(', ')} through ${action.ref ? `visible element ${action.ref}` : formatCoordinate(action.coordinate, coordinateMode)} - ${reason(action)}`;
+        case 'dropFiles':
+            return `Drop workspace file(s) ${(action.paths || [action.path]).map(uploadFilename).join(', ')} on ${action.ref || '[?]'} - ${reason(action)}`;
         case 'uploadFile':
             return `Attach workspace file(s) ${(action.paths || [action.path]).map(uploadFilename).join(', ')}${action.ref ? ` to ${action.ref}` : ''} - ${reason(action)}`;
         case 'selectOption':

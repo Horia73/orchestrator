@@ -53,12 +53,23 @@ const currentUrlAction = parseAgentActionsFromModelText(JSON.stringify({
 assert.equal(currentUrlAction[0].action, 'getCurrentUrl')
 
 const uploadAction = parseAgentActionsFromModelText(JSON.stringify({
-    action: 'uploadFile',
+    action: 'chooseFile',
+    ref: 'e18',
     path: 'files/Clienti_Oblio_TEST.xls',
-    reasoning: 'Attach the prepared workbook without opening the OS picker',
+    reasoning: 'Use the visible chooser in the open import dialog',
 }))
-assert.equal(uploadAction[0].action, 'uploadFile')
+assert.equal(uploadAction[0].action, 'chooseFile')
 assert.equal(uploadAction[0].path, 'files/Clienti_Oblio_TEST.xls')
+assert.equal(uploadAction[0].ref, 'e18')
+
+const dropAction = parseAgentActionsFromModelText(JSON.stringify({
+    action: 'dropFiles',
+    ref: 'e21',
+    paths: ['files/Clienti.xls', 'files/Produse.xls'],
+    reasoning: 'Drop the authorized files on the visible dropzone',
+}))
+assert.equal(dropAction[0].action, 'dropFiles')
+assert.deepEqual(dropAction[0].paths, ['files/Clienti.xls', 'files/Produse.xls'])
 
 const preciseActions = parseAgentActionsFromModelText(JSON.stringify([
     {

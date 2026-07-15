@@ -57,7 +57,11 @@ function useFadeGate(target: boolean, minHiddenMs: number) {
   const [canShow, setCanShow] = React.useState(true)
   const hiddenAtRef = React.useRef<number | null>(null)
 
-  React.useEffect(() => {
+  // This gate controls whether the next paint may expose the chat shell, so
+  // update it in the layout phase. A passive effect leaves one painted frame
+  // where a fast false -> true readiness cycle can reuse the previous
+  // `canShow=true` value and briefly reveal content before hiding it again.
+  React.useLayoutEffect(() => {
     if (!target) {
       if (hiddenAtRef.current == null) hiddenAtRef.current = performance.now()
       setCanShow(false)

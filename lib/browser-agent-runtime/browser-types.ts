@@ -162,6 +162,9 @@ export interface BrowserPageElementRef {
     checked?: boolean;
     disabled?: boolean;
     multiple?: boolean;
+    accept?: string;
+    /** File inputs are exposed only when their visible upload surface is active. */
+    uploadReady?: boolean;
     frame?: string;
     inViewport: boolean;
 }
@@ -203,7 +206,13 @@ export interface BrowserUploadFileResult {
     filename?: string;
     paths?: string[];
     filenames?: string[];
+    method?: 'chooser' | 'input' | 'drop';
     error?: string;
+}
+
+export interface BrowserChooseFileTarget {
+    ref?: string;
+    coordinate?: [number, number];
 }
 
 export type BrowserWaitForKind = 'url' | 'text' | 'ref' | 'load';
@@ -368,6 +377,8 @@ export interface BrowserPageSession {
     selectOption(ref: string, values: string[]): Promise<BrowserClickRefResult>;
     setChecked(ref: string, checked: boolean): Promise<BrowserClickRefResult>;
     waitFor(options: BrowserWaitForOptions): Promise<BrowserWaitForResult>;
+    chooseFile(filePath: string | string[], target: BrowserChooseFileTarget, timeoutMs?: number): Promise<BrowserUploadFileResult>;
+    dropFiles(filePath: string | string[], ref: string): Promise<BrowserUploadFileResult>;
     uploadFile(filePath: string | string[], ref?: string): Promise<BrowserUploadFileResult>;
     listPageAssets(): Promise<BrowserPageAssetsResult>;
     downloadMedia(target: BrowserDownloadMediaTarget): Promise<BrowserDownloadMediaResult>;

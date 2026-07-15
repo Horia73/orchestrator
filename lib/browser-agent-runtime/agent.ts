@@ -898,6 +898,8 @@ function actionCanChangeVisualState(action: AgentAction): boolean {
         'clickRef',
         'selectOption',
         'setChecked',
+        'chooseFile',
+        'dropFiles',
         'uploadFile',
         'clear',
         'pasteLink',
@@ -1129,6 +1131,8 @@ function summarizeReadPage(result: BrowserReadPageResult): string {
         if (element.checked !== undefined) parts.push(element.checked ? 'checked' : 'unchecked');
         if (element.disabled) parts.push('disabled');
         if (element.multiple) parts.push('multiple');
+        if (element.accept) parts.push(`accept="${element.accept}"`);
+        if (element.uploadReady) parts.push('upload-ready');
         if (element.frame && element.frame !== 'main') parts.push(`(${element.frame})`);
         if (!element.inViewport) parts.push('(off-screen)');
         lines.push(`- ${parts.join(' ')}`);
@@ -1441,6 +1445,50 @@ async function executeAction(
                 return { success: result.success, trace: null, supplementalFrames: [], observation: result.observation };
             }
 
+            case 'chooseFile': {
+                const filePaths = action.paths?.map(value => String(value).trim())
+                    || (action.path ? [String(action.path).trim()] : []);
+                if (filePaths.length === 0 || filePaths.some(filePath => !filePath)) {
+                    return { success: false, trace: null, supplementalFrames: [], observation: 'chooseFile needs an authorized workspace-relative "path" or non-empty "paths" list.' };
+                }
+                const targetRef = String(action.ref || '').trim() || undefined;
+                const coordinate = action.coordinate
+                    ? await resolveCoordinate(browser, action.coordinate, timing.coordinateMode)
+                    : undefined;
+                if (!targetRef && !coordinate) {
+                    return { success: false, trace: null, supplementalFrames: [], observation: 'chooseFile needs the visible chooser control as a fresh ref or coordinate.' };
+                }
+                onStatusUpdate(`📤 Choosing workspace file through ${targetRef ? `visible element ${targetRef}` : 'the visible page control'}...`);
+                const result = await browser.chooseFile(filePaths, { ref: targetRef, coordinate }, action.durationMs);
+                await sleep(timing.actionSettleDelayMs);
+                if (!result.success) {
+                    return { success: false, trace: null, supplementalFrames: [], observation: `${result.error || 'Could not choose the workspace file.'}${result.stale ? ' Inspect the current UI again for a fresh target.' : ''}` };
+                }
+                const filenames = result.filenames?.join(', ') || result.filename || 'workspace file';
+                const observation = `Selected ${filenames} through the visible chooser${result.ref ? ` opened by ${result.ref}` : ''}. The complete batch was sandbox-validated. Verify visible filename, preview, progress, or success/error state now; selection can start transfer immediately. No separate final submit/import control was clicked.`;
+                onStatusUpdate(`📤 ${observation}`);
+                return { success: true, trace: null, supplementalFrames: [], observation };
+            }
+
+            case 'dropFiles': {
+                const filePaths = action.paths?.map(value => String(value).trim())
+                    || (action.path ? [String(action.path).trim()] : []);
+                const targetRef = String(action.ref || '').trim();
+                if (filePaths.length === 0 || filePaths.some(filePath => !filePath) || !targetRef) {
+                    return { success: false, trace: null, supplementalFrames: [], observation: 'dropFiles needs authorized workspace path(s) and a fresh ref for the visible dropzone.' };
+                }
+                onStatusUpdate(`📤 Dropping workspace file${filePaths.length > 1 ? 's' : ''} on ${targetRef}...`);
+                const result = await browser.dropFiles(filePaths, targetRef);
+                await sleep(timing.actionSettleDelayMs);
+                if (!result.success) {
+                    return { success: false, trace: null, supplementalFrames: [], observation: `${result.error || 'Could not drop the workspace file.'}${result.stale ? ' Inspect the visible dropzone again for a fresh ref.' : ''}` };
+                }
+                const filenames = result.filenames?.join(', ') || result.filename || 'workspace file';
+                const observation = `Dropped ${filenames} on visible dropzone ${targetRef}. The complete batch was sandbox-validated. Verify the site's visible filename, preview, progress, or success/error state; the drop event alone is not proof the site accepted it.`;
+                onStatusUpdate(`📤 ${observation}`);
+                return { success: true, trace: null, supplementalFrames: [], observation };
+            }
+
             case 'uploadFile': {
                 const filePaths = action.paths?.map(value => String(value).trim())
                     || (action.path ? [String(action.path).trim()] : []);
@@ -1458,7 +1506,7 @@ async function executeAction(
                 await sleep(timing.actionSettleDelayMs);
                 if (uploadResult.success) {
                     const filenames = uploadResult.filenames?.join(', ') || uploadResult.filename || 'workspace file';
-                    const observation = `Attached ${filenames}${uploadResult.ref ? ` to ${uploadResult.ref}` : ''} from ${(uploadResult.paths || [uploadResult.path]).filter(Boolean).join(', ')}. The batch was validated before attachment. No final submit/import control was clicked; verify the page because some sites begin transfer on file selection.`;
+                    const observation = `Attached ${filenames}${uploadResult.ref ? ` to upload-ready input ${uploadResult.ref}` : ''} from ${(uploadResult.paths || [uploadResult.path]).filter(Boolean).join(', ')}. The batch was validated before attachment. Verify visible filename, preview, progress, or success/error state; selection can start transfer immediately. No separate final submit/import control was clicked.`;
                     onStatusUpdate(`📤 ${observation}`);
                     return { success: true, trace: null, supplementalFrames: [], observation };
                 }

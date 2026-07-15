@@ -12,7 +12,7 @@ import { redactBrowserAgentText } from './redaction';
 import type { MediaResolutionLevel, ThinkingLevel, VisionProvider } from './config';
 
 export interface AgentAction {
-    action: 'click' | 'type' | 'key' | 'scroll' | 'scrollToBottom' | 'undo' | 'wait' | 'waitFor' | 'navigate' | 'hold' | 'drag' | 'hover' | 'inspectPage' | 'inspectAt' | 'readPage' | 'clickRef' | 'selectOption' | 'setChecked' | 'uploadFile' | 'listPageAssets' | 'downloadMedia' | 'findInPage' | 'inspectDiagnostics' | 'fetchUrl' | 'screenshot' | 'recordVideo' | 'setViewport' | 'closeTab' | 'refresh' | 'getCurrentUrl' | 'getLink' | 'pasteLink' | 'readClipboard' | 'clear' | 'done' | 'ask' | 'goBack' | 'goForward' | 'listTabs' | 'switchTab' | 'newTab' | 'listDownloads' | 'waitForDownloads' | 'error' | 'escalate' | 'yield_control';
+    action: 'click' | 'type' | 'key' | 'scroll' | 'scrollToBottom' | 'undo' | 'wait' | 'waitFor' | 'navigate' | 'hold' | 'drag' | 'hover' | 'inspectPage' | 'inspectAt' | 'readPage' | 'clickRef' | 'selectOption' | 'setChecked' | 'chooseFile' | 'dropFiles' | 'uploadFile' | 'listPageAssets' | 'downloadMedia' | 'findInPage' | 'inspectDiagnostics' | 'fetchUrl' | 'screenshot' | 'recordVideo' | 'setViewport' | 'closeTab' | 'refresh' | 'getCurrentUrl' | 'getLink' | 'pasteLink' | 'readClipboard' | 'clear' | 'done' | 'ask' | 'goBack' | 'goForward' | 'listTabs' | 'switchTab' | 'newTab' | 'listDownloads' | 'waitForDownloads' | 'error' | 'escalate' | 'yield_control';
     sub_objective?: string; // Goal string when escalating task to advanced reasoning model
     coordinate?: [number, number]; // [x, y]
     coordinateEnd?: [number, number]; // [x, y] — end point for drag action
@@ -29,7 +29,7 @@ export interface AgentAction {
     tabIndex?: number;
     ref?: string; // Element ref from readPage output (e.g. "e12") for clickRef
     assetRef?: string; // Asset ref from listPageAssets (e.g. "a3")
-    path?: string; // Workspace-relative file path for uploadFile
+    path?: string; // Workspace-relative file path for chooseFile/dropFiles/uploadFile
     paths?: string[]; // Atomic multi-file upload list
     optionValues?: string[];
     checked?: boolean;
@@ -39,7 +39,7 @@ export interface AgentAction {
     colorScheme?: 'dark' | 'light' | 'auto'; // For setViewport
     reasoning: string;
     memory?: string; // What we learned from this step (e.g. "To clear input, click then Ctrl+A+Backspace")
-    durationMs?: number; // Duration in milliseconds for wait, hold, drag, and recordVideo actions
+    durationMs?: number; // Duration/timeout in milliseconds for wait, hold, drag, chooseFile, and recordVideo actions
     expectedFilename?: string; // Optional filename substring for download verification
 }
 
@@ -101,7 +101,7 @@ export type VisionGenerateResponse = { text?: string; usageMetadata?: unknown };
 export const MAX_JSON_PARSE_RETRIES = 3;
 const MAX_MODEL_RESPONSE_LOG_CHARS = 1000;
 
-export const VALID_ACTIONS = ['click', 'type', 'key', 'scroll', 'scrollToBottom', 'undo', 'wait', 'waitFor', 'navigate', 'hold', 'drag', 'hover', 'inspectPage', 'inspectAt', 'readPage', 'clickRef', 'selectOption', 'setChecked', 'uploadFile', 'listPageAssets', 'downloadMedia', 'findInPage', 'inspectDiagnostics', 'fetchUrl', 'screenshot', 'recordVideo', 'setViewport', 'closeTab', 'refresh', 'getCurrentUrl', 'getLink', 'pasteLink', 'readClipboard', 'clear', 'done', 'ask', 'error', 'goBack', 'goForward', 'listTabs', 'switchTab', 'newTab', 'listDownloads', 'waitForDownloads', 'escalate', 'yield_control'] as const satisfies readonly AgentAction['action'][];
+export const VALID_ACTIONS = ['click', 'type', 'key', 'scroll', 'scrollToBottom', 'undo', 'wait', 'waitFor', 'navigate', 'hold', 'drag', 'hover', 'inspectPage', 'inspectAt', 'readPage', 'clickRef', 'selectOption', 'setChecked', 'chooseFile', 'dropFiles', 'uploadFile', 'listPageAssets', 'downloadMedia', 'findInPage', 'inspectDiagnostics', 'fetchUrl', 'screenshot', 'recordVideo', 'setViewport', 'closeTab', 'refresh', 'getCurrentUrl', 'getLink', 'pasteLink', 'readClipboard', 'clear', 'done', 'ask', 'error', 'goBack', 'goForward', 'listTabs', 'switchTab', 'newTab', 'listDownloads', 'waitForDownloads', 'escalate', 'yield_control'] as const satisfies readonly AgentAction['action'][];
 const VALID_ACTION_SET = new Set<string>(VALID_ACTIONS);
 
 export const COORDINATE_JSON_SCHEMA = {

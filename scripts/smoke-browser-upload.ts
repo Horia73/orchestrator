@@ -33,7 +33,7 @@ async function main(): Promise<void> {
     try {
         await manager.launch()
         const html = [
-            '<title>Hidden upload smoke</title>',
+            '<title>UI-first upload smoke</title>',
             '<label for="workbook">Import workbook</label>',
             '<input id="workbook" name="workbook" type="file" style="display:none">',
             '<output id="selected"></output>',
@@ -45,6 +45,22 @@ async function main(): Promise<void> {
             '<label><input id="enabled" type="checkbox"> Enabled</label>',
             '<button id="load-result">Load result</button>',
             '<div id="result" hidden>Ready now</div>',
+            '<button id="open-import">Open client import</button>',
+            '<section id="import-dialog" role="dialog" hidden>',
+            '<h2>Client import</h2>',
+            '<button id="choose-dialog-file">Choose client workbook</button>',
+            '<input id="dialog-file" name="dialog-file" type="file" style="display:none">',
+            '<output id="dialog-selected"></output>',
+            '</section>',
+            ...Array.from({ length: 10 }, (_, index) => [
+                `<button id="choose-slot-${index + 1}">Choose slot ${index + 1}</button>`,
+                `<input id="slot-${index + 1}" type="file" style="display:none">`,
+                `<output id="slot-result-${index + 1}"></output>`,
+            ]).flat(),
+            '<button id="choose-dynamic">Choose dynamic file</button>',
+            '<output id="dynamic-selected"></output>',
+            '<div id="dropzone" role="button" tabindex="0" style="width:240px;height:60px;border:1px solid">Drop workbook here</div>',
+            '<output id="dropped"></output>',
             '<img alt="pixel asset" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=">',
             '<div id="shadow-host"></div>',
             '<iframe srcdoc="<button>Framed action</button>"></iframe>',
@@ -56,6 +72,16 @@ async function main(): Promise<void> {
             'document.querySelector("#batch-selected").textContent = Array.from(event.target.files).map(file => file.name).join(",");',
             '});',
             'document.querySelector("#load-result").addEventListener("click", () => { document.querySelector("#result").hidden = false; });',
+            'document.querySelector("#open-import").addEventListener("click", () => { document.querySelector("#import-dialog").hidden = false; });',
+            'document.querySelector("#choose-dialog-file").addEventListener("click", () => document.querySelector("#dialog-file").click());',
+            'document.querySelector("#dialog-file").addEventListener("change", (event) => { document.querySelector("#dialog-selected").textContent = event.target.files[0]?.name || ""; });',
+            ...Array.from({ length: 10 }, (_, index) => {
+                const slot = index + 1
+                return `document.querySelector("#choose-slot-${slot}").addEventListener("click", () => document.querySelector("#slot-${slot}").click());document.querySelector("#slot-${slot}").addEventListener("change", (event) => { document.querySelector("#slot-result-${slot}").textContent = event.target.files[0]?.name || ""; });`
+            }),
+            'document.querySelector("#choose-dynamic").addEventListener("click", () => { const input = document.createElement("input"); input.type = "file"; input.addEventListener("change", (event) => { document.querySelector("#dynamic-selected").textContent = event.target.files[0]?.name || ""; input.remove(); }); document.body.appendChild(input); input.click(); });',
+            'document.querySelector("#dropzone").addEventListener("dragover", (event) => event.preventDefault());',
+            'document.querySelector("#dropzone").addEventListener("drop", (event) => { event.preventDefault(); document.querySelector("#dropped").textContent = Array.from(event.dataTransfer.files).map(file => file.name).join(","); });',
             'document.querySelector("#shadow-host").attachShadow({ mode: "open" }).innerHTML = "<button>Shadow action</button>";',
             '</script>',
         ].join('')
@@ -79,6 +105,12 @@ async function main(): Promise<void> {
         const batchInput = pageElements.elements.find((element) => element.role === 'input:file' && element.name === 'Import batch')
         assert.ok(batchInput, 'readPage should expose the hidden multiple input[type=file]')
         assert.equal(batchInput.multiple, true)
+        assert.equal(batchInput.uploadReady, true)
+        assert.equal(
+            pageElements.elements.some((element) => element.role === 'input:file' && element.name === 'dialog-file'),
+            false,
+            'readPage must not expose a dormant file input inside a closed dialog',
+        )
 
         const upload = await session.uploadFile('files/Clienti_Oblio_TEST.xls', fileInput.ref)
         assert.equal(upload.success, true, upload.error)
@@ -101,6 +133,47 @@ async function main(): Promise<void> {
             await session.getPage()?.locator('#batch-selected').textContent(),
             'Clienti_Oblio_TEST.xls,Produse_Oblio_TEST.xls',
         )
+
+        const openImport = pageElements.elements.find((element) => element.name === 'Open client import')
+        assert.ok(openImport)
+        assert.equal((await session.clickRef(openImport.ref)).success, true)
+        const openDialogElements = await session.readPage()
+        const dialogChooser = openDialogElements.elements.find((element) => element.name === 'Choose client workbook')
+        const dialogInput = openDialogElements.elements.find((element) => element.role === 'input:file' && element.name === 'dialog-file')
+        assert.ok(dialogChooser && dialogInput, 'opening the visible dialog should expose its chooser and upload-ready input')
+        assert.equal(dialogInput.uploadReady, true)
+        const chooserUpload = await session.chooseFile('files/Clienti_Oblio_TEST.xls', { ref: dialogChooser.ref }, 2_000)
+        assert.equal(chooserUpload.success, true, chooserUpload.error)
+        assert.equal(chooserUpload.method, 'chooser')
+        assert.equal(await session.getPage()?.locator('#dialog-selected').textContent(), 'Clienti_Oblio_TEST.xls')
+
+        const manyInputElements = await session.readPage()
+        const slotSevenChooser = manyInputElements.elements.find((element) => element.name === 'Choose slot 7')
+        assert.ok(slotSevenChooser)
+        const slotUpload = await session.chooseFile('files/Produse_Oblio_TEST.xls', { ref: slotSevenChooser.ref }, 2_000)
+        assert.equal(slotUpload.success, true, slotUpload.error)
+        assert.equal(await session.getPage()?.locator('#slot-result-7').textContent(), 'Produse_Oblio_TEST.xls')
+        for (const slot of [1, 2, 3, 4, 5, 6, 8, 9, 10]) {
+            assert.equal(await session.getPage()?.locator(`#slot-result-${slot}`).textContent(), '')
+        }
+
+        const dynamicElements = await session.readPage()
+        const dynamicChooser = dynamicElements.elements.find((element) => element.name === 'Choose dynamic file')
+        assert.ok(dynamicChooser)
+        const dynamicUpload = await session.chooseFile('files/Clienti_Oblio_TEST.xls', { ref: dynamicChooser.ref }, 2_000)
+        assert.equal(dynamicUpload.success, true, dynamicUpload.error)
+        assert.equal(await session.getPage()?.locator('#dynamic-selected').textContent(), 'Clienti_Oblio_TEST.xls')
+
+        const dropElements = await session.readPage()
+        const dropzone = dropElements.elements.find((element) => element.name === 'Drop workbook here')
+        assert.ok(dropzone)
+        const dropped = await session.dropFiles(
+            ['files/Clienti_Oblio_TEST.xls', 'files/Produse_Oblio_TEST.xls'],
+            dropzone.ref,
+        )
+        assert.equal(dropped.success, true, dropped.error)
+        assert.equal(dropped.method, 'drop')
+        assert.equal(await session.getPage()?.locator('#dropped').textContent(), 'Clienti_Oblio_TEST.xls,Produse_Oblio_TEST.xls')
 
         const rejectedMultiple = await session.uploadFile(
             ['files/Clienti_Oblio_TEST.xls', 'files/Produse_Oblio_TEST.xls'],
@@ -180,7 +253,13 @@ async function main(): Promise<void> {
             ].join(''))}`,
             workspaceDir: secondWorkspaceDir,
         })
-        const secondUpload = await secondSession.uploadFile('files/Produse_Oblio_TEST.xls')
+        for (const frame of secondSession.getPage()?.frames() || []) {
+            await frame.evaluate('globalThis.__name ||= ((value) => value)')
+        }
+        const secondElements = await secondSession.readPage()
+        const secondInput = secondElements.elements.find((element) => element.role === 'input:file')
+        assert.ok(secondInput)
+        const secondUpload = await secondSession.uploadFile('files/Produse_Oblio_TEST.xls', secondInput.ref)
         assert.equal(secondUpload.success, true, secondUpload.error)
         assert.equal(secondUpload.path, 'files/Produse_Oblio_TEST.xls')
 

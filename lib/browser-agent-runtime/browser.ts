@@ -40,6 +40,7 @@ import type {
     BrowserManager,
     BrowserManagerOptions,
     BrowserNetworkEntry,
+    BrowserChooseFileTarget,
     BrowserClickRefResult,
     BrowserClickOptions,
     BrowserInspectAtResult,
@@ -91,6 +92,7 @@ export type {
     BrowserManager,
     BrowserManagerOptions,
     BrowserNetworkEntry,
+    BrowserChooseFileTarget,
     BrowserClickRefResult,
     BrowserClickOptions,
     BrowserInspectAtResult,
@@ -781,6 +783,72 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         /*turbopackIgnore: true*/ process.cwd(),
         options.workspaceDir || path.dirname(downloadsDir)
     );
+    const validateUploadBatch = (
+        session: BrowserSessionState,
+        filePath: string | string[],
+        actionName: 'chooseFile' | 'dropFiles' | 'uploadFile',
+    ): {
+        success: true;
+        resolvedWorkspace: string;
+        resolvedFiles: string[];
+        relativePaths: string[];
+        filenames: string[];
+    } | {
+        success: false;
+        error: string;
+    } => {
+        const requestedPaths = (Array.isArray(filePath) ? filePath : [filePath])
+            .map(value => String(value || '').trim());
+        if (requestedPaths.some(requestedPath => !requestedPath)) {
+            return { success: false, error: `${actionName} paths must all be non-empty.` };
+        }
+        if (requestedPaths.length === 0) {
+            return { success: false, error: `${actionName} needs a workspace-relative "path" or non-empty "paths" list.` };
+        }
+        if (requestedPaths.length > MAX_UPLOAD_FILES) {
+            return { success: false, error: `${actionName} accepts at most ${MAX_UPLOAD_FILES} files at once.` };
+        }
+
+        let resolvedWorkspace: string;
+        try {
+            resolvedWorkspace = fs.realpathSync(session.uploadWorkspaceDir || workspaceDir);
+        } catch {
+            return { success: false, error: 'The active profile workspace is unavailable.' };
+        }
+
+        // Validate the complete batch before the browser sees any file, so one
+        // bad item can never cause a partial selection or drop.
+        const resolvedFiles: string[] = [];
+        const relativePaths: string[] = [];
+        for (const requestedPath of requestedPaths) {
+            const candidate = path.isAbsolute(requestedPath)
+                ? requestedPath
+                : path.resolve(session.uploadWorkspaceDir || workspaceDir, requestedPath);
+            let resolvedFile: string;
+            try {
+                resolvedFile = fs.realpathSync(candidate);
+            } catch {
+                return { success: false, error: `The requested workspace file was not found: ${path.basename(requestedPath) || '<empty>'}.` };
+            }
+            const relative = path.relative(resolvedWorkspace, resolvedFile);
+            if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+                return { success: false, error: 'Every selected file must be inside the active profile workspace.' };
+            }
+            if (!fs.statSync(resolvedFile).isFile()) {
+                return { success: false, error: `The selected workspace path is not a file: ${relative}.` };
+            }
+            resolvedFiles.push(resolvedFile);
+            relativePaths.push(relative.split(path.sep).join('/'));
+        }
+
+        return {
+            success: true,
+            resolvedWorkspace,
+            resolvedFiles,
+            relativePaths,
+            filenames: resolvedFiles.map(resolvedFile => path.basename(resolvedFile)),
+        };
+    };
     const log = (message: string) => {
         if (typeof options.onLog === 'function') {
             options.onLog(message);
@@ -2830,11 +2898,28 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                             ].join(', ');
                             const out: Element[] = [];
                             let found = 0;
+                            const isVisible = (el: Element): boolean => {
+                                const rect = el.getBoundingClientRect();
+                                const style = window.getComputedStyle(el);
+                                return rect.width >= 1
+                                    && rect.height >= 1
+                                    && style.visibility !== 'hidden'
+                                    && style.display !== 'none';
+                            };
+                            const isUploadReady = (input: HTMLInputElement): boolean => {
+                                if (input.disabled) return false;
+                                if (isVisible(input)) return true;
+                                if (Array.from(input.labels || []).some(isVisible)) return true;
+                                const dialog = input.closest('dialog, [role="dialog"], [aria-modal="true"]');
+                                if (!dialog || !isVisible(dialog)) return false;
+                                return !(dialog instanceof HTMLDialogElement) || dialog.open;
+                            };
                             const visit = (root: Document | ShadowRoot) => {
                                 for (const el of Array.from(root.querySelectorAll(selector))) {
                                     const isFileInput = el instanceof HTMLInputElement && el.type === 'file';
                                     const rect = el.getBoundingClientRect();
                                     const style = window.getComputedStyle(el);
+                                    if (isFileInput && !isUploadReady(el)) continue;
                                     if (!isFileInput && (rect.width < 1 || rect.height < 1 || style.visibility === 'hidden' || style.display === 'none')) continue;
                                     found += 1;
                                     if (out.length < maxElements) out.push(el);
@@ -2904,7 +2989,11 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                                     if (el.type !== 'password' && el.value && el.type !== 'submit' && el.type !== 'button') entry.value = el.value.slice(0, 60);
                                     if (el.type === 'checkbox' || el.type === 'radio') entry.checked = el.checked;
                                     if (el.disabled) entry.disabled = true;
-                                    if (el.type === 'file') entry.multiple = el.multiple;
+                                    if (el.type === 'file') {
+                                        entry.multiple = el.multiple;
+                                        entry.accept = el.accept || undefined;
+                                        entry.uploadReady = true;
+                                    }
                                 } else if (el instanceof HTMLSelectElement) {
                                     entry.value = (el.selectedOptions[0]?.textContent || '').trim().slice(0, 60);
                                     entry.multiple = el.multiple;
@@ -3045,7 +3134,11 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                                 if (input.type !== 'password' && input.value && input.type !== 'submit' && input.type !== 'button') result.value = input.value.slice(0, 60);
                                 if (input.type === 'checkbox' || input.type === 'radio') result.checked = input.checked;
                                 if (input.disabled) result.disabled = true;
-                                if (input.type === 'file') result.multiple = input.multiple;
+                                if (input.type === 'file') {
+                                    result.multiple = input.multiple;
+                                    result.accept = input.accept || undefined;
+                                    result.uploadReady = true;
+                                }
                             } else if (el instanceof HTMLSelectElement) {
                                 result.value = (el.selectedOptions[0]?.textContent || '').trim().slice(0, 60);
                                 result.multiple = el.multiple;
@@ -3294,132 +3387,236 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 }
             },
 
-            async uploadFile(filePath: string | string[], ref?: string): Promise<BrowserUploadFileResult> {
-                const requestedPaths = (Array.isArray(filePath) ? filePath : [filePath])
-                    .map(value => String(value || '').trim());
-                if (requestedPaths.some(requestedPath => !requestedPath)) return { success: false, error: 'uploadFile paths must all be non-empty.' };
-                if (requestedPaths.length === 0) return { success: false, error: 'uploadFile needs a workspace-relative "path" or non-empty "paths" list.' };
-                if (requestedPaths.length > MAX_UPLOAD_FILES) return { success: false, error: `uploadFile accepts at most ${MAX_UPLOAD_FILES} files at once.` };
-
-                let resolvedWorkspace: string;
-                try {
-                    resolvedWorkspace = fs.realpathSync(session.uploadWorkspaceDir || workspaceDir);
-                } catch {
-                    return { success: false, error: 'The active profile workspace is unavailable.' };
-                }
-
-                // Resolve and validate the complete batch before touching the
-                // page, so a bad second path can never cause a partial upload.
-                const resolvedFiles: string[] = [];
-                const relativePaths: string[] = [];
-                for (const requestedPath of requestedPaths) {
-                    const candidate = path.isAbsolute(requestedPath)
-                        ? requestedPath
-                        : path.resolve(session.uploadWorkspaceDir || workspaceDir, requestedPath);
-                    let resolvedFile: string;
-                    try {
-                        resolvedFile = fs.realpathSync(candidate);
-                    } catch {
-                        return { success: false, error: `The requested workspace file was not found: ${path.basename(requestedPath) || '<empty>'}.` };
-                    }
-                    const relative = path.relative(resolvedWorkspace, resolvedFile);
-                    if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-                        return { success: false, error: 'Every selected file must be inside the active profile workspace.' };
-                    }
-                    if (!fs.statSync(resolvedFile).isFile()) return { success: false, error: `The selected workspace path is not a file: ${relative}.` };
-                    resolvedFiles.push(resolvedFile);
-                    relativePaths.push(relative.split(path.sep).join('/'));
-                }
+            async chooseFile(
+                filePath: string | string[],
+                target: BrowserChooseFileTarget,
+                timeoutMs = 5_000,
+            ): Promise<BrowserUploadFileResult> {
+                const batch = validateUploadBatch(session, filePath, 'chooseFile');
+                if (!batch.success) return batch;
 
                 const activePage = await ensureActivePage(session);
-                const targetRef = String(ref || '').trim();
-                let target: ElementHandle | null = null;
-                let label = 'file input';
-                let ownsTarget = false;
+                const targetRef = String(target.ref || '').trim();
+                const coordinate = target.coordinate;
+                if (!targetRef && !coordinate) {
+                    return { success: false, error: 'chooseFile needs the visible chooser control as a fresh "ref" or "coordinate".' };
+                }
 
+                let label = targetRef || 'visible chooser control';
                 if (targetRef) {
                     const store = session.elementRefs;
-                    if (!store || store.page !== activePage) {
-                        return {
-                            success: false,
-                            stale: true,
-                            ref: targetRef,
-                            error: 'No current element refs for this page. Run readPage again.',
-                        };
-                    }
-                    const entry = store.byRef.get(targetRef);
+                    const entry = store?.page === activePage ? store.byRef.get(targetRef) : null;
                     if (!entry) {
-                        return {
-                            success: false,
-                            stale: true,
-                            ref: targetRef,
-                            error: `Unknown element ref "${targetRef}". Run readPage again.`,
-                        };
+                        return { success: false, stale: true, ref: targetRef, error: `Unknown or stale chooser ref "${targetRef}". Run readPage or inspectAt again.` };
                     }
-                    target = entry.handle;
                     label = entry.label;
-                } else {
-                    const inputs: ElementHandle[] = [];
-                    for (const frame of activePage.frames()) inputs.push(...await frame.$$('input[type="file"]'));
-                    if (inputs.length !== 1) {
-                        for (const input of inputs) void input.dispose().catch(() => {});
-                        return {
-                            success: false,
-                            error: inputs.length === 0
-                                ? 'No file input exists on the current page. Open the site upload form first.'
-                                : `Found ${inputs.length} file inputs. Run readPage and pass the intended input ref to uploadFile.`,
-                        };
+                    const box = await entry.handle.boundingBox().catch(() => null);
+                    if (!box) {
+                        return { success: false, stale: true, ref: targetRef, label, error: `The chooser control ${targetRef} is not visibly clickable. Open the correct upload modal/form first.` };
                     }
-                    target = inputs[0];
-                    ownsTarget = true;
                 }
 
                 try {
-                    const inputState = await target.evaluate((element) =>
-                        element instanceof HTMLInputElement && element.type === 'file'
-                            ? { valid: true, multiple: element.multiple }
-                            : { valid: false, multiple: false }
-                    );
-                    if (!inputState.valid) {
+                    const requestedTimeout = Number.isFinite(timeoutMs) ? timeoutMs : 5_000;
+                    const boundedTimeout = Math.max(1_000, Math.min(Math.floor(requestedTimeout), 10_000));
+                    const chooserPromise = activePage.waitForEvent('filechooser', { timeout: boundedTimeout })
+                        .catch(() => null);
+                    const clicked = targetRef
+                        ? await facade.clickRef(targetRef)
+                        : await facade.clickCoordinate(coordinate![0], coordinate![1]);
+                    if (typeof clicked === 'boolean' ? !clicked : !clicked.success) {
+                        await chooserPromise;
+                        const clickError = typeof clicked === 'boolean' ? 'Visible chooser click failed.' : clicked.error;
+                        return { success: false, ref: targetRef || undefined, label, error: clickError || 'Visible chooser click failed.' };
+                    }
+
+                    const chooser = await chooserPromise;
+                    if (!chooser) {
                         return {
                             success: false,
                             ref: targetRef || undefined,
                             label,
-                            error: `${targetRef || 'The selected element'} is not an input[type=file]. Run readPage and use the file input ref.`,
+                            error: 'The visible control was clicked, but it did not open a web file chooser. Inspect the new UI; use dropFiles only for a real dropzone, or choose a different visible file control.',
                         };
                     }
-                    if (resolvedFiles.length > 1 && !inputState.multiple) {
+                    if (batch.resolvedFiles.length > 1 && !chooser.isMultiple()) {
                         return {
                             success: false,
                             ref: targetRef || undefined,
                             label,
-                            error: `${targetRef || 'The selected file input'} does not accept multiple files. Attach one file or choose an input with the multiple attribute.`,
+                            error: 'The chooser opened by this control does not accept multiple files.',
                         };
                     }
-                    await target.setInputFiles(resolvedFiles);
-                    const filenames = resolvedFiles.map(resolvedFile => path.basename(resolvedFile));
+                    await chooser.setFiles(batch.resolvedFiles);
                     return {
                         success: true,
                         ref: targetRef || undefined,
                         label,
-                        path: relativePaths[0],
-                        filename: filenames[0],
-                        paths: relativePaths,
-                        filenames,
+                        path: batch.relativePaths[0],
+                        filename: batch.filenames[0],
+                        paths: batch.relativePaths,
+                        filenames: batch.filenames,
+                        method: 'chooser',
                     };
                 } catch (error) {
                     return {
                         success: false,
                         ref: targetRef || undefined,
                         label,
-                        path: relativePaths[0],
-                        filename: resolvedFiles[0] ? path.basename(resolvedFiles[0]) : undefined,
-                        paths: relativePaths,
-                        filenames: resolvedFiles.map(resolvedFile => path.basename(resolvedFile)),
-                        error: formatBrowserError(error).split(resolvedWorkspace).join('<workspace>'),
+                        path: batch.relativePaths[0],
+                        filename: batch.filenames[0],
+                        paths: batch.relativePaths,
+                        filenames: batch.filenames,
+                        error: formatBrowserError(error).split(batch.resolvedWorkspace).join('<workspace>'),
+                    };
+                }
+            },
+
+            async dropFiles(filePath: string | string[], ref: string): Promise<BrowserUploadFileResult> {
+                const batch = validateUploadBatch(session, filePath, 'dropFiles');
+                if (!batch.success) return batch;
+
+                const activePage = await ensureActivePage(session);
+                const targetRef = String(ref || '').trim();
+                if (!targetRef) return { success: false, error: 'dropFiles needs a fresh ref for the visible dropzone.' };
+                const store = session.elementRefs;
+                const entry = store?.page === activePage ? store.byRef.get(targetRef) : null;
+                if (!entry) {
+                    return { success: false, stale: true, ref: targetRef, error: `Unknown or stale dropzone ref "${targetRef}". Run readPage or inspectAt again.` };
+                }
+                const box = await entry.handle.boundingBox().catch(() => null);
+                if (!box) {
+                    return { success: false, stale: true, ref: targetRef, label: entry.label, error: `The dropzone ${targetRef} is not visible. Open the correct upload surface first.` };
+                }
+
+                let temporaryInput: ElementHandle | null = null;
+                try {
+                    temporaryInput = (await entry.frame.evaluateHandle(() => {
+                        const input = document.createElement('input');
+                        input.type = 'file';
+                        input.multiple = true;
+                        input.style.display = 'none';
+                        document.documentElement.appendChild(input);
+                        return input;
+                    })).asElement();
+                    if (!temporaryInput) throw new Error('Could not create the managed drop payload.');
+                    await temporaryInput.setInputFiles(batch.resolvedFiles);
+                    const dispatched = await entry.handle.evaluate((dropTarget, payloadInput) => {
+                        if (!(payloadInput instanceof HTMLInputElement) || !payloadInput.files) return false;
+                        const transfer = new DataTransfer();
+                        for (const file of Array.from(payloadInput.files)) transfer.items.add(file);
+                        transfer.dropEffect = 'copy';
+                        transfer.effectAllowed = 'copy';
+                        for (const type of ['dragenter', 'dragover', 'drop']) {
+                            dropTarget.dispatchEvent(new DragEvent(type, {
+                                bubbles: true,
+                                cancelable: true,
+                                composed: true,
+                                dataTransfer: transfer,
+                            }));
+                        }
+                        return true;
+                    }, temporaryInput);
+                    if (!dispatched) throw new Error('The managed file drop could not be dispatched.');
+                    return {
+                        success: true,
+                        ref: targetRef,
+                        label: entry.label,
+                        path: batch.relativePaths[0],
+                        filename: batch.filenames[0],
+                        paths: batch.relativePaths,
+                        filenames: batch.filenames,
+                        method: 'drop',
+                    };
+                } catch (error) {
+                    return {
+                        success: false,
+                        ref: targetRef,
+                        label: entry.label,
+                        path: batch.relativePaths[0],
+                        filename: batch.filenames[0],
+                        paths: batch.relativePaths,
+                        filenames: batch.filenames,
+                        error: formatBrowserError(error).split(batch.resolvedWorkspace).join('<workspace>'),
                     };
                 } finally {
-                    if (ownsTarget) void target.dispose().catch(() => {});
+                    if (temporaryInput) {
+                        await temporaryInput.evaluate((input) => (input as HTMLElement).remove()).catch(() => {});
+                        void temporaryInput.dispose().catch(() => {});
+                    }
+                }
+            },
+
+            async uploadFile(filePath: string | string[], ref?: string): Promise<BrowserUploadFileResult> {
+                const batch = validateUploadBatch(session, filePath, 'uploadFile');
+                if (!batch.success) return batch;
+
+                const activePage = await ensureActivePage(session);
+                const targetRef = String(ref || '').trim();
+                if (!targetRef) {
+                    return { success: false, error: 'uploadFile needs an upload-ready file-input ref from readPage. Prefer chooseFile on the visible chooser control.' };
+                }
+                const store = session.elementRefs;
+                const entry = store?.page === activePage ? store.byRef.get(targetRef) : null;
+                if (!entry) {
+                    return { success: false, stale: true, ref: targetRef, error: `Unknown or stale file-input ref "${targetRef}". Run readPage again.` };
+                }
+
+                try {
+                    const inputState = await entry.handle.evaluate((element) => {
+                        if (!(element instanceof HTMLInputElement) || element.type !== 'file') {
+                            return { valid: false, multiple: false, uploadReady: false };
+                        }
+                        const isVisible = (el: Element): boolean => {
+                            const rect = el.getBoundingClientRect();
+                            const style = window.getComputedStyle(el);
+                            return rect.width >= 1 && rect.height >= 1 && style.visibility !== 'hidden' && style.display !== 'none';
+                        };
+                        const visibleLabel = Array.from(element.labels || []).some(isVisible);
+                        const dialog = element.closest('dialog, [role="dialog"], [aria-modal="true"]');
+                        const visibleDialog = Boolean(dialog && isVisible(dialog) && (!(dialog instanceof HTMLDialogElement) || dialog.open));
+                        return {
+                            valid: true,
+                            multiple: element.multiple,
+                            uploadReady: !element.disabled && (isVisible(element) || visibleLabel || visibleDialog),
+                        };
+                    });
+                    if (!inputState.valid) {
+                        return { success: false, ref: targetRef, label: entry.label, error: `${targetRef} is not an input[type=file].` };
+                    }
+                    if (!inputState.uploadReady) {
+                        return {
+                            success: false,
+                            ref: targetRef,
+                            label: entry.label,
+                            error: `File input ${targetRef} belongs to hidden or inactive UI. Open the correct upload modal/form and use chooseFile on its visible chooser control.`,
+                        };
+                    }
+                    if (batch.resolvedFiles.length > 1 && !inputState.multiple) {
+                        return { success: false, ref: targetRef, label: entry.label, error: `${targetRef} does not accept multiple files.` };
+                    }
+                    await entry.handle.setInputFiles(batch.resolvedFiles);
+                    return {
+                        success: true,
+                        ref: targetRef,
+                        label: entry.label,
+                        path: batch.relativePaths[0],
+                        filename: batch.filenames[0],
+                        paths: batch.relativePaths,
+                        filenames: batch.filenames,
+                        method: 'input',
+                    };
+                } catch (error) {
+                    return {
+                        success: false,
+                        ref: targetRef,
+                        label: entry.label,
+                        path: batch.relativePaths[0],
+                        filename: batch.filenames[0],
+                        paths: batch.relativePaths,
+                        filenames: batch.filenames,
+                        error: formatBrowserError(error).split(batch.resolvedWorkspace).join('<workspace>'),
+                    };
                 }
             },
 

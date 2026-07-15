@@ -101,6 +101,9 @@ async function main() {
         assert.ok(/WHATSAPP_PROVIDER=disabled/i.test(doctrine), 'doctrine covers the WhatsApp provider kill switch')
         assert.ok(/resumable/i.test(doctrine), 'doctrine covers stored Baileys sessions as resumable')
         assert.ok(/serialized and lightly paced/i.test(doctrine), 'doctrine covers paced WhatsApp operational calls')
+        assert.ok(/--delivery static/.test(doctrine), 'doctrine covers explicit static project delivery')
+        assert.ok(/--delivery server/.test(doctrine), 'doctrine covers explicit server-backed project delivery')
+        assert.ok(/self_dev.*changing Orchestrator itself/i.test(doctrine), 'doctrine keeps self_dev scoped to Orchestrator')
 
         // Gating: host_status hidden until app_guide is activated; create_backup always present.
         const candidates = getToolsForAgent(['create_backup', 'host_status'])

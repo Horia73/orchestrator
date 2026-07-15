@@ -47,6 +47,8 @@ Every browser_agent prompt must be self-contained. Include:
 - whether screenshots/videos are required;
 - expected return shape.
 
+For uploads, identify the exact authorized workspace file(s), destination/site, and visible success evidence in the handoff. The browser agent must open the site's visible upload/import surface before selecting files, prefer the visible chooser control so the runtime binds to the chooser opened by that exact click, use managed drop only for a real visible dropzone, and verify filename/preview/progress/success afterward. Direct hidden-input attachment is only a guarded fallback; a runtime attach/drop result by itself is not proof the site accepted or processed the file.
+
 When you (the parent) have already handled part of the job with your own tools, hand browser_agent only the remaining action plus its current starting state; do not replay completed steps or quote the user's original, broader request.
 
 Stop boundary: browser_agent enforces the universal hard commit boundary from its own system prompt — the same list <safety_core> already requires you to confirm with the user. Do not restate it in the handoff. Pass only scoped exceptions the user explicitly approved: quote the approval narrowly with provider/site, cost ceiling, data/documents allowed, destination/recipient, and the exact irreversible step. If any material detail changed, treat the confirmation as not given.

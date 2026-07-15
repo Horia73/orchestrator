@@ -136,6 +136,10 @@ async function main() {
     check('ActivateIntegrationTools("project_dev") loads the full protocol',
         activatedProjectDev.includes('<project_development_policy>') &&
         activatedProjectDev.includes('project-run:prepare') &&
+        activatedProjectDev.includes('--delivery <static|server>') &&
+        activatedProjectDev.includes('database, authentication, role-based access') &&
+        activatedProjectDev.includes('A role named "admin"') &&
+        activatedProjectDev.includes('A missing deployment decision does not block local implementation') &&
         activatedProjectDev.includes('PUBLISHED_BASE_PATH') &&
         activatedProjectDev.includes('publish-static') &&
         activatedProjectDev.includes('lanUrl') &&
@@ -191,7 +195,10 @@ async function main() {
         memberSelfDevActivation.success === true &&
         Array.isArray((memberSelfDevActivation.data as { activated?: unknown[] })?.activated) &&
         (memberSelfDevActivation.data as { activated: unknown[] }).activated.length === 0 &&
-        String((memberSelfDevActivation.data as { message?: unknown })?.message ?? '').includes('admin profile'))
+        String((memberSelfDevActivation.data as { message?: unknown })?.message ?? '').includes('admin profile') &&
+        String((memberSelfDevActivation.data as { message?: unknown })?.message ?? '').includes('activate project_dev') &&
+        String((memberSelfDevActivation.data as { message?: unknown })?.message ?? '').includes('do not treat this refusal as a blocker') &&
+        String((memberSelfDevActivation.data as { message?: unknown })?.message ?? '').includes('database, authentication, Docker'))
 
     fs.rmSync(stateDir, { recursive: true, force: true })
 

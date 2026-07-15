@@ -170,7 +170,11 @@ export function createActivateIntegrationToolsExecutor(
             if (!subsystem) continue
             if (!isCapabilityAllowedForActiveProfile(id)) {
                 skipped.push(id)
-                report.push(`${subsystem.label} was NOT activated — it requires the admin profile.`)
+                report.push(
+                    id === 'self_dev'
+                        ? `${subsystem.label} was NOT activated — it requires the admin profile and applies only to changing Orchestrator itself. If the target is a standalone or user-owned app, site, service, dashboard, or external repository, do not treat this refusal as a blocker: activate project_dev and continue there. An external project does not become self-development merely because it needs a backend, database, authentication, Docker, or deployment; do not request an Orchestrator admin role for those needs.`
+                        : `${subsystem.label} was NOT activated — it requires the admin profile.`
+                )
                 continue
             }
             activatedNow.push(id)

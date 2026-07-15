@@ -10,7 +10,7 @@ const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-project-publish-'))
 try {
   const prepare = runNode(
     path.join(repoRoot, 'scripts/project-run-prepare.mjs'),
-    ['--kind', 'new', '--name', 'smoke-static', '--task', 'Smoke static publish', '--json'],
+    ['--kind', 'new', '--name', 'smoke-static', '--delivery', 'static', '--task', 'Smoke static publish', '--json'],
     { cwd: tempRoot }
   )
   const state = JSON.parse(prepare.stdout)
@@ -19,9 +19,32 @@ try {
   assert.equal(state.port, null)
   assert.equal(state.devUrl, null)
   assert.equal(state.preview, null)
+  assert.equal(state.deliveryKind, 'static')
   assert.match(state.coderPrompt, /publish-static/)
+  assert.match(state.coderPrompt, /Delivery: static\/browser-only/)
   assert.doesNotMatch(state.coderPrompt, /PREVIEW_BASE_PATH/)
   assert.ok(fs.existsSync(state.repoDir))
+
+  const serverPrepare = runNode(
+    path.join(repoRoot, 'scripts/project-run-prepare.mjs'),
+    ['--kind', 'new', '--name', 'smoke-server', '--delivery', 'server', '--task', 'Smoke full-stack app with database and RBAC', '--json'],
+    { cwd: tempRoot }
+  )
+  const serverState = JSON.parse(serverPrepare.stdout)
+  assert.equal(serverState.deliveryKind, 'server')
+  assert.match(serverState.coderPrompt, /Delivery: server-backed\/full-stack/)
+  assert.match(serverState.coderPrompt, /database\/migrations/)
+  assert.match(serverState.coderPrompt, /auth\/RBAC/)
+  assert.match(serverState.coderPrompt, /deployment.*cutover.*rollback/)
+  assert.doesNotMatch(serverState.coderPrompt, /Durable user-facing target/)
+  assert.doesNotMatch(serverState.coderPrompt, /PUBLISHED_BASE_PATH/)
+  assert.doesNotMatch(serverState.coderPrompt, /project-run:run publish-static/)
+  const serverInstructions = fs.readFileSync(serverState.instructionsPath, 'utf-8')
+  assert.match(serverInstructions, /Selected Delivery: Server-backed/)
+  assert.match(serverInstructions, /server-side authorization/)
+  assert.match(serverInstructions, /deployment\/migration\/cutover\/rollback plan/)
+  assert.doesNotMatch(serverInstructions, /## Durable Static Publish/)
+  assert.doesNotMatch(serverInstructions, /PUBLISHED_BASE_PATH/)
 
   fs.writeFileSync(
     path.join(state.repoDir, 'package.json'),

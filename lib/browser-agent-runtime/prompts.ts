@@ -48,7 +48,7 @@ export function buildSystemPrompt(
    const timezone = getConfiguredTimezone();
    const dateString = now.toLocaleDateString('ro-RO', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: timezone });
    const localTime = formatDateTimeInTimezone(now, timezone);
-   const baseActions = '"click" | "type" | "key" | "scroll" | "scrollToBottom" | "undo" | "wait" | "waitFor" | "navigate" | "hold" | "drag" | "hover" | "inspectPage" | "inspectAt" | "readPage" | "selectOption" | "setChecked" | "uploadFile" | "listPageAssets" | "downloadMedia" | "findInPage" | "inspectDiagnostics" | "fetchUrl" | "screenshot" | "recordVideo" | "setViewport" | "closeTab" | "refresh" | "getCurrentUrl" | "getLink" | "pasteLink" | "readClipboard" | "clear" | "goBack" | "goForward" | "listTabs" | "switchTab" | "newTab" | "listDownloads" | "waitForDownloads"';
+   const baseActions = '"click" | "type" | "key" | "scroll" | "scrollToBottom" | "undo" | "wait" | "waitFor" | "navigate" | "hold" | "drag" | "hover" | "inspectPage" | "inspectAt" | "readPage" | "selectOption" | "setChecked" | "chooseFile" | "dropFiles" | "uploadFile" | "listPageAssets" | "downloadMedia" | "findInPage" | "inspectDiagnostics" | "fetchUrl" | "screenshot" | "recordVideo" | "setViewport" | "closeTab" | "refresh" | "getCurrentUrl" | "getLink" | "pasteLink" | "readClipboard" | "clear" | "goBack" | "goForward" | "listTabs" | "switchTab" | "newTab" | "listDownloads" | "waitForDownloads"';
    const responseActionList = isAdvancedMode
       ? `${baseActions} | "ask" | "yield_control"`
       : escalationEnabled
@@ -175,7 +175,9 @@ ${coordinateInstructions}
 ${inspectPageDoc}
 - **readPage / inspectAt**: \`readPage\` inventories interactive controls across frames and open shadow roots as short refs such as \`e12\`; \`inspectAt\` identifies the element under one coordinate and returns a ref, metadata, and bounds. Refs go stale after navigation or major DOM changes. Use \`click\`, \`type\`, \`key\`, \`hover\`, \`scroll\`, or \`clear\` with \`ref\`; rerun inspection when a ref is stale.
 - **selectOption / setChecked**: Set native selects or checkbox/radio state by fresh \`ref\`. Provide \`optionValues\` or \`checked\`; the runtime verifies the resulting state.
-- **uploadFile**: Attach one workspace-relative \`path\` or an atomic \`paths\` list (max 20) to a file-input \`ref\`. All files are validated before any is attached, must remain inside the active profile workspace, and multiple files require an input that supports \`multiple\`. No final submit/import button is clicked.
+- **chooseFile**: Preferred upload action. After the correct upload modal/form is visibly open, provide one workspace-relative \`path\` or atomic \`paths\` list plus the visible chooser button/control as a fresh \`ref\` or \`coordinate\`. The runtime clicks that exact visible control, intercepts the file chooser it opens, and assigns the validated file(s) without exposing an OS dialog. This disambiguates pages with many file inputs.
+- **dropFiles**: For a visible dropzone that genuinely expects dragged files, provide its fresh \`ref\` (use \`inspectAt\` on the visible dropzone if needed) plus \`path\`/\`paths\`. The runtime dispatches a real file drop. Do not use it on an ordinary button.
+- **uploadFile**: Direct-input fallback only. Attach \`path\`/\`paths\` (max 20) to an upload-ready file-input \`ref\` exposed by \`readPage\`. Dormant inputs in closed/hidden UI are rejected. Prefer \`chooseFile\` whenever a visible chooser control exists.
 - **listPageAssets / downloadMedia**: Inventory bounded observable images, video, audio, fonts, stylesheets, and inline SVGs as asset refs; then save one media target using \`assetRef\`, element \`ref\`, or \`coordinate\` to managed browser downloads. Do not bulk-download assets.
 - **findInPage**: Search the page text for the exact text in \`text\`; the runtime scrolls the first match into view, highlights it, and reports how many matches exist (or that there are none). Use this for long pages when you know a word, price, date, label, or phrase to locate. Set \`submit: true\` to advance to the next match.
 - **inspectDiagnostics**: Read captured browser console messages, page errors, failed requests, and HTTP 4xx/5xx responses for the current session. Use this when diagnosing loading, blank, broken, or API-backed pages.
@@ -222,10 +224,12 @@ ${inspectPageRule}
 ${nativeUiRule}${incognitoRule}
 
 ## 📤 UPLOAD HANDLING
-- Use \`uploadFile\` for web file inputs; do not navigate native file-picker folders or type filesystem paths into an OS dialog.
+- Work UI-first: navigate the site's visible upload/import flow, open the correct modal/form, then inspect the new state. Do not attach a file before that destination surface is visibly active.
+- Prefer \`chooseFile\` on the visible "Choose/Browse/Select file" control. It binds the authorized file to the exact chooser triggered by that click, so never guess among hidden inputs. Do not navigate native file-picker folders or type filesystem paths into an OS dialog.
+- Use \`dropFiles\` only for a visible file dropzone. Use direct \`uploadFile\` only when \`readPage\` exposes an upload-ready file input and no usable visible trigger exists.
 - Only files inside the active profile workspace are eligible. The action reports a clean workspace-relative path and never exposes the hidden runtime/profile path.
 - Use \`paths\` for a multi-file input. The runtime validates the complete batch before attachment and rejects multiple paths when the input does not declare \`multiple\`.
-- The action does not click final submission, but file selection can trigger immediate transfer on some sites. Use it only for the exact authorized file and destination; after attaching, verify the visible filename/form state and preserve the Hard Commit Boundary before any Import, Upload, Send, Save, or equivalent commit button.
+- Selection does not click a separate final submission control, but it can trigger immediate transfer on some sites. Use it only for the exact authorized file and destination. After every selection/drop, verify visible evidence such as filename, preview, progress, row count, or success/error text; never infer success from the runtime action alone. Preserve the Hard Commit Boundary before any separate Import, Upload, Send, Save, or equivalent commit button.
 
 ## 🧹 FOCUS & SELECTION HYGIENE
 - **Click to focus**: When an element may not already be focused, click it first — search boxes, text fields, rich-text editors, custom dropdowns, canvases, and sliders often ignore typing or key presses until they are focused. A single click on the target before \`type\`/\`key\` is a cheap, normal step; do not skip it just to save an action.

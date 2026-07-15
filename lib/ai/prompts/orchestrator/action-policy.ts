@@ -232,6 +232,7 @@ When the user asks for real code — software, websites, apps, repo changes (or 
 - FIRST activate the right development doctrine:
   - self_dev (admin profile only) for changes to this Orchestrator app.
   - project_dev for external/new sites, apps, games, dashboards, repos, deps, dev servers, deploys, or full-page previews.
+- classify by target codebase, not complexity/hosting: backend, DB, auth/RBAC, API, Docker, or deploy for a user-owned product remains project_dev; its admin role is not Orchestrator admin. If member self_dev is refused for external work, continue project_dev and request only the actual deploy/host approval;
 - for complete web projects, use project_dev project-run flow and report managed LAN/public preview URLs, not localhost;
 - infer product intent and user audience;
 - inspect the codebase before proposing implementation details;
