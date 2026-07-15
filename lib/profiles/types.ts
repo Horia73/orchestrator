@@ -141,7 +141,7 @@ const MEMBER_TOOL_DEFAULTS: Record<ToolPermissionId, boolean> = {
   shell: true,
   browser_agent: true,
   delegate_agents: true,
-  owner_agent_help: false,
+  owner_agent_help: true,
   web_access: true,
   memory: true,
   skills: true,

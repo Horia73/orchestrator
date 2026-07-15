@@ -8,6 +8,8 @@ import { BrowserPanelProvider } from "@/components/chat/browser-panel-context"
 import {
   isBrowserAgentRunAwaitingUser,
   isBrowserAgentRunLive,
+  latestBrowserAgentRuns,
+  shouldAutoCloseBrowserAgentPanel,
 } from "@/lib/browser-agent-run-state"
 import {
   ARTIFACT_PANEL_DEFAULT_WIDTH,
@@ -430,6 +432,31 @@ export function ChatView() {
     isStreamingThisConversation,
     state.streamingReasoning,
   ])
+  const activeTurnAgentRuns = React.useMemo(() => {
+    const runs: AgentCallReasoningEntry[] = []
+    if (activeInProgressAssistantMessage?.reasoning) {
+      runs.push(...collectAgentRuns(activeInProgressAssistantMessage.reasoning))
+    }
+    if (isStreamingThisConversation) {
+      runs.push(...collectAgentRuns(state.streamingReasoning))
+    }
+    const byId = new Map<string, AgentCallReasoningEntry>()
+    for (const run of runs) byId.set(run.runId, run)
+    return Array.from(byId.values())
+  }, [
+    activeInProgressAssistantMessage,
+    isStreamingThisConversation,
+    state.streamingReasoning,
+  ])
+  const visibleBrowserTakeoverRunIds = React.useMemo(
+    () =>
+      new Set(
+        latestBrowserAgentRuns(agentRuns)
+          .filter((run) => isBrowserAgentRunAwaitingUser(run))
+          .map((run) => run.runId)
+      ),
+    [agentRuns]
+  )
 
   const [activeAgentRunId, setActiveAgentRunId] = React.useState<string | null>(
     null
@@ -450,38 +477,31 @@ export function ChatView() {
       ? cachedActiveAgentRun.run
       : null)
 
-  // A real `ask` pause is different from a background checkpoint: it means
-  // the user must operate the live browser (typically login or confirmation).
-  // Surface that workspace once per run even when another artifact/worker is
-  // open. On mobile the existing active-agent dialog becomes full screen.
-  const autoSurfacedBrowserTakeoverIdsRef = React.useRef<Set<string>>(new Set())
+  // A completed or paused browser leaves the side panel immediately. For a
+  // real `ask`, the inline live view remains visible in the chat (outside the
+  // finalized "Worked for" disclosure); checkpoints likewise stop occupying
+  // half the desktop while the parent decides whether to continue. Track each
+  // live panel and automatic close once so opening historical details by hand
+  // still works and a deliberate later click can reopen the finished run.
+  const liveBrowserPanelRunIdsRef = React.useRef<Set<string>>(new Set())
+  const autoClosedBrowserRunIdsRef = React.useRef<Set<string>>(new Set())
   React.useEffect(() => {
-    const takeoverRun = [...agentRuns].reverse().find(
-      (run) =>
-        run.agentId === "browser_agent" &&
-        isBrowserAgentRunAwaitingUser(run) &&
-        !autoSurfacedBrowserTakeoverIdsRef.current.has(run.runId)
-    )
-    if (!takeoverRun) return
-
-    autoSurfacedBrowserTakeoverIdsRef.current.add(takeoverRun.runId)
-    const panelAlreadyOpen =
-      artifactOpen || Boolean(genArtifact) || Boolean(activePanelAgentRun)
-    if (!panelAlreadyOpen) {
-      sidebarWasOpenRef.current = sidebarOpen
+    const run = activePanelAgentRun
+    if (!run || run.agentId !== "browser_agent") return
+    if (!shouldAutoCloseBrowserAgentPanel(run)) {
+      liveBrowserPanelRunIdsRef.current.add(run.runId)
+      return
     }
-    setActiveAgentRunId(takeoverRun.runId)
-    setArtifactOpen(false)
-    setGenArtifact(null)
-    setSidebarOpen(false)
-  }, [
-    agentRuns,
-    artifactOpen,
-    genArtifact,
-    activePanelAgentRun,
-    sidebarOpen,
-    setSidebarOpen,
-  ])
+    if (
+      !liveBrowserPanelRunIdsRef.current.has(run.runId) ||
+      autoClosedBrowserRunIdsRef.current.has(run.runId)
+    )
+      return
+
+    autoClosedBrowserRunIdsRef.current.add(run.runId)
+    setActiveAgentRunId(null)
+    if (sidebarWasOpenRef.current) setSidebarOpen(true)
+  }, [activePanelAgentRun, setSidebarOpen])
   const activeChildAgentRuns = React.useMemo(
     () =>
       activePanelAgentRun
@@ -2817,9 +2837,8 @@ export function ChatView() {
   const autoOpenedBrowserRunIdsRef = React.useRef<Set<string>>(new Set())
   React.useEffect(() => {
     if (isMobile) return
-    const startedRun = agentRuns.find(
+    const startedRun = latestBrowserAgentRuns(activeTurnAgentRuns).find(
       (run) =>
-        run.agentId === "browser_agent" &&
         run.status === "running" &&
         !autoOpenedBrowserRunIdsRef.current.has(run.runId)
     )
@@ -2835,7 +2854,7 @@ export function ChatView() {
     setGenArtifact(null)
     setSidebarOpen(false)
   }, [
-    agentRuns,
+    activeTurnAgentRuns,
     isMobile,
     artifactOpen,
     genArtifact,
@@ -2855,14 +2874,12 @@ export function ChatView() {
   // button in the chat header so the live view is always one click away.
   const reopenBrowserRun = React.useMemo(() => {
     if (isMobile) return null
-    const liveRuns = agentRuns.filter(
-      (run) =>
-        run.agentId === "browser_agent" &&
-        isBrowserAgentRunLive(run)
+    const liveRuns = latestBrowserAgentRuns(activeTurnAgentRuns).filter((run) =>
+      isBrowserAgentRunLive(run)
     )
     const run = liveRuns[liveRuns.length - 1] ?? null
     return run && run.runId !== browserPanelRunId ? run : null
-  }, [agentRuns, isMobile, browserPanelRunId])
+  }, [activeTurnAgentRuns, isMobile, browserPanelRunId])
 
   const handleLoadMessageDetails = React.useCallback(
     (messageId: string) => {
@@ -2952,7 +2969,7 @@ export function ChatView() {
     artifactResizeKeyRef.current = activeArtifactResizeKey
   }, [activeArtifactResizeKey])
 
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     if (!hasArtifact || !conversationId) return
 
     const artifactStoredWidth = readStoredArtifactPanelWidth(
@@ -3405,6 +3422,9 @@ export function ChatView() {
                               onAttachmentClick={openPreview}
                               onAgentOpen={handleAgentOpen}
                               onLoadMessageDetails={handleLoadMessageDetails}
+                              visibleBrowserTakeoverRunIds={
+                                visibleBrowserTakeoverRunIds
+                              }
                             />
                           </div>
                         )

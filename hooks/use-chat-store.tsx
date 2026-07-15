@@ -44,6 +44,14 @@ import {
 } from "./chat-store-reducer"
 import { publishLocalSubmitAnchor } from "@/lib/chat-local-submit-anchor"
 import {
+  clearPendingChatUpdateTurn,
+  fetchCurrentChatProfileId,
+  isPendingChatUpdateStorageKey,
+  readPendingChatUpdateTurn,
+  writePendingChatUpdateTurn,
+  type PendingChatUpdateTurn,
+} from "@/lib/chat-update-retry"
+import {
   ChatFetchError,
   CHAT_SEND_RETRY_ATTEMPTS,
   INITIAL_MESSAGE_FULL_TAIL_SIZE,
@@ -70,6 +78,7 @@ import {
   isLikelyStreamInterruption,
   isTerminalAssistantMessage,
   markReasoningStopped,
+  mergeMessagesById,
   postWithRetry,
   readUnreadConversationIds,
   showChatCompletionNotification,
@@ -104,6 +113,9 @@ export interface SendMessageOptions {
    *  is already persisted (steer endpoint) and already in local state — the
    *  turn reuses it verbatim and claims the queue entry server-side. */
   internalFollowUp?: { followUpId: string; userMessage: Message }
+  /** Internal: rehydrate a turn that was waiting for managed-update admission
+   *  when this browser/profile resumes. */
+  internalUpdateRetry?: PendingChatUpdateTurn
 }
 
 // 12 × 200 ≈ 2400 messages of reach for a deep-link jump target — covers
@@ -172,6 +184,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   const [unreadConversationIds, setUnreadConversationIds] = React.useState<
     Set<string>
   >(() => readUnreadConversationIds())
+  const [pendingUpdateStorageRevision, setPendingUpdateStorageRevision] =
+    React.useState(0)
   const unreadConversationIdsRef = React.useRef<Set<string>>(
     unreadConversationIds
   )
@@ -250,6 +264,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       ) => Promise<string | null>)
     | null
   >(null)
+  const pendingUpdateRestoreStartedRef = React.useRef<string | null>(null)
+  const activeProfileIdRef = React.useRef<string | null>(null)
   const drainNextFollowUp = React.useCallback((conversationId: string) => {
     if (streamingRef.current || activeChatStreamsRef.current[conversationId]) {
       return
@@ -343,6 +359,16 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     unreadConversationIdsRef.current = unreadConversationIds
   }, [unreadConversationIds])
+
+  React.useEffect(() => {
+    const handleStorage = (event: StorageEvent) => {
+      if (isPendingChatUpdateStorageKey(event.key)) {
+        setPendingUpdateStorageRevision((revision) => revision + 1)
+      }
+    }
+    window.addEventListener("storage", handleStorage)
+    return () => window.removeEventListener("storage", handleStorage)
+  }, [])
 
   const getVisibleActiveConversationId = React.useCallback(() => {
     if (typeof document === "undefined") return null
@@ -679,6 +705,13 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       : undefined
     const messageId = clientStreamMessageIdRef.current ?? stream?.messageId
     clientStreamMessageIdRef.current = null
+    if (activeProfileIdRef.current) {
+      clearPendingChatUpdateTurn(activeProfileIdRef.current, {
+        conversationId,
+        assistantMessageId: messageId,
+      })
+    }
+    pendingUpdateRestoreStartedRef.current = null
     // Stop means stop: drop locally queued steering follow-ups too (the stop
     // endpoint clears the server-side queue). Their user messages stay in the
     // conversation and ride along as history on the next send.
@@ -725,6 +758,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       chatStreamLifecycleGenerationRef.current.clear()
       messageDetailLoadsRef.current.clear()
       summaryRefreshPromiseRef.current = null
+      pendingUpdateRestoreStartedRef.current = null
+      activeProfileIdRef.current = null
       try {
         window.localStorage.removeItem("chat:active-id")
       } catch {
@@ -2127,13 +2162,27 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       options?: SendMessageOptions
     ): Promise<string | null> => {
       const followUpClaim = options?.internalFollowUp ?? null
+      const updateRetry = options?.internalUpdateRetry ?? null
+      if (updateRetry) activeProfileIdRef.current = updateRetry.profileId
+      const updateRetryUserMessage = updateRetry
+        ? [...updateRetry.messages]
+            .reverse()
+            .find((message) => message.role === "user")
+        : null
+      if (updateRetry && !updateRetryUserMessage) {
+        clearPendingChatUpdateTurn(updateRetry.profileId, {
+          conversationId: updateRetry.conversationId,
+          assistantMessageId: updateRetry.assistantMessageId,
+        })
+        return null
+      }
       // Steering: a send while this conversation's turn is still streaming is
       // routed through /api/chat/steer even when this tab only OBSERVES the
       // server run (recovery, refresh, another tab). Reader ownership is not
       // the source of truth for whether a turn exists.
       const isSteering = shouldSendAsSteering({
         targetConversationId,
-        hasInternalFollowUp: Boolean(followUpClaim),
+        hasInternalFollowUp: Boolean(followUpClaim || updateRetry),
         ownsStream: streamingRef.current,
         ownedConversationId: streamingConversationIdRef.current,
         isStreaming: isStreamingStateRef.current,
@@ -2143,8 +2192,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
       // Use pre-uploaded attachments or upload new files
       let attachments: import("@/lib/types").Attachment[] | undefined =
-        uploadedAttachments
-      if (!attachments && files?.length) {
+        updateRetryUserMessage?.attachments ?? uploadedAttachments
+      if (!updateRetry && !attachments && files?.length) {
         try {
           attachments = await uploadChatAttachments(files)
         } catch (e) {
@@ -2153,17 +2202,20 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       }
 
       const finalAttachments = attachments?.length ? attachments : undefined
-      if (!content.trim() && !finalAttachments?.length) return null
+      const effectiveContent = updateRetryUserMessage?.content ?? content
+      if (!effectiveContent.trim() && !finalAttachments?.length) return null
 
-      let userMessage: Message = followUpClaim
-        ? { ...followUpClaim.userMessage, steerPending: undefined }
-        : {
-            id: generateId(),
-            role: "user",
-            content,
-            attachments: finalAttachments,
-            timestamp: Date.now(),
-          }
+      let userMessage: Message = updateRetryUserMessage
+        ? { ...updateRetryUserMessage, steerPending: undefined }
+        : followUpClaim
+          ? { ...followUpClaim.userMessage, steerPending: undefined }
+          : {
+              id: generateId(),
+              role: "user",
+              content: effectiveContent,
+              attachments: finalAttachments,
+              timestamp: Date.now(),
+            }
 
       let conversationId = targetConversationId
       let allMessages: Message[]
@@ -2284,7 +2336,63 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         })
       }
 
-      if (!conversationId) {
+      if (updateRetry) {
+        if (!conversationId || conversationId !== updateRetry.conversationId) {
+          clearPendingChatUpdateTurn(updateRetry.profileId, {
+            conversationId: updateRetry.conversationId,
+            assistantMessageId: updateRetry.assistantMessageId,
+          })
+          return null
+        }
+        const retryMessages = updateRetry.messages.map((message) => ({
+          ...message,
+          steerPending: undefined,
+        }))
+        const conv = state.conversations.find(
+          (candidate) => candidate.id === conversationId
+        )
+        if (conv) {
+          allMessages = mergeMessagesById(conv.messages, retryMessages)
+          for (const message of retryMessages) {
+            dispatch({
+              type: "ADD_USER_MESSAGE",
+              conversationId,
+              message,
+            })
+            void postWithRetry(() =>
+              addConversationMessageRequest(conversationId!, message)
+            ).catch(console.error)
+          }
+        } else {
+          const createdAt = Math.min(
+            ...retryMessages.map((message) => message.timestamp)
+          )
+          const newConv: Conversation = {
+            id: conversationId,
+            title: generateTitle(userMessage.content, userMessage.attachments),
+            messages: retryMessages,
+            createdAt,
+            updatedAt: userMessage.timestamp,
+            messageCount: retryMessages.length,
+            lastMessagePreview: userMessage.content,
+            lastMessageAt: userMessage.timestamp,
+            readAt: userMessage.timestamp,
+          }
+          allMessages = retryMessages
+          void postWithRetry(() => createConversationRequest(newConv)).catch(
+            console.error
+          )
+          dispatch({
+            type: "CREATE_CONVERSATION",
+            conversation: newConv,
+            activate: options?.activateConversation !== false,
+          })
+          if (options?.activateConversation !== false) {
+            activeConversationIdRef.current = conversationId
+          }
+        }
+        markConversationRead(conversationId)
+      } else if (!conversationId) {
         conversationId = generateId()
         const createdAt = Date.now()
         const seedTitle = generateTitle(content, finalAttachments)
@@ -2394,7 +2502,11 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           : [...base, userMessage]
       }
 
-      if (options?.activateConversation !== false && !followUpClaim) {
+      if (
+        options?.activateConversation !== false &&
+        !followUpClaim &&
+        !updateRetry
+      ) {
         publishLocalSubmitAnchor({
           conversationId,
           messageId: userMessage.id,
@@ -2403,7 +2515,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       }
 
       // Start streaming
-      const assistantMsgId = generateId()
+      const assistantMsgId = updateRetry?.assistantMessageId ?? generateId()
       clientStreamMessageIdRef.current = assistantMsgId
       streamingRef.current = true
       streamingConversationIdRef.current = conversationId
@@ -2427,6 +2539,37 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       thinkingStartRef.current = Date.now()
 
       const finalConvId = conversationId
+      const clearThisPendingUpdateTurn = () => {
+        const profileId = updateRetry?.profileId ?? activeProfileIdRef.current
+        if (!profileId) return
+        clearPendingChatUpdateTurn(profileId, {
+          conversationId: finalConvId,
+          assistantMessageId: assistantMsgId,
+        })
+      }
+      const persistThisPendingUpdateTurn = (profileId: string) => {
+        activeProfileIdRef.current = profileId
+        writePendingChatUpdateTurn({
+          profileId,
+          conversationId: finalConvId,
+          assistantMessageId: assistantMsgId,
+          messages: allMessages,
+          promptContext: options?.promptContext,
+          promptContextSource: options?.promptContextSource,
+          activateIntegrations: options?.activateIntegrations,
+          preferredFallbackIndex: options?.preferredFallbackIndex,
+          queuedAt: updateRetry?.queuedAt,
+        })
+      }
+
+      // Usually the profile is already known from the mount-time restore
+      // preflight. Persist before the POST so a refresh, closed PWA, dropped
+      // connection, or server restart cannot lose a turn before it returns the
+      // explicit update-in-progress response. That response also returns the
+      // profile id as a fallback for an immediate send during initial mount.
+      const knownProfileId =
+        updateRetry?.profileId ?? activeProfileIdRef.current
+      if (knownProfileId) persistThisPendingUpdateTurn(knownProfileId)
       dispatch({
         type: "CHAT_STREAM_STARTED",
         stream: {
@@ -2488,6 +2631,14 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                 // The user's row is already persisted. Keep this exact turn
                 // alive across the managed restart and retry with the same
                 // conversation/message ids, so reconnect cannot duplicate it.
+                const responseProfileId =
+                  typeof err?.profileId === "string" ? err.profileId : null
+                const profileId =
+                  responseProfileId ??
+                  updateRetry?.profileId ??
+                  activeProfileIdRef.current ??
+                  (await fetchCurrentChatProfileId())
+                if (profileId) persistThisPendingUpdateTurn(profileId)
                 dispatch({
                   type: "SET_STREAMING",
                   isStreaming: true,
@@ -2502,14 +2653,14 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                 )
                 if (
                   !streamingRef.current ||
-                  clientStreamMessageIdRef.current !== assistantMsgId ||
-                  activeConversationIdRef.current !== finalConvId
+                  clientStreamMessageIdRef.current !== assistantMsgId
                 ) {
                   return
                 }
                 streamLastActivityRef.current = Date.now()
                 return runStreamTurn()
               }
+              clearThisPendingUpdateTurn()
               if (
                 response.status === 409 &&
                 err?.code === "stream_already_active" &&
@@ -2644,6 +2795,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                   : undefined
               )
             }
+
+            clearThisPendingUpdateTurn()
 
             if (followUpClaim) {
               dispatch({
@@ -3417,7 +3570,21 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           })
       }
 
-      void runStreamTurn().finally(() => {
+      const startPersistedStreamTurn = async () => {
+        if (!knownProfileId) {
+          const profileId = await fetchCurrentChatProfileId()
+          if (
+            !streamingRef.current ||
+            clientStreamMessageIdRef.current !== assistantMsgId
+          ) {
+            return
+          }
+          if (profileId) persistThisPendingUpdateTurn(profileId)
+        }
+        return runStreamTurn()
+      }
+
+      void startPersistedStreamTurn().finally(() => {
         window.clearInterval(stallWatchdog)
         streamPostInFlightRef.current = false
         streamReaderActiveRef.current = false
@@ -3460,6 +3627,107 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     sendMessageToConversationRef.current = sendMessageToConversation
   }, [sendMessageToConversation])
+
+  React.useEffect(() => {
+    if (state.isLoading || state.isStreaming || streamingRef.current) return
+    if (pathname?.startsWith("/profiles")) return
+    let cancelled = false
+    void (async () => {
+      const profileId = await fetchCurrentChatProfileId()
+      if (cancelled || !profileId) return
+      activeProfileIdRef.current = profileId
+      const pending = readPendingChatUpdateTurn(profileId)
+      if (!pending) return
+      const restoreKey = `${profileId}:${pending.conversationId}:${pending.assistantMessageId}`
+      if (pendingUpdateRestoreStartedRef.current === restoreKey) return
+      pendingUpdateRestoreStartedRef.current = restoreKey
+
+      // A refresh can race the retry response: if the server already accepted
+      // this exact assistant id, adopt/recover it instead of starting the turn
+      // again. Otherwise the stable ids make the resumed POST idempotent.
+      const [runtimeResult, messageResult] = await Promise.allSettled([
+        fetchChatRuntimeState(pending.conversationId),
+        fetchConversationMessageDetails(
+          pending.conversationId,
+          pending.assistantMessageId
+        ),
+      ])
+      if (cancelled) return
+      const activeStream =
+        runtimeResult.status === "fulfilled"
+          ? runtimeResult.value?.stream
+          : null
+      const acceptedMessage =
+        messageResult.status === "fulfilled" ? messageResult.value : null
+      if (
+        acceptedMessage?.role === "assistant" ||
+        activeStream?.messageId === pending.assistantMessageId
+      ) {
+        clearPendingChatUpdateTurn(profileId, {
+          conversationId: pending.conversationId,
+          assistantMessageId: pending.assistantMessageId,
+        })
+        if (activeStream?.messageId === pending.assistantMessageId) {
+          void recoverInterruptedStream(
+            pending.conversationId,
+            pending.assistantMessageId
+          )
+        }
+        return
+      }
+
+      const latestUser = [...pending.messages]
+        .reverse()
+        .find((message) => message.role === "user")
+      if (!latestUser) {
+        clearPendingChatUpdateTurn(profileId, {
+          conversationId: pending.conversationId,
+          assistantMessageId: pending.assistantMessageId,
+        })
+        pendingUpdateRestoreStartedRef.current = null
+        return
+      }
+      const activateConversation =
+        activeConversationIdRef.current === pending.conversationId ||
+        (pathnameRef.current === "/" &&
+          activeConversationIdRef.current === null)
+      const resumed = await sendMessageToConversationRef.current?.(
+        pending.conversationId,
+        latestUser.content,
+        undefined,
+        latestUser.attachments,
+        {
+          activateConversation,
+          promptContext: pending.promptContext,
+          promptContextSource: pending.promptContextSource,
+          activateIntegrations: pending.activateIntegrations,
+          preferredFallbackIndex: pending.preferredFallbackIndex,
+          internalUpdateRetry: pending,
+        }
+      )
+      if (!resumed) {
+        clearPendingChatUpdateTurn(profileId, {
+          conversationId: pending.conversationId,
+          assistantMessageId: pending.assistantMessageId,
+        })
+        pendingUpdateRestoreStartedRef.current = null
+      }
+    })().catch((error) => {
+      if (cancelled) return
+      pendingUpdateRestoreStartedRef.current = null
+      console.warn("Failed to restore update-pending chat turn", error)
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    pathname,
+    pendingUpdateStorageRevision,
+    recoverInterruptedStream,
+    state.isLoading,
+    state.isStreaming,
+  ])
 
   const sendMessage = React.useCallback(
     (

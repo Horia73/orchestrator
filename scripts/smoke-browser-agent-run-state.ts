@@ -6,15 +6,23 @@ import {
     isBrowserAgentRunAwaitingUser,
     isBrowserAgentRunCheckpointed,
     isBrowserAgentRunLive,
+    latestBrowserAgentRuns,
+    latestBrowserAgentRunsFromReasoning,
+    shouldAutoCloseBrowserAgentPanel,
 } from '@/lib/browser-agent-run-state'
 import type { AgentCallReasoningEntry } from '@/lib/types'
 
-function run(content: string, status: AgentCallReasoningEntry['status'] = 'ok'): AgentCallReasoningEntry {
+function run(
+    content: string,
+    status: AgentCallReasoningEntry['status'] = 'ok',
+    options: { runId?: string; threadId?: string } = {},
+): AgentCallReasoningEntry {
     return {
         type: 'agent_call',
-        id: 'browser-run-smoke-entry',
+        id: `browser-run-smoke-entry-${options.runId ?? 'default'}`,
         phase: 0,
-        runId: 'browser-run-smoke',
+        runId: options.runId ?? 'browser-run-smoke',
+        agentThreadId: options.threadId,
         agentId: 'browser_agent',
         agentName: 'Browser Agent',
         kind: 'text',
@@ -40,7 +48,37 @@ assert.equal(isBrowserAgentRunCheckpointed(run('Session status: awaiting_user\nF
 assert.equal(isBrowserAgentRunLive(run('ordinary progress', 'running')), true)
 assert.equal(isBrowserAgentRunLive(run('Session status: awaiting_user\nFinal action: checkpoint')), true)
 assert.equal(isBrowserAgentRunLive(run('completed', 'ok')), false)
+assert.equal(shouldAutoCloseBrowserAgentPanel(run('ordinary progress', 'running')), false)
+assert.equal(shouldAutoCloseBrowserAgentPanel(run('Session status: awaiting_user\nFinal action: ask', 'running')), true)
+assert.equal(shouldAutoCloseBrowserAgentPanel(run('completed', 'ok')), true)
 assert.equal(browserSessionIdFromRunContent('Browser session: browser:abc-123'), 'browser:abc-123')
 assert.equal(browserSessionIdFromRunContent('No session here.'), null)
+
+const oldTakeover = run(
+    'Session status: awaiting_user\nFinal action: ask',
+    'ok',
+    { runId: 'old-takeover', threadId: 'thread-a' },
+)
+const continuedDone = run(
+    'Session status: completed\nFinal action: done',
+    'ok',
+    { runId: 'continued-done', threadId: 'thread-a' },
+)
+const separateTakeover = run(
+    'Session status: awaiting_user\nFinal action: ask',
+    'ok',
+    { runId: 'separate-takeover', threadId: 'thread-b' },
+)
+
+assert.deepEqual(
+    latestBrowserAgentRuns([oldTakeover, continuedDone, separateTakeover]).map(entry => entry.runId),
+    ['continued-done', 'separate-takeover'],
+)
+assert.deepEqual(
+    latestBrowserAgentRunsFromReasoning([oldTakeover, continuedDone, separateTakeover])
+        .filter(isBrowserAgentRunAwaitingUser)
+        .map(entry => entry.runId),
+    ['separate-takeover'],
+)
 
 console.log('browser agent run-state smoke passed')

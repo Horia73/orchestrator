@@ -181,6 +181,7 @@ export async function POST(request: Request) {
           JSON.stringify({
             error: "Update in progress. The app will reconnect after restart.",
             code: "update_in_progress",
+            profileId: getActiveProfileId(),
           }),
           {
             status: 503,
@@ -708,6 +709,7 @@ export async function POST(request: Request) {
             JSON.stringify({
               error: "Update in progress. The app will reconnect after restart.",
               code: "update_in_progress",
+              profileId: getActiveProfileId(),
             }),
             {
               status: 503,

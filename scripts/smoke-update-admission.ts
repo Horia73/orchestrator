@@ -20,6 +20,120 @@ import {
     isChatUpdateInProgressResponse,
     sleepWithAbortSignal,
 } from '@/hooks/chat-store-utils'
+import {
+    clearPendingChatUpdateTurn,
+    isPendingChatUpdateStorageKey,
+    PENDING_CHAT_UPDATE_TURN_MAX_AGE_MS,
+    readPendingChatUpdateTurn,
+    writePendingChatUpdateTurn,
+} from '@/lib/chat-update-retry'
+import type { Message } from '@/lib/types'
+
+const stored = new Map<string, string>()
+const retryStorage = {
+    getItem: (key: string) => stored.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+        stored.set(key, value)
+    },
+    removeItem: (key: string) => {
+        stored.delete(key)
+    },
+}
+const priorUser: Message = {
+    id: 'update_prior_user',
+    role: 'user',
+    content: 'Already answered',
+    timestamp: 100,
+}
+const priorAssistant: Message = {
+    id: 'update_prior_assistant',
+    role: 'assistant',
+    content: 'Previous answer',
+    timestamp: 200,
+}
+const pendingUser: Message = {
+    id: 'update_pending_user',
+    role: 'user',
+    content: 'Send after update',
+    timestamp: 300,
+}
+assert.equal(
+    writePendingChatUpdateTurn(
+        {
+            profileId: 'admin',
+            conversationId: 'update_pending_conversation',
+            assistantMessageId: 'update_pending_assistant',
+            messages: [priorUser, priorAssistant, pendingUser],
+            queuedAt: 400,
+        },
+        retryStorage,
+    ),
+    true,
+)
+assert.deepEqual(
+    readPendingChatUpdateTurn('admin', retryStorage, 500)?.messages.map((message) => message.id),
+    [pendingUser.id],
+    'refresh marker should retain only the unanswered user suffix',
+)
+assert.equal(
+    clearPendingChatUpdateTurn(
+        'admin',
+        { assistantMessageId: 'different_assistant' },
+        retryStorage,
+    ),
+    false,
+    'an unrelated turn must not clear the pending retry',
+)
+assert.equal(
+    readPendingChatUpdateTurn(
+        'admin',
+        retryStorage,
+        400 + PENDING_CHAT_UPDATE_TURN_MAX_AGE_MS + 1,
+    ),
+    null,
+    'stale refresh markers should expire instead of sending much later',
+)
+assert.equal(
+    writePendingChatUpdateTurn(
+        {
+            profileId: 'member',
+            conversationId: 'member_update_conversation',
+            assistantMessageId: 'member_update_assistant',
+            messages: [pendingUser],
+            queuedAt: 600,
+        },
+        retryStorage,
+    ),
+    true,
+)
+assert.equal(
+    writePendingChatUpdateTurn(
+        {
+            profileId: 'admin',
+            conversationId: 'admin_update_conversation',
+            assistantMessageId: 'admin_update_assistant',
+            messages: [pendingUser],
+            queuedAt: 600,
+        },
+        retryStorage,
+    ),
+    true,
+)
+assert.equal(
+    readPendingChatUpdateTurn('admin', retryStorage, 700)?.conversationId,
+    'admin_update_conversation',
+    'one profile must never read another profile pending turn',
+)
+assert.equal(
+    readPendingChatUpdateTurn('member', retryStorage, 700)?.conversationId,
+    'member_update_conversation',
+    'profile-scoped markers should survive independently',
+)
+assert.equal(
+    [...stored.keys()].every((key) => isPendingChatUpdateStorageKey(key)),
+    true,
+    'other tabs should recognize profile-scoped pending-turn storage events',
+)
 
 assert.equal(
     isChatUpdateInProgressResponse(503, { code: 'update_in_progress' }),

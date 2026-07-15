@@ -25,6 +25,8 @@ import {
     browserAgentRunPauseKind,
     browserSessionIdFromRunContent,
     isBrowserAgentRunLive,
+    isBrowserAgentRunAwaitingUser,
+    latestBrowserAgentRunsFromReasoning,
 } from "@/lib/browser-agent-run-state"
 import { isDesktopViewport } from "@/lib/desktop-viewport"
 import { hideInlineImageAttachments } from "@/lib/chat-attachment-display"
@@ -253,12 +255,9 @@ function sliceTimelineByRenderBudget(
 }
 
 function hasLiveBrowserAgent(reasoning: ReasoningEntry[]): boolean {
-    return reasoning.some((entry) => {
-        if (entry.type !== "agent_call" || entry.agentId !== "browser_agent") {
-            return false
-        }
-        return isBrowserAgentRunLive(entry)
-    })
+    return latestBrowserAgentRunsFromReasoning(reasoning).some((entry) =>
+        isBrowserAgentRunLive(entry)
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -711,6 +710,7 @@ function WorkedForBlock({
     onAgentOpen,
     onAttachmentClick,
     suppressArtifactTypes,
+    hiddenAgentRunIds,
 }: {
     items: MessageTimelineItem[]
     durationMs?: number
@@ -723,6 +723,7 @@ function WorkedForBlock({
     onAgentOpen?: (entry: AgentCallReasoningEntry) => void
     onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
     suppressArtifactTypes?: string[]
+    hiddenAgentRunIds?: ReadonlySet<string>
 }) {
     const openStorageKey = `worked:${messageId}:open`
     const [savedOpenState] = React.useState<boolean | null>(() => {
@@ -889,6 +890,7 @@ function WorkedForBlock({
                                             onAgentOpen={onAgentOpen}
                                             onAttachmentClick={onAttachmentClick}
                                             searchToolDisplay="expanded"
+                                            hiddenAgentRunIds={hiddenAgentRunIds}
                                         />
                                     ) : item.type === "steered" ? (
                                         // Steered messages are section barriers —
@@ -946,12 +948,14 @@ function ReasoningEntryList({
     onAgentOpen,
     onAttachmentClick,
     searchToolDisplay,
+    hiddenAgentRunIds,
 }: {
     reasoning: ReasoningEntry[]
     onArtifactClick?: (artifact: ArtifactPayload) => void
     onAgentOpen?: (entry: AgentCallReasoningEntry) => void
     onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
     searchToolDisplay: SearchToolDisplay
+    hiddenAgentRunIds?: ReadonlySet<string>
 }) {
     const nodes: React.ReactNode[] = []
 
@@ -970,8 +974,8 @@ function ReasoningEntryList({
 
         if (
             entry.type === "agent_call" &&
-            entry.parentRunId &&
-            agentRunIds.has(entry.parentRunId)
+            ((entry.parentRunId && agentRunIds.has(entry.parentRunId)) ||
+                hiddenAgentRunIds?.has(entry.runId))
         ) {
             continue
         }
@@ -1578,6 +1582,7 @@ interface MessageBubbleProps {
     onAgentOpen?: (entry: AgentCallReasoningEntry) => void
     onLoadMessageDetails?: (messageId: string) => Promise<void>
     autoLoadDeferredDetails?: boolean
+    visibleBrowserTakeoverRunIds?: ReadonlySet<string>
 }
 
 function MessageBubbleComponent({
@@ -1592,6 +1597,7 @@ function MessageBubbleComponent({
     onAgentOpen,
     onLoadMessageDetails,
     autoLoadDeferredDetails = false,
+    visibleBrowserTakeoverRunIds,
 }: MessageBubbleProps) {
     const [copied, setCopied] = React.useState(false)
     const [hovered, setHovered] = React.useState(false)
@@ -1795,6 +1801,26 @@ function MessageBubbleComponent({
     // streaming we leave the live per-phase blocks untouched.
     const collapseWork =
         !isStreamingMessage && !isInProgressReasoning && timeline.length > 0
+    const surfacedBrowserTakeovers = collapseWork && message.reasoning
+        ? latestBrowserAgentRunsFromReasoning(message.reasoning).filter((run) =>
+            isBrowserAgentRunAwaitingUser(run) &&
+            (visibleBrowserTakeoverRunIds?.has(run.runId) ?? true)
+        )
+        : []
+    const surfacedBrowserTakeoverIds = new Set(
+        surfacedBrowserTakeovers.map((run) => run.runId)
+    )
+    const collapsibleTimeline = surfacedBrowserTakeoverIds.size > 0
+        ? timeline.flatMap((item): MessageTimelineItem[] => {
+            if (item.type !== "reasoning") return [item]
+            const entries = item.entries.filter(
+                (entry) =>
+                    entry.type !== "agent_call" ||
+                    !surfacedBrowserTakeoverIds.has(entry.runId)
+            )
+            return entries.length > 0 ? [{ ...item, entries }] : []
+        })
+        : timeline
 
     // Steered messages are hard barriers: user speech never folds into
     // "Worked for". Partition the timeline at steered items; each section
@@ -1806,7 +1832,7 @@ function MessageBubbleComponent({
         steered: SteeredMessageReasoningEntry | null
         items: MessageTimelineItem[]
     }> = [{ steered: null, items: [] }]
-    for (const item of timeline) {
+    for (const item of collapsibleTimeline) {
         if (item.type === "steered") sections.push({ steered: item.entry, items: [] })
         else sections[sections.length - 1].items.push(item)
     }
@@ -1899,6 +1925,7 @@ function MessageBubbleComponent({
                                     onAgentOpen={onAgentOpen}
                                     onAttachmentClick={onAttachmentClick}
                                     suppressArtifactTypes={suppressArtifactTypes}
+                                    hiddenAgentRunIds={surfacedBrowserTakeoverIds}
                                 />
                             )}
                             {finalItems.map(renderTimelineItem)}
@@ -1908,6 +1935,14 @@ function MessageBubbleComponent({
             ) : (
                 timeline.map(renderTimelineItem)
             )}
+            {surfacedBrowserTakeovers.map((run) => (
+                <BrowserAgentCallBlock
+                    key={`browser-takeover-${run.runId}`}
+                    entry={run}
+                    onOpen={onAgentOpen}
+                    onAttachmentClick={onAttachmentClick}
+                />
+            ))}
             {timeline.length === 0 && <TerminalMessageStatusLine status={message.status} />}
             {visibleAssistantAttachments.length > 0 && (
                 <div className="mt-1 flex max-w-[85%] flex-wrap gap-2">

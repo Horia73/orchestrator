@@ -41,13 +41,18 @@ const {
 } = await import("@/lib/profiles/store")
 const { defaultMemberPermissions } = await import("@/lib/profiles/types")
 
-const disabled = createProfile({ name: "Owner Help Disabled" })
-const enabledPermissions = defaultMemberPermissions()
-enabledPermissions.tools.owner_agent_help = true
-const enabled = createProfile({
-  name: "Owner Help Enabled",
-  permissions: enabledPermissions,
+const disabledPermissions = defaultMemberPermissions()
+disabledPermissions.tools.owner_agent_help = false
+const disabled = createProfile({
+  name: "Owner Help Disabled",
+  permissions: disabledPermissions,
 })
+const enabled = createProfile({ name: "Owner Help Enabled" })
+
+check(
+  "owner help is enabled by default for member profiles",
+  enabled.permissions.tools.owner_agent_help === true,
+)
 
 const disabledTools = runWithProfileContext(
   { profileId: disabled.id, role: "member" },
