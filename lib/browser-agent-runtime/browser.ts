@@ -4108,7 +4108,6 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 log('⚠️ Live display unavailable on Linux; falling back to headless Patchright.');
             }
             if (hasVirtualDisplay && lastLiveViewState.display) {
-                process.env.DISPLAY = lastLiveViewState.display;
                 log(`🖥️ Using virtual display ${lastLiveViewState.display}`);
             }
 
@@ -4133,6 +4132,9 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 acceptDownloads: true,
                 downloadsPath: downloadsDir,
                 args: [...launchArgs, ...displayLaunchArgs],
+                ...(hasVirtualDisplay && lastLiveViewState.display
+                    ? { env: displayEnv(lastLiveViewState.display) }
+                    : {}),
             });
 
             log('🚀 Launching Patchright Browser...');

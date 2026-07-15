@@ -1,7 +1,10 @@
 import assert from "node:assert/strict"
 
 import type { ToolDef } from "@/lib/ai/agents/types"
-import { estimateAttachmentTokens } from "@/lib/ai/context-token-estimate"
+import {
+  estimateAttachmentTokens,
+  estimateTextTokens,
+} from "@/lib/ai/context-token-estimate"
 import {
   buildContextUsageBreakdown,
   reconcileContextUsageBreakdown,
@@ -73,6 +76,30 @@ assert.equal(
 assert.ok(
   (reconciled.categories.find((entry) => entry.id === "provider")?.tokens ?? 0) > 0,
   "unobservable provider state should be explicit"
+)
+
+const systemTextWithTagReferences = [
+  "Use <workspace_context_files> only as durable context.",
+  "Choose a specialist from <runtime_agents> when delegation helps.",
+  "Follow <skills_index> when a matching workflow exists.",
+  "Call only tools exposed through <runtime_tools>.",
+].join("\n")
+const promptWithTagReferences = [
+  systemTextWithTagReferences,
+  "<skills_index>\n- pdf: PDF workflow\n</skills_index>",
+  "<runtime_tools>\n- ActiveTool: active\n</runtime_tools>",
+  "<runtime_agents>\n- worker: generalist\n</runtime_agents>",
+  "<workspace_context_files>\n--- BEGIN USER.md (user) ---\nPrefers concise answers.\n--- END USER.md ---\n</workspace_context_files>",
+].join("\n\n")
+const referencedTagBreakdown = buildContextUsageBreakdown({
+  systemPrompt: promptWithTagReferences,
+  messages: [],
+  tools: [],
+})
+assert.ok(
+  (referencedTagBreakdown.categories.find((entry) => entry.id === "system")?.tokens ?? 0)
+    >= estimateTextTokens(systemTextWithTagReferences),
+  "inline tag references must remain attributed to the base system prompt"
 )
 
 const compacted = reconcileContextUsageBreakdown(breakdown, 100, 0)

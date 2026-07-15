@@ -79,10 +79,25 @@ const managedThreadParams = codexProviderTestHooks.buildThreadParams({
   nativeCoderRun: false,
   cwd: "/tmp/orchestrator-codex-provider-smoke",
 })
+type CodexThreadConfig = {
+  features?: { code_mode_host?: boolean }
+  multi_agent_v2?: { multi_agent_mode_hint_text?: string }
+}
+const managedThreadConfig = managedThreadParams.config as CodexThreadConfig
 assert.equal(
-  (managedThreadParams.config as { features?: { code_mode_host?: boolean } }).features?.code_mode_host,
+  managedThreadConfig.features?.code_mode_host,
   false,
   "Managed thread configuration must also disable the code-mode host"
+)
+assert.match(
+  managedThreadConfig.multi_agent_v2?.multi_agent_mode_hint_text ?? "",
+  /delegate_to or delegate_parallel/,
+  "Managed Codex runs must receive the Orchestrator delegation policy override"
+)
+assert.match(
+  managedThreadConfig.multi_agent_v2?.multi_agent_mode_hint_text ?? "",
+  /explicit user request for sub-agents is not required/,
+  "Codex must not suppress Orchestrator-managed delegation on non-Ultra runs"
 )
 const nativeCoderThreadParams = codexProviderTestHooks.buildThreadParams({
   model: "gpt-5.6-sol",
@@ -90,10 +105,16 @@ const nativeCoderThreadParams = codexProviderTestHooks.buildThreadParams({
   builtins: [],
   nativeCoderRun: true,
 })
+const nativeCoderThreadConfig = nativeCoderThreadParams.config as CodexThreadConfig
 assert.equal(
-  (nativeCoderThreadParams.config as { features?: { code_mode_host?: boolean } }).features?.code_mode_host,
+  nativeCoderThreadConfig.features?.code_mode_host,
   undefined,
   "Native coder thread configuration should not override Codex code mode"
+)
+assert.equal(
+  nativeCoderThreadConfig.multi_agent_v2,
+  undefined,
+  "Native coder runs must retain Codex's own multi-agent policy"
 )
 
 const legacyManagedSession = codexProviderTestHooks.decodeAppServerSessionId("appserver:legacy-thread")
@@ -116,6 +137,11 @@ assert.equal(
   (managedForkParams.config as { features?: { code_mode_host?: boolean } }).features?.code_mode_host,
   false,
   "Legacy thread forks must carry the direct-tool configuration override"
+)
+assert.equal(
+  (managedForkParams.config as CodexThreadConfig).multi_agent_v2?.multi_agent_mode_hint_text,
+  managedThreadConfig.multi_agent_v2?.multi_agent_mode_hint_text,
+  "Legacy thread forks must carry the Orchestrator delegation policy override"
 )
 
 const directToolFixtureRoot = mkdtempSync(join(tmpdir(), "orchestrator-codex-direct-tools-"))

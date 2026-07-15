@@ -34,6 +34,10 @@ export type {
 } from './vision-shared';
 export { ModelOutputParseError } from './vision-shared';
 
+export interface VisionServiceCredentials {
+    googleApiKey?: string;
+}
+
 function sanitizeProvider(value: unknown): VisionProvider | '' {
     const normalized = String(value || '').trim().toLowerCase();
     if (normalized === 'google' || normalized === 'codex') {
@@ -44,7 +48,8 @@ function sanitizeProvider(value: unknown): VisionProvider | '' {
 
 export function createVisionService(
     initialConfig: Partial<VisionConfig> = {},
-    onUsage?: (usage: VisionUsage) => void
+    onUsage?: (usage: VisionUsage) => void,
+    credentials: VisionServiceCredentials = {},
 ): VisionService {
     const canonical: VisionConfig = {
         provider: sanitizeProvider(initialConfig.provider) || 'google',
@@ -62,7 +67,9 @@ export function createVisionService(
         if (!backend) {
             backend = canonical.provider === 'codex'
                 ? createCodexVisionService({ ...canonical }, onUsage)
-                : createGeminiVisionService({ ...canonical }, onUsage);
+                : createGeminiVisionService({ ...canonical }, onUsage, {
+                    apiKey: credentials.googleApiKey,
+                });
             backends.set(canonical.provider, backend);
         } else {
             // Keep a previously-instantiated backend in sync with the canonical

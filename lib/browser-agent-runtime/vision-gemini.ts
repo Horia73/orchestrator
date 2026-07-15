@@ -28,6 +28,10 @@ import {
 
 type GeminiThinkingLevel = 'minimal' | 'low' | 'medium' | 'high';
 
+export interface GeminiVisionServiceOptions {
+    apiKey?: string;
+}
+
 function toGeminiThinkingLevel(level: VisionConfig['thinkingLevel']): GeminiThinkingLevel {
     // Gemini has no xhigh; degrade gracefully instead of dropping the setting.
     return level === 'xhigh' ? 'high' : level;
@@ -150,9 +154,10 @@ async function generateContentWithFallback(
 
 export function createGeminiVisionService(
     initialConfig: Partial<VisionConfig> = {},
-    onUsage?: (usage: VisionUsage) => void
+    onUsage?: (usage: VisionUsage) => void,
+    options: GeminiVisionServiceOptions = {},
 ): VisionService {
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = options.apiKey || process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
         throw new Error(

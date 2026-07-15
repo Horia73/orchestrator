@@ -41,6 +41,8 @@ export interface LlmConfig {
     advancedMediaResolution: MediaResolutionLevel;
     /** When false, the base model runs solo with no escalation to advancedModel. */
     escalationEnabled: boolean;
+    /** Runtime-only credential passed directly to this profile's Gemini client. */
+    googleApiKey?: string;
 }
 
 export interface AgentConfig {

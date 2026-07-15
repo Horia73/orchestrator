@@ -181,14 +181,14 @@ function visionProviderForSlot(slot: BrowserAgentModelSettings, slotLabel: strin
     throw new Error(`Browser agent ${slotLabel} model must use the Google (Gemini API) or Codex CLI provider; got "${slot.provider}".`)
 }
 
-/** Validates credentials for exactly the providers the active slots use. */
-function ensureVisionCredentials(providers: VisionProvider[]) {
+/** Resolves credentials for exactly the providers the active slots use. */
+function resolveVisionCredentials(providers: VisionProvider[]): { googleApiKey?: string } {
+    let googleApiKey: string | undefined
     if (providers.includes('google')) {
-        const googleApiKey = getApiKey('google')
+        googleApiKey = getApiKey('google') || undefined
         if (!googleApiKey) {
             throw new Error('Browser agent requires GEMINI_API_KEY because a configured vision slot uses Gemini.')
         }
-        process.env.GEMINI_API_KEY = googleApiKey
     }
 
     if (providers.includes('codex')) {
@@ -197,6 +197,8 @@ function ensureVisionCredentials(providers: VisionProvider[]) {
             throw new Error('Browser agent requires a logged-in Codex CLI because a configured vision slot uses Codex. Sign in via Settings → Models or run `codex login`.')
         }
     }
+
+    return { googleApiKey }
 }
 
 function buildBrowserRuntimeConfig(): BrowserRuntimeConfig {
@@ -211,7 +213,7 @@ function buildBrowserRuntimeConfig(): BrowserRuntimeConfig {
     // The pro slot only runs when escalation is enabled; don't block tasks on a
     // misconfigured/unauthenticated provider that will never be used.
     const proProvider = proEnabled ? visionProviderForSlot(pro, 'pro') : lightProvider
-    ensureVisionCredentials(proEnabled ? [lightProvider, proProvider] : [lightProvider])
+    const credentials = resolveVisionCredentials(proEnabled ? [lightProvider, proProvider] : [lightProvider])
 
     return {
         browser: {
@@ -239,6 +241,7 @@ function buildBrowserRuntimeConfig(): BrowserRuntimeConfig {
             advancedThinkingLevel: mapAdvancedThinkingLevel(pro.thinkingLevel, proProvider),
             advancedMediaResolution: mapMediaResolution(pro.modelOptions?.media_resolution ?? legacyBrowserOptions?.media_resolution),
             escalationEnabled: proEnabled,
+            googleApiKey: credentials.googleApiKey,
         },
     }
 }

@@ -17,7 +17,8 @@ import {
     type BrowserSessionMode,
 } from '@/lib/browser-agent-runtime/session-mode'
 import { DEFAULT_VIEWPORT } from '@/lib/browser-agent-runtime/viewport'
-import { activeRuntimePaths } from '@/lib/runtime-paths'
+import { getActiveProfileId } from '@/lib/profiles/context'
+import { runtimePathsForProfile, type RuntimePathSet } from '@/lib/runtime-paths'
 
 const AWAITING_USER_TTL_MS = 60 * 60 * 1000
 const COMPLETED_TTL_MS = 60 * 60 * 1000
@@ -160,19 +161,25 @@ function normalizeMaxConcurrent(value: number): number {
 }
 
 function getEffectiveMaxConcurrent(): number {
-    // One browser agent at a time, globally. The browser shares a single
-    // live-control channel/virtual display, and parallel execution could still
-    // duplicate external actions even when an incognito run uses a separate
-    // temporary profile. Additional runs queue on runSlots and start
-    // automatically when the active one finishes.
+    // One browser agent at a time per profile. Each profile has its own manager,
+    // persistent Patchright profile, live-control channel, and virtual display,
+    // so different profiles can run concurrently without sharing browser state.
+    // Additional runs for the same profile queue and start automatically.
     return 1
 }
 
 class BrowserSessionManager {
+    readonly profileId: string
+    private readonly runtimePaths: RuntimePathSet
     private browserManager: BrowserManager | null = null
     private sessions = new Map<string, ManagedBrowserSession>()
     private cleanupTimer: NodeJS.Timeout | null = null
     private runSlots = new AsyncSemaphore()
+
+    constructor(profileId: string) {
+        this.runtimePaths = runtimePathsForProfile(profileId)
+        this.profileId = this.runtimePaths.profileId
+    }
 
     async acquire(options: AcquireBrowserSessionOptions): Promise<BrowserSessionLease> {
         const maxConcurrent = getEffectiveMaxConcurrent()
@@ -459,8 +466,8 @@ class BrowserSessionManager {
         this.browserManager = await createBrowserManager({
             backend: config.browser.backend,
             userDataDir: config.browser.userDataDir,
-            downloadsDir: path.join(activeRuntimePaths().workspaceDir, 'browser-downloads'),
-            workspaceDir: activeRuntimePaths().workspaceDir,
+            downloadsDir: path.join(this.runtimePaths.workspaceDir, 'browser-downloads'),
+            workspaceDir: this.runtimePaths.workspaceDir,
             headless: config.browser.headless,
             liveView: config.browser.liveView,
             launchArgs: config.browser.launchArgs,
@@ -480,8 +487,8 @@ class BrowserSessionManager {
         const manager = await createBrowserManager({
             backend: config.browser.backend,
             userDataDir,
-            downloadsDir: path.join(activeRuntimePaths().workspaceDir, 'browser-downloads'),
-            workspaceDir: activeRuntimePaths().workspaceDir,
+            downloadsDir: path.join(this.runtimePaths.workspaceDir, 'browser-downloads'),
+            workspaceDir: this.runtimePaths.workspaceDir,
             headless: config.browser.headless,
             liveView: config.browser.liveView,
             launchArgs: config.browser.launchArgs,
@@ -502,7 +509,7 @@ class BrowserSessionManager {
         const id = this.createSessionId(mode)
         const pendingStatusMessages: string[] = []
         const temporaryProfileDir = mode === 'incognito'
-            ? fs.mkdtempSync(path.join(os.tmpdir(), 'orchestrator-browser-incognito-'))
+            ? fs.mkdtempSync(path.join(os.tmpdir(), `orchestrator-browser-${this.profileId}-incognito-`))
             : null
         let browserManager: BrowserManager | null = null
         let pageSession: BrowserPageSession
@@ -519,7 +526,7 @@ class BrowserSessionManager {
             pageSession = await browserManager.createSession({
                 id,
                 startupUrl: config.browser.startupUrl || undefined,
-                workspaceDir: activeRuntimePaths().workspaceDir,
+                workspaceDir: this.runtimePaths.workspaceDir,
             })
         } catch (error) {
             if (mode === 'incognito') {
@@ -621,12 +628,15 @@ class BrowserSessionManager {
     }
 }
 
-const browserSessionManager = new BrowserSessionManager()
-
 const globalForBrowserSessions = globalThis as unknown as {
+    __orchestratorBrowserSessionManagers?: Map<string, BrowserSessionManager>
     __orchestratorBrowserSignalCleanupInstalled?: boolean
     __orchestratorBrowserSignalCleanupInProgress?: boolean
 }
+
+const browserSessionManagers = globalForBrowserSessions.__orchestratorBrowserSessionManagers
+    ?? new Map<string, BrowserSessionManager>()
+globalForBrowserSessions.__orchestratorBrowserSessionManagers = browserSessionManagers
 
 if (!globalForBrowserSessions.__orchestratorBrowserSignalCleanupInstalled) {
     globalForBrowserSessions.__orchestratorBrowserSignalCleanupInstalled = true
@@ -636,7 +646,7 @@ if (!globalForBrowserSessions.__orchestratorBrowserSignalCleanupInstalled) {
         const exitCode = signal === 'SIGINT' ? 130 : 143
         const fallback = setTimeout(() => process.exit(exitCode), 3_000)
         fallback.unref?.()
-        void browserSessionManager.shutdownAll().finally(() => {
+        void shutdownBrowserSessionManager().finally(() => {
             clearTimeout(fallback)
             process.exit(exitCode)
         })
@@ -646,9 +656,25 @@ if (!globalForBrowserSessions.__orchestratorBrowserSignalCleanupInstalled) {
 }
 
 export function getBrowserSessionManager(): BrowserSessionManager {
-    return browserSessionManager
+    const profileId = getActiveProfileId()
+    let manager = browserSessionManagers.get(profileId)
+    if (!manager) {
+        manager = new BrowserSessionManager(profileId)
+        browserSessionManagers.set(manager.profileId, manager)
+    }
+    return manager
+}
+
+export async function shutdownActiveBrowserSessionManager(): Promise<void> {
+    const profileId = getActiveProfileId()
+    const manager = browserSessionManagers.get(profileId)
+    if (!manager) return
+    browserSessionManagers.delete(profileId)
+    await manager.shutdownAll()
 }
 
 export async function shutdownBrowserSessionManager(): Promise<void> {
-    await browserSessionManager.shutdownAll()
+    const managers = [...browserSessionManagers.values()]
+    browserSessionManagers.clear()
+    await Promise.allSettled(managers.map(manager => manager.shutdownAll()))
 }

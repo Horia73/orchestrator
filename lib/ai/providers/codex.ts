@@ -147,6 +147,13 @@ const DIRECT_TOOL_SESSION_PREFIX = 'appserver:direct:'
 const JSON_RPC_REQUEST_TIMEOUT_MS = 60_000
 const CODEX_RECONNECTING_NOTICE_RE = /^Reconnecting(?:\.{3}|…)\s+\d+\/\d+$/i
 const BLOCKING_DELEGATION_TOOLS = new Set(['delegate_to', 'delegate_parallel'])
+const ORCHESTRATOR_MULTI_AGENT_MODE_HINT = [
+    'This session uses Orchestrator-managed specialist delegation.',
+    'When delegate_to or delegate_parallel is exposed, follow the Orchestrator',
+    '<delegation_policy>, <browser_agent_policy>, <agent_boundaries>, and runtime_context;',
+    'an explicit user request for sub-agents is not required unless those instructions say otherwise.',
+    'Do not invent or use Codex-native sub-agents.',
+].join(' ')
 
 interface AppServerSession {
     threadId: string
@@ -998,6 +1005,13 @@ function buildThreadParams(args: {
             },
             apps: {
                 _default: { enabled: false },
+            },
+            multi_agent_v2: {
+                // Codex 0.144+ otherwise injects an explicit-request-only
+                // developer message for every non-Ultra run. That policy is
+                // for Codex-native agents; managed runs must instead follow
+                // Orchestrator's own delegation and browser-agent policies.
+                multi_agent_mode_hint_text: ORCHESTRATOR_MULTI_AGENT_MODE_HINT,
             },
             web_search: allowWebSearch ? 'live' : 'disabled',
         }

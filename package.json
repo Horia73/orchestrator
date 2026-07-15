@@ -63,7 +63,7 @@
     "smoke:api-guard": "tsx scripts/smoke-api-guard.ts",
     "smoke:profiles": "tsx scripts/smoke-profiles-settings.ts",
     "smoke:owner-agent-help": "tsx scripts/smoke-owner-agent-help.ts",
-    "smoke:browser-backend": "tsx scripts/smoke-browser-backend.ts && tsx scripts/smoke-browser-vision-json.ts && tsx scripts/smoke-browser-upload.ts && tsx scripts/smoke-browser-interactions.ts",
+    "smoke:browser-backend": "tsx scripts/smoke-browser-backend.ts && tsx scripts/smoke-browser-profile-isolation.ts && tsx scripts/smoke-browser-vision-json.ts && tsx scripts/smoke-browser-upload.ts && tsx scripts/smoke-browser-interactions.ts",
     "smoke:browser-context-recovery": "tsx scripts/smoke-browser-context-recovery.ts",
     "smoke:browser-run-state": "tsx scripts/smoke-browser-agent-run-state.ts",
     "smoke:gemini": "tsx scripts/smoke-gemini-interactions-events.ts",

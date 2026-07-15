@@ -256,7 +256,9 @@ export function createAgentRuntime(
                 model: config.llm.model,
                 thinkingLevel: config.llm.thinkingLevel,
                 mediaResolution: config.llm.mediaResolution,
-            }, recordVisionUsage);
+            }, recordVisionUsage, {
+                googleApiKey: config.llm.googleApiKey,
+            });
 
             await browserManager.launch();
             browser = browser ?? browserManager;

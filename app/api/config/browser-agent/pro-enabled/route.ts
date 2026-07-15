@@ -29,9 +29,10 @@ export async function PUT(request: Request) {
 
         setBrowserAgentProEnabled(proEnabled)
         // The runtime config (escalation flag) is resolved when a browser session is
-        // created, so drop live sessions to make the new mode take effect next task.
-        const { shutdownBrowserSessionManager } = await import('@/lib/ai/providers/browser-session-manager')
-        await shutdownBrowserSessionManager()
+        // created, so drop this profile's live sessions to make the new mode take
+        // effect next task without interrupting browsers owned by other profiles.
+        const { shutdownActiveBrowserSessionManager } = await import('@/lib/ai/providers/browser-session-manager')
+        await shutdownActiveBrowserSessionManager()
 
         return NextResponse.json({ success: true, config: getRuntimeConfig() })
   })

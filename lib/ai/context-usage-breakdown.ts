@@ -148,13 +148,13 @@ function splitPrompt(prompt: string): {
   systemTokens: number
 } {
   let remaining = prompt
-  const skills = consumeTag(remaining, "skills_index")
+  const skills = consumePromptSection(remaining, "skills_index")
   remaining = skills.remaining
-  const tools = consumeTag(remaining, "runtime_tools")
+  const tools = consumePromptSection(remaining, "runtime_tools")
   remaining = tools.remaining
-  const agents = consumeTag(remaining, "runtime_agents")
+  const agents = consumePromptSection(remaining, "runtime_agents")
   remaining = agents.remaining
-  const memory = consumeTag(remaining, "workspace_context_files")
+  const memory = consumePromptSection(remaining, "workspace_context_files")
   remaining = memory.remaining
 
   return {
@@ -193,6 +193,26 @@ function splitMessages(messages: BreakdownMessage[]): {
   }
 
   return { messageTokens, memoryTokens, memoryBlockCount, attachmentTokens }
+}
+
+function consumePromptSection(
+  value: string,
+  tag: string
+): { content: string; remaining: string; count: number } {
+  // Prompt section wrappers are emitted on their own lines. Requiring that
+  // shape prevents prose references such as "use <workspace_context_files>"
+  // from being mistaken for the start of the real section and swallowing all
+  // intervening base instructions into the wrong breakdown category.
+  const expression = new RegExp(
+    `^<${tag}(?:[ \\t][^>\\r\\n]*)?>[ \\t]*\\r?$[\\s\\S]*?^<\\/${tag}>[ \\t]*\\r?$`,
+    "gm"
+  )
+  const matches = value.match(expression) ?? []
+  return {
+    content: matches.join("\n\n"),
+    remaining: value.replace(expression, ""),
+    count: matches.length,
+  }
 }
 
 function consumeTag(
