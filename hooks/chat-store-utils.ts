@@ -396,12 +396,7 @@ function getConversationUnreadActivityAt(
   return lastMessageAt
 }
 
-export function isConversationUnread(
-  conversation: Conversation,
-  visibleActiveConversationId?: string | null
-): boolean {
-  if (conversation.id === visibleActiveConversationId) return false
-
+export function isConversationUnread(conversation: Conversation): boolean {
   const unreadActivityAt = getConversationUnreadActivityAt(conversation)
   if (typeof unreadActivityAt !== "number") return false
 
@@ -420,12 +415,11 @@ export function unreadSetsEqual(a: Set<string>, b: Set<string>): boolean {
 }
 
 export function deriveUnreadConversationIds(
-  conversations: Conversation[],
-  visibleActiveConversationId?: string | null
+  conversations: Conversation[]
 ): Set<string> {
   const ids = new Set<string>()
   for (const conversation of conversations) {
-    if (isConversationUnread(conversation, visibleActiveConversationId)) {
+    if (isConversationUnread(conversation)) {
       ids.add(conversation.id)
     }
   }

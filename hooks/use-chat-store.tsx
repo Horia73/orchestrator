@@ -379,26 +379,15 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
   React.useEffect(() => {
     if (state.isLoading) return
-    const visibleActiveConversationId =
-      typeof document !== "undefined" &&
-      document.visibilityState === "visible" &&
-      pathname === "/"
-        ? state.activeConversationId
-        : null
-    const next = deriveUnreadConversationIds(
-      state.conversations,
-      visibleActiveConversationId
-    )
+    // Visibility alone is not a read action. In particular, restoring the
+    // previously-active chat when a hidden tab/app returns must preserve a
+    // completion marker until the user explicitly opens that conversation.
+    const next = deriveUnreadConversationIds(state.conversations)
     if (unreadSetsEqual(unreadConversationIdsRef.current, next)) return
     writeUnreadConversationIds(next)
     unreadConversationIdsRef.current = next
     setUnreadConversationIds(next)
-  }, [
-    pathname,
-    state.activeConversationId,
-    state.conversations,
-    state.isLoading,
-  ])
+  }, [state.conversations, state.isLoading])
 
   React.useEffect(() => {
     activeChatStreamsRef.current = state.activeChatStreams
@@ -497,13 +486,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           current.delete(id)
           return current
         }
-        const visibleActiveConversationId = getVisibleActiveConversationId()
-        if (
-          isConversationUnread(
-            { ...conversation, readAt },
-            visibleActiveConversationId
-          )
-        ) {
+        if (isConversationUnread({ ...conversation, readAt })) {
           current.add(id)
         } else {
           current.delete(id)
@@ -511,7 +494,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         return current
       })
     },
-    [getVisibleActiveConversationId, updateUnreadConversationIds]
+    [updateUnreadConversationIds]
   )
 
   const applyConversationArchiveState = React.useCallback(
@@ -620,9 +603,14 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const handleAssistantFinished = React.useCallback(
-    (conversationId: string, message: Message) => {
+    (
+      conversationId: string,
+      message: Message,
+      options?: { forceUnread?: boolean }
+    ) => {
       if (message.status === "aborted") return
       const isVisibleActive =
+        !options?.forceUnread &&
         getVisibleActiveConversationId() === conversationId
 
       if (isVisibleActive) {
@@ -642,32 +630,6 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       markConversationUnread,
     ]
   )
-
-  React.useEffect(() => {
-    const visibleActiveConversationId = getVisibleActiveConversationId()
-    if (
-      !visibleActiveConversationId ||
-      visibleActiveConversationId !== state.activeConversationId
-    )
-      return
-    markConversationRead(visibleActiveConversationId)
-  }, [
-    getVisibleActiveConversationId,
-    markConversationRead,
-    pathname,
-    state.activeConversationId,
-  ])
-
-  React.useEffect(() => {
-    const onVisibilityChange = () => {
-      const visibleActiveConversationId = getVisibleActiveConversationId()
-      if (visibleActiveConversationId)
-        markConversationRead(visibleActiveConversationId)
-    }
-    document.addEventListener("visibilitychange", onVisibilityChange)
-    return () =>
-      document.removeEventListener("visibilitychange", onVisibilityChange)
-  }, [getVisibleActiveConversationId, markConversationRead])
 
   const cleanupStream = React.useCallback(() => {
     streamingRef.current = false
@@ -1239,7 +1201,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                 conversationId,
                 message: hydratedMessage,
               })
-              handleAssistantFinished(conversationId, hydratedMessage)
+              handleAssistantFinished(conversationId, hydratedMessage, {
+                forceUnread: streamPageWasHiddenRef.current,
+              })
               return "final"
             }
 
@@ -1951,8 +1915,13 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   const selectConversation = React.useCallback(
     (id: string, conversation?: Conversation) => {
       // Re-clicking the active chat would otherwise schedule a no-op
-      // transition and fade the current view for one frame.
-      if (activeConversationIdRef.current === id) return
+      // transition and fade the current view for one frame. It still counts as
+      // an explicit open, so it must clear an unread completion restored into
+      // the already-active row after returning to the app.
+      if (activeConversationIdRef.current === id) {
+        markConversationRead(id)
+        return
+      }
       if (typeof window !== "undefined") {
         window.dispatchEvent(new Event(CHAT_VIEW_SAVE_STATE_EVENT))
       }

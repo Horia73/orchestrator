@@ -5,6 +5,8 @@ import {
   erroredAssistantMessage,
   stoppedAssistantMessage,
 } from "../hooks/chat-stream-messages"
+import { deriveUnreadConversationIds } from "../hooks/chat-store-utils"
+import type { Conversation } from "../lib/types"
 
 const snapshot = {
   messageId: "assistant-1",
@@ -55,6 +57,30 @@ assert.notEqual(
     103
   ).content,
   "server copy"
+)
+
+const backgroundCompletion: Conversation = {
+  id: "background-completion",
+  title: "Background completion",
+  messages: [],
+  createdAt: 50,
+  lastMessageAt: 200,
+  readAt: 100,
+  messageCount: 2,
+}
+assert.equal(
+  deriveUnreadConversationIds([backgroundCompletion]).has(
+    backgroundCompletion.id
+  ),
+  true,
+  "a completion newer than readAt stays unread until an explicit open"
+)
+assert.equal(
+  deriveUnreadConversationIds([
+    { ...backgroundCompletion, readAt: backgroundCompletion.lastMessageAt },
+  ]).has(backgroundCompletion.id),
+  false,
+  "opening the conversation clears unread once readAt reaches the completion"
 )
 
 console.log("chat stream terminal messages smoke passed")
