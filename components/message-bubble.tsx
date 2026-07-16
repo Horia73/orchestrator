@@ -1439,11 +1439,13 @@ function ToolCallBlock({
     const [loading, setLoading] = React.useState(false)
     const [loadError, setLoadError] = React.useState<string | null>(null)
     const [detailsVisible, setDetailsVisible] = React.useState(false)
+    const detailsRequestIdRef = React.useRef(0)
     const resolvedEntry = loadedEntry ?? entry
     const status = resolvedEntry.status ?? (
         resolvedEntry.content ? (resolvedEntry.success === false ? "error" : "ok") : "running"
     )
-    const bodyReady = !entry.detailsDeferred || loadedEntry !== null
+    const hasLoadedDetails = loadedEntry !== null
+    const bodyReady = !entry.detailsDeferred || hasLoadedDetails
     const canOpen = bodyReady || Boolean(onLoadDetails)
 
     const prepareLayoutShift = React.useCallback(() => {
@@ -1515,7 +1517,49 @@ function ToolCallBlock({
     }, [bodyReady, open])
 
     React.useEffect(() => {
-        if (!open || !entry.detailsDeferred || !onLoadDetails || resolvedEntry.status !== "running") return
+        if (!open || !entry.detailsDeferred || hasLoadedDetails || !onLoadDetails) return
+
+        // Live traces keep the newest two tools open. A recovery snapshot can
+        // replace one of those completed entries with its deferred summary
+        // without another click, so loading only from handleToggle leaves an
+        // open chevron with no card. Hydrate every open deferred row, whether
+        // it was opened by the user or by the live two-tool window.
+        const requestId = ++detailsRequestIdRef.current
+        setLoading(true)
+        setLoadError(null)
+        void onLoadDetails(entry.toolCallId)
+            .then((details) => {
+                if (detailsRequestIdRef.current === requestId) {
+                    setLoadedEntry(details)
+                }
+            })
+            .catch((error: unknown) => {
+                if (detailsRequestIdRef.current === requestId) {
+                    setLoadError(error instanceof Error ? error.message : "Failed to load tool details.")
+                }
+            })
+            .finally(() => {
+                if (detailsRequestIdRef.current === requestId) {
+                    setLoading(false)
+                }
+            })
+
+        return () => {
+            if (detailsRequestIdRef.current === requestId) {
+                detailsRequestIdRef.current += 1
+                setLoading(false)
+            }
+        }
+    }, [entry.detailsDeferred, entry.toolCallId, hasLoadedDetails, onLoadDetails, open])
+
+    React.useEffect(() => {
+        if (
+            !open ||
+            !entry.detailsDeferred ||
+            !hasLoadedDetails ||
+            !onLoadDetails ||
+            resolvedEntry.status !== "running"
+        ) return
         let cancelled = false
         let inFlight = false
         const refresh = () => {
@@ -1535,7 +1579,7 @@ function ToolCallBlock({
             cancelled = true
             window.clearInterval(timer)
         }
-    }, [entry.detailsDeferred, entry.toolCallId, onLoadDetails, open, resolvedEntry.status])
+    }, [entry.detailsDeferred, entry.toolCallId, hasLoadedDetails, onLoadDetails, open, resolvedEntry.status])
 
     const handleToggle = React.useCallback(() => {
         const opening = !open
@@ -1543,17 +1587,7 @@ function ToolCallBlock({
         window.dispatchEvent(new Event("stop-chat-autoscroll"))
         if (opening) prepareLayoutShift()
         onToggle()
-        if (!opening || bodyReady || loading) return
-        if (!onLoadDetails) return
-        setLoading(true)
-        setLoadError(null)
-        void onLoadDetails(entry.toolCallId)
-            .then((details) => setLoadedEntry(details))
-            .catch((error: unknown) => {
-                setLoadError(error instanceof Error ? error.message : "Failed to load tool details.")
-            })
-            .finally(() => setLoading(false))
-    }, [bodyReady, canOpen, entry.toolCallId, loading, onLoadDetails, onToggle, open, prepareLayoutShift])
+    }, [canOpen, onToggle, open, prepareLayoutShift])
 
     const Icon = isWebSearchToolCall(resolvedEntry)
         ? Search
@@ -1604,7 +1638,7 @@ function ToolCallBlock({
                     !canOpen && "cursor-default hover:text-muted-foreground"
                 )}
             >
-                {loading || status === "running" ? (
+                {(open && loading) || status === "running" ? (
                     <Loader2 className="size-4 shrink-0 animate-spin rounded-full bg-background" />
                 ) : status === "error" ? (
                     <CircleAlert className="size-4 shrink-0 rounded-full bg-background" />
@@ -1614,7 +1648,7 @@ function ToolCallBlock({
                 <span
                     className={cn(
                         "min-w-0 truncate text-[14px] font-medium tracking-tight",
-                        (loading || status === "running") && "search-shimmer-text"
+                        ((open && loading) || status === "running") && "search-shimmer-text"
                     )}
                     title={title}
                 >
