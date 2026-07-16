@@ -8,6 +8,8 @@ import type {
   ContextUsageSnapshot,
   Message,
   Attachment,
+  ReasoningEntry,
+  ToolCallReasoningEntry,
 } from "@/lib/types"
 import { sanitizeMessageForPersistence } from "@/lib/ai/reasoning-limits"
 import { parseSteeredMessage } from "@/lib/steered-message"
@@ -574,9 +576,21 @@ export function getConversationMessagesPage(
         : chronologicalRows.length
 
   return {
-    messages: chronologicalRows.map((row, index) =>
-      index >= fullStartIndex ? messageFromRow(row) : slimMessageFromRow(row)
-    ),
+    messages: chronologicalRows.map((row, index) => {
+      if (index < fullStartIndex) return slimMessageFromRow(row)
+
+      const message = messageFromRow(row)
+      // The newest visible tail needs its reasoning timeline immediately, but
+      // not every tool's potentially large args/result/stream payload. Keep
+      // mixed hydration useful while preserving per-tool lazy loading.
+      return hydration === "mixed"
+        ? {
+            ...message,
+            reasoning: deferReasoningToolDetails(message.reasoning),
+            toolCalls: undefined,
+          }
+        : message
+    }),
     total: conversationRow?.messageCount ?? 0,
     hasMore: rows.length > limit,
     nextCursor:
@@ -605,6 +619,67 @@ export function getConversationMessage(
     .get(conversationId, messageId) as MessageRow | undefined
 
   return row ? messageFromRow(row) : null
+}
+
+/** Lightweight detail for opening a collapsed work trace. Tool headers remain
+ * visible, but each heavy tool payload is fetched only when that tool opens. */
+export function getConversationMessageToolSummary(
+  conversationId: string,
+  messageId: string
+): Message | null {
+  const message = getConversationMessage(conversationId, messageId)
+  return message
+    ? {
+        ...message,
+        reasoning: deferReasoningToolDetails(message.reasoning),
+        toolCalls: undefined,
+      }
+    : null
+}
+
+export function getConversationMessageToolCall(
+  conversationId: string,
+  messageId: string,
+  toolCallId: string
+): ToolCallReasoningEntry | null {
+  const message = getConversationMessage(conversationId, messageId)
+  return findToolCallReasoningEntry(message?.reasoning, toolCallId)
+}
+
+function deferReasoningToolDetails(
+  reasoning: ReasoningEntry[] | undefined
+): ReasoningEntry[] | undefined {
+  return reasoning?.map((entry) => {
+    if (entry.type === "tool_call") {
+      return {
+        ...entry,
+        content: "",
+        args: undefined,
+        deltas: undefined,
+        detailsDeferred: true,
+      }
+    }
+    if (entry.type === "agent_call") {
+      return { ...entry, reasoning: deferReasoningToolDetails(entry.reasoning) }
+    }
+    return entry
+  })
+}
+
+function findToolCallReasoningEntry(
+  reasoning: ReasoningEntry[] | undefined,
+  toolCallId: string
+): ToolCallReasoningEntry | null {
+  for (const entry of reasoning ?? []) {
+    if (entry.type === "tool_call" && entry.toolCallId === toolCallId) {
+      return { ...entry, detailsDeferred: false }
+    }
+    if (entry.type === "agent_call") {
+      const nested = findToolCallReasoningEntry(entry.reasoning, toolCallId)
+      if (nested) return nested
+    }
+  }
+  return null
 }
 
 /**

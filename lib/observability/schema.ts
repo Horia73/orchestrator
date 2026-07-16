@@ -86,6 +86,7 @@ export const LOG_TEXT_MAX_CHARS = 64_000
  *  large even after per-entry sanitization, so bound the whole blob — if it
  *  exceeds this, we skip persisting it rather than store a giant/partial row. */
 export const LOG_REASONING_MAX_CHARS = 200_000
+export const LOG_TOOL_DETAIL_MAX_CHARS = 160_000
 
 /** Cap each captured full-input field (system prompt, the resolved-messages
  *  JSON). Big enough to hold a real system prompt + recent history, bounded so
@@ -112,7 +113,13 @@ export interface RequestLogInput {
 export interface ToolLogRow {
     id: number
     requestId: string
+    toolCallId?: string | null
     toolName: string
+    title?: string | null
+    phase?: number | null
+    args?: Record<string, unknown> | null
+    resultText?: string | null
+    deltas?: import("@/lib/types").ToolStreamDelta[] | null
     success: boolean
     startedAt: number
     durationMs: number | null

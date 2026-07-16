@@ -86,7 +86,7 @@ import { cn } from "@/lib/utils"
 import type { AgentCallReasoningEntry, Attachment } from "@/lib/types"
 
 export function ChatView() {
-  const { state, loadOlderMessages, loadMessageDetails, loadMessagesUntilPresent, sendMessageToConversation } =
+  const { state, loadOlderMessages, loadMessageDetails, loadToolCallDetails, loadMessagesUntilPresent, sendMessageToConversation } =
     useChatStore()
   const layoutContainerRef = React.useRef<HTMLDivElement>(null)
   const scrollContainerRef = React.useRef<HTMLDivElement>(null)
@@ -2888,6 +2888,14 @@ export function ChatView() {
     [conversationId, loadMessageDetails]
   )
 
+  const handleLoadToolCallDetails = React.useCallback(
+    (messageId: string, toolCallId: string) => {
+      if (!conversationId) return Promise.reject(new Error("No conversation"))
+      return loadToolCallDetails(conversationId, messageId, toolCallId)
+    },
+    [conversationId, loadToolCallDetails]
+  )
+
   const hasArtifact =
     (artifactOpen && !!artifact) ||
     !!genArtifact ||
@@ -3421,6 +3429,7 @@ export function ChatView() {
                               onAttachmentClick={openPreview}
                               onAgentOpen={handleAgentOpen}
                               onLoadMessageDetails={handleLoadMessageDetails}
+                              onLoadToolCallDetails={handleLoadToolCallDetails}
                               visibleBrowserTakeoverRunIds={
                                 visibleBrowserTakeoverRunIds
                               }

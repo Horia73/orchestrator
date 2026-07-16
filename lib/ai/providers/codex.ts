@@ -80,7 +80,12 @@ export class CodexProvider implements AIProvider {
     }
 
     async stream(options: ProviderSendOptions, cb: StreamCallbacks): Promise<void> {
-        const prevSession = decodeAppServerSessionId(options.prevSession?.id)
+        const tools = customToolsForCodex(options.tools ?? [])
+        const isNativeCoderRun =
+            options.toolContext?.callerAgentId === 'coder' &&
+            tools.length === 0 &&
+            !options.systemPrompt?.trim()
+        const prevSession = decodeAppServerSessionId(options.prevSession?.id, isNativeCoderRun)
         const userPrompt = latestUserPromptWithPortableHistory(options.messages, Boolean(prevSession))
         const latestUserAttachments = [...options.messages]
             .reverse()
@@ -91,12 +96,6 @@ export class CodexProvider implements AIProvider {
             cb.onDone({})
             return
         }
-
-        const tools = customToolsForCodex(options.tools ?? [])
-        const isNativeCoderRun =
-            options.toolContext?.callerAgentId === 'coder' &&
-            tools.length === 0 &&
-            !options.systemPrompt?.trim()
 
         return runCodexAppServer({
             bin: CLI_SPECS.codex.bin,
@@ -143,6 +142,12 @@ interface RunCodexAppServerArgs {
 }
 
 const APP_SERVER_SESSION_PREFIX = 'appserver:'
+// Managed Codex threads freeze developer instructions and multi-agent config at
+// birth. Bump this generation when either policy must be re-applied; stale app
+// sessions then start fresh and latestUserPromptWithPortableHistory carries the
+// Orchestrator conversation across. Promptless native Coder sessions keep the
+// generic prefix and remain resumable.
+const MANAGED_APP_SERVER_SESSION_PREFIX = 'appserver:managed-policy-v2:'
 const LEGACY_DIRECT_TOOL_SESSION_PREFIX = 'appserver:direct:'
 const JSON_RPC_REQUEST_TIMEOUT_MS = 60_000
 const CODEX_RECONNECTING_NOTICE_RE = /^Reconnecting(?:\.{3}|…)\s+\d+\/\d+$/i
@@ -151,12 +156,15 @@ const ORCHESTRATOR_TOOL_NAMESPACE = 'orchestrator'
 const ORCHESTRATOR_TOOL_NAMESPACE_DESCRIPTION =
     'Tools provided by Orchestrator for managed workflows, integrations, and specialist delegation.'
 const ORCHESTRATOR_MULTI_AGENT_MODE_HINT = [
-    'This session uses Orchestrator-managed specialist delegation.',
+    'The user has explicitly made a standing request and authorization for Orchestrator-managed',
+    'specialist delegation: call any available agent listed in <runtime_agents>, singly or in parallel',
+    'within runtime limits, whenever delegation is useful.',
+    'Treat this standing request as the explicit user request for sub-agents, delegation, and parallel',
+    'agent work; do not require the user to repeat it in the current message.',
     'When delegate_to or delegate_parallel is exposed, follow the Orchestrator',
     '<delegation_policy>, <browser_agent_policy>, <agent_boundaries>, and runtime_context;',
     'synchronous delegation suspends the parent, while run_async=true explicitly allows the parent',
     'to continue and manage the batch with manage_delegations.',
-    'an explicit user request for sub-agents is not required unless those instructions say otherwise.',
     'Do not invent or use Codex-native sub-agents.',
 ].join(' ')
 
@@ -398,7 +406,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
             }
             callbacks.onDone({
                 sessionId: activeThreadId
-                    ? encodeAppServerSessionId(activeThreadId)
+                    ? encodeAppServerSessionId(activeThreadId, nativeCoderRun)
                     : undefined,
                 usage: attachBillingMetadata(finalUsage, [...billingByModel.values()]),
                 thinkingDuration: finalDurationMs !== undefined
@@ -1139,16 +1147,31 @@ export const codexProviderTestHooks = {
     decodeAppServerSessionId,
 }
 
-function encodeAppServerSessionId(threadId: string): string {
-    return `${APP_SERVER_SESSION_PREFIX}${threadId}`
+function encodeAppServerSessionId(threadId: string, nativeCoderRun = false): string {
+    const prefix = nativeCoderRun
+        ? APP_SERVER_SESSION_PREFIX
+        : MANAGED_APP_SERVER_SESSION_PREFIX
+    return `${prefix}${threadId}`
 }
 
-function decodeAppServerSessionId(sessionId: string | undefined): AppServerSession | undefined {
-    if (sessionId?.startsWith(LEGACY_DIRECT_TOOL_SESSION_PREFIX)) {
+function decodeAppServerSessionId(
+    sessionId: string | undefined,
+    nativeCoderRun = false
+): AppServerSession | undefined {
+    if (!sessionId) return undefined
+
+    if (!nativeCoderRun) {
+        if (!sessionId.startsWith(MANAGED_APP_SERVER_SESSION_PREFIX)) return undefined
+        const threadId = sessionId.slice(MANAGED_APP_SERVER_SESSION_PREFIX.length)
+        return threadId ? { threadId } : undefined
+    }
+
+    if (sessionId.startsWith(MANAGED_APP_SERVER_SESSION_PREFIX)) return undefined
+    if (sessionId.startsWith(LEGACY_DIRECT_TOOL_SESSION_PREFIX)) {
         const threadId = sessionId.slice(LEGACY_DIRECT_TOOL_SESSION_PREFIX.length)
         return threadId ? { threadId } : undefined
     }
-    if (!sessionId?.startsWith(APP_SERVER_SESSION_PREFIX)) return undefined
+    if (!sessionId.startsWith(APP_SERVER_SESSION_PREFIX)) return undefined
     const threadId = sessionId.slice(APP_SERVER_SESSION_PREFIX.length)
     return threadId ? { threadId } : undefined
 }

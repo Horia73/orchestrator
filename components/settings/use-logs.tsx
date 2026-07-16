@@ -340,6 +340,7 @@ export function useRequestDetail(requestId: string | null, options?: { live?: bo
     const [data, setData] = React.useState<RequestDetail | null>(null)
     const [loading, setLoading] = React.useState(false)
     const [error, setError] = React.useState<string | null>(null)
+    const fetchSequenceRef = React.useRef(0)
 
     // Whether we already hold data for the CURRENT request. Survives the effect
     // re-run triggered by `live` flipping (so the post-stream refresh stays
@@ -347,11 +348,29 @@ export function useRequestDetail(requestId: string | null, options?: { live?: bo
     const loadedForRef = React.useRef<string | null>(null)
 
     React.useEffect(() => {
-        if (!requestId) { setData(null); loadedForRef.current = null; return }
+        const generation = ++fetchSequenceRef.current
+        if (!requestId) {
+            setData(null)
+            setError(null)
+            setLoading(false)
+            loadedForRef.current = null
+            return
+        }
         let cancelled = false
         let timer: number | null = null
+        let fetchSequence = 0
+
+        if (loadedForRef.current !== requestId) {
+            // Never paint the previously expanded request while the new row is
+            // fetching. This was the source of completed-run content flashing
+            // inside an unrelated live Smart Monitor log.
+            setData(null)
+            setError(null)
+            loadedForRef.current = null
+        }
 
         const fetchDetail = (foreground: boolean) => {
+            const sequence = ++fetchSequence
             if (foreground) setLoading(true)
             fetch(`/api/logs/${encodeURIComponent(requestId)}?includeInput=0`)
                 .then(async res => {
@@ -359,10 +378,11 @@ export function useRequestDetail(requestId: string | null, options?: { live?: bo
                     return res.json() as Promise<RequestDetail>
                 })
                 .then(json => {
-                    if (cancelled) return
+                    if (cancelled || generation !== fetchSequenceRef.current || sequence !== fetchSequence) return
                     loadedForRef.current = requestId
                     setData(json)
                     setError(null)
+                    setLoading(false)
                     // Self-stop once the run is no longer streaming, even if the
                     // parent hasn't yet flipped `live` from its list refresh.
                     if (json.log.status !== "streaming" && timer !== null) {
@@ -373,10 +393,14 @@ export function useRequestDetail(requestId: string | null, options?: { live?: bo
                 .catch((err: unknown) => {
                     // A background refresh that fails must not replace good data
                     // with an error banner — only the first load surfaces errors.
-                    if (cancelled || !foreground) return
+                    if (cancelled || generation !== fetchSequenceRef.current || sequence !== fetchSequence || !foreground) return
                     setError(err instanceof Error ? err.message : "Unknown error")
                 })
-                .finally(() => { if (!cancelled && foreground) setLoading(false) })
+                .finally(() => {
+                    if (!cancelled && generation === fetchSequenceRef.current && sequence === fetchSequence && foreground) {
+                        setLoading(false)
+                    }
+                })
         }
 
         // Spinner only the first time we load this request; the live polls and

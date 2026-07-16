@@ -1,6 +1,12 @@
 import type { Message } from '@/lib/types'
 import type { RequestLogRow, ToolLogRow } from '@/lib/observability/schema'
-import { normalizeLogTranscriptForPreview, withMissingToolLogReasoning } from '@/lib/observability/log-transcript'
+import {
+    deferMessageToolDetails,
+    findToolCallReasoningEntry,
+    normalizeLogTranscriptForPreview,
+    toolLogReasoningEntry,
+    withMissingToolLogReasoning,
+} from '@/lib/observability/log-transcript'
 
 let failures = 0
 
@@ -96,7 +102,13 @@ const toolLogs = [
     {
         id: 1,
         requestId: row.id,
+        toolCallId: 'call_read',
         toolName: 'Read',
+        title: 'Read status.ts',
+        phase: 0,
+        args: { path: 'status.ts' },
+        resultText: '{"path":"status.ts","content":"ready"}',
+        deltas: [{ stream: 'message', text: 'ready' }],
         success: true,
         startedAt: 1_200,
         durationMs: 25,
@@ -126,11 +138,20 @@ check(
     synthesized.contentSegments?.[0]?.phase === 2 && synthesized.contentSegments[0]?.content === 'final answer',
     synthesized.contentSegments
 )
-check(
-    'synthesized successful tool logs explain compact output',
-    synthesized.reasoning?.every(entry => entry.type !== 'tool_call' || entry.content.includes('Full tool output was not persisted')),
-    synthesized.reasoning
-)
+check('synthesized recent tool keeps full result', synthesized.reasoning?.[0]?.type === 'tool_call' && synthesized.reasoning[0].content.includes('ready'), synthesized.reasoning)
+check('synthesized headers defer heavy cards', synthesized.reasoning?.every(entry => entry.type !== 'tool_call' || entry.detailsDeferred), synthesized.reasoning)
+check('legacy tool fallback is explicit', synthesized.reasoning?.[1]?.type === 'tool_call' && synthesized.reasoning[1].content.includes('older tool call'), synthesized.reasoning)
+
+const fullTool = toolLogReasoningEntry(toolLogs[0], 0, 0)
+const deferredToolMessage = deferMessageToolDetails({
+    id: 'deferred_tools',
+    role: 'assistant',
+    content: '',
+    reasoning: [fullTool],
+    timestamp: 2_000,
+})
+check('tool summary strips heavy result', deferredToolMessage.reasoning?.[0]?.type === 'tool_call' && deferredToolMessage.reasoning[0].content === '', deferredToolMessage.reasoning)
+check('full tool can be found by stable call id', findToolCallReasoningEntry([fullTool], 'call_read')?.args?.path === 'status.ts', fullTool)
 
 const partialSource = {
     id: 'assistant_with_one_tool',

@@ -6,7 +6,10 @@ import { getInboxConversation, searchTaskRuns } from '@/lib/scheduling/store'
 import type { RequestLogRow } from '@/lib/observability/schema'
 import type { AgentCallReasoningEntry, Message, ReasoningEntry } from '@/lib/types'
 import {
+    deferMessageToolDetails,
+    findToolCallReasoningEntry,
     normalizeLogTranscriptForPreview,
+    toolLogReasoningEntry,
     type RequestLogTranscript,
 } from '@/lib/observability/log-transcript'
 import { runWithProfileContext } from '@/lib/profiles/context'
@@ -21,6 +24,33 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
         if (!detail) {
             return NextResponse.json({ error: 'Not found' }, { status: 404 })
         }
+        const toolCallId = url.searchParams.get('toolCallId')
+        if (toolCallId) {
+            const fullTranscript = runWithProfileContext(
+                { profileId: detail.profile.id, role: detail.profile.role },
+                () => getRequestTranscript(detail.row)
+            )
+            const persistedTool = findToolCallReasoningEntry(
+                fullTranscript?.assistantMessage.reasoning,
+                toolCallId
+            )
+            if (persistedTool) return NextResponse.json({ toolCall: persistedTool })
+
+            const fallbackIndex = detail.toolLogs.findIndex((tool) =>
+                tool.toolCallId === toolCallId || `log_tool_fallback_${tool.id}` === toolCallId
+            )
+            if (fallbackIndex >= 0) {
+                return NextResponse.json({
+                    toolCall: toolLogReasoningEntry(
+                        detail.toolLogs[fallbackIndex],
+                        fallbackIndex,
+                        fallbackIndex,
+                        false
+                    ),
+                })
+            }
+            return NextResponse.json({ error: 'Tool call not found' }, { status: 404 })
+        }
         const transcript = runWithProfileContext(
             { profileId: detail.profile.id, role: detail.profile.role },
             () => normalizeLogTranscriptForPreview(
@@ -30,10 +60,17 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
         )
         return NextResponse.json({
             log: detail.row,
-            toolLogs: detail.toolLogs,
-            transcript,
+            transcript: transcript
+                ? { ...transcript, assistantMessage: deferMessageToolDetails(transcript.assistantMessage) }
+                : null,
             hasInput: detail.hasInput,
             input: includeInput ? detail.input : null,
+            toolLogs: detail.toolLogs.map((tool) => ({
+                ...tool,
+                args: null,
+                resultText: null,
+                deltas: null,
+            })),
         })
   })
 }

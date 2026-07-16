@@ -17,7 +17,7 @@ import {
 
 import { cn } from "@/lib/utils"
 import type { RequestLogRow, RequestStatus, ToolLogRow } from "@/lib/observability/schema"
-import type { Message } from "@/lib/types"
+import type { Message, ToolCallReasoningEntry } from "@/lib/types"
 import { withMissingToolLogReasoning } from "@/lib/observability/log-transcript"
 import { MessageBubble } from "@/components/message-bubble"
 import { Select as UiSelect } from "@/components/ui/select"
@@ -521,7 +521,7 @@ function LogRow({ row, expanded, onToggle, onMeasure }: {
                 <div />
             </button>
 
-            {expanded && <ExpandedDetail requestId={row.id} row={row} onMeasure={onMeasure} />}
+            {expanded && <ExpandedDetail key={row.id} requestId={row.id} row={row} onMeasure={onMeasure} />}
         </div>
     )
 }
@@ -553,7 +553,7 @@ function ExpandedDetail({ requestId, row, onMeasure }: {
             <div className="max-h-[55vh] overflow-y-auto overscroll-contain animate-in fade-in-0 duration-200">
             <div className="flex flex-col gap-4 px-3 py-3 md:px-4 md:py-4">
             <LogChatTranscript
-                row={row}
+                row={data?.log ?? row}
                 transcript={data?.transcript ?? null}
                 toolLogs={data?.toolLogs ?? null}
                 error={error}
@@ -609,36 +609,10 @@ function ExpandedDetail({ requestId, row, onMeasure }: {
                         <Row label="Provider" value={`${row.provider}`} />
                         <Row label="Thinking" value={row.thinkingLevel} />
                         <Row label="Mode" value={row.statefulMode ? "Stateful" : "Stateless"} />
+                        <Row label="Tool calls" value={data?.toolLogs.length ?? row.toolCallCount} />
                         {row.interactionId && <Row label="Interaction" value={<code className="rounded bg-muted px-1.5 py-0.5 text-[11px] tabular-nums">{row.interactionId}</code>} />}
                         {row.errorMessage && <Row label="Error" value={<span className="text-destructive">{row.errorMessage}</span>} />}
                     </dl>
-
-                    <h4 className="mt-1 text-[11px] font-medium uppercase tracking-wider text-foreground/50">
-                        Tool calls {data ? `(${data.toolLogs.length})` : row.toolCallCount > 0 ? `(${row.toolCallCount})` : ""}
-                    </h4>
-                    {loading && row.toolCallCount > 0 ? (
-                        <p className="text-[12.5px] text-foreground/50">Loading…</p>
-                    ) : error ? (
-                        <p className="text-[12.5px] text-destructive">{error}</p>
-                    ) : data && data.toolLogs.length > 0 ? (
-                        <ul className="space-y-1 text-[12.5px]">
-                            {data.toolLogs.map(t => (
-                                <li key={t.id} className="flex items-center gap-2">
-                                    {t.success ? (
-                                        <CheckCircle2 className="size-3.5 shrink-0 text-emerald-600" />
-                                    ) : (
-                                        <XCircle className="size-3.5 shrink-0 text-destructive" />
-                                    )}
-                                    <span className="font-medium">{t.toolName}</span>
-                                    {t.durationMs !== null && (
-                                        <span className="ml-auto tabular-nums text-foreground/50">{t.durationMs} ms</span>
-                                    )}
-                                </li>
-                            ))}
-                        </ul>
-                    ) : (
-                        <p className="text-[12.5px] text-foreground/50">No tool calls.</p>
-                    )}
                 </div>
             </div>
 
@@ -740,6 +714,16 @@ function LogChatTranscript({
 }) {
     const userMessage = transcript?.userMessage ?? fallbackUserMessage(row)
     const assistantMessage = buildLogAssistantMessage(row, transcript?.assistantMessage ?? null, toolLogs)
+    const loadToolCallDetails = React.useCallback(async (_messageId: string, toolCallId: string) => {
+        const res = await fetch(
+            `/api/logs/${encodeURIComponent(row.id)}?toolCallId=${encodeURIComponent(toolCallId)}`,
+            { cache: "no-store" }
+        )
+        if (!res.ok) throw new Error(`Failed (${res.status})`)
+        const payload = (await res.json()) as { toolCall?: ToolCallReasoningEntry }
+        if (!payload.toolCall) throw new Error("Missing tool call")
+        return payload.toolCall
+    }, [row.id])
 
     return (
         <ConversationArtifactsProvider conversationId={row.conversationId}>
@@ -753,6 +737,7 @@ function LogChatTranscript({
                     compact
                     isLatestAssistantMessage
                     isStreamingMessage={row.status === "streaming"}
+                    onLoadToolCallDetails={loadToolCallDetails}
                 />
             </div>
         </ConversationArtifactsProvider>

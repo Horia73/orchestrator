@@ -29,7 +29,7 @@ export function withMissingToolLogReasoning(message: Message, toolLogs: ToolLogR
     const existing = message.reasoning ?? []
 
     if (existing.length === 0) {
-        const reasoning = toolLogs.map((tool, index) => syntheticToolLogReasoning(tool, index, index))
+        const reasoning = toolLogs.map((tool, index) => toolLogReasoningEntry(tool, index, index, true))
         return {
             ...message,
             reasoning,
@@ -61,30 +61,79 @@ export function withMissingToolLogReasoning(message: Message, toolLogs: ToolLogR
         ...message,
         reasoning: [
             ...existing,
-            ...missing.map((tool, index) => syntheticToolLogReasoning(tool, index, phase)),
+            ...missing.map((tool, index) => toolLogReasoningEntry(tool, index, phase, true)),
         ],
     }
 }
 
-function syntheticToolLogReasoning(tool: ToolLogRow, index: number, phase: number): ToolCallReasoningEntry {
+export function toolLogReasoningEntry(
+    tool: ToolLogRow,
+    index: number,
+    phase: number,
+    deferDetails = false
+): ToolCallReasoningEntry {
+    const fallbackId = `log_tool_fallback_${tool.id}`
     return {
         type: 'tool_call',
         id: `log_tool_fallback_${tool.id}_${index}`,
-        phase,
-        toolCallId: `log_tool_fallback_${tool.id}`,
-        title: tool.toolName,
+        phase: tool.phase ?? phase,
+        toolCallId: tool.toolCallId ?? fallbackId,
+        title: tool.title ?? tool.toolName,
         content: tool.errorMessage
             ? `Error: ${tool.errorMessage}`
-            : [
-                'Logged tool call completed.',
-                'Full tool output was not persisted in this compact trace.',
-            ].join('\n'),
+            : tool.resultText ?? 'Detailed output was not recorded for this older tool call.',
         toolName: tool.toolName,
+        args: tool.args ?? undefined,
+        deltas: tool.deltas ?? undefined,
         success: tool.success,
         status: tool.success ? 'ok' : 'error',
         startedAt: tool.startedAt,
         endedAt: tool.durationMs === null ? undefined : tool.startedAt + tool.durationMs,
+        detailsDeferred: deferDetails,
     }
+}
+
+export function deferMessageToolDetails(message: Message): Message {
+    return {
+        ...message,
+        reasoning: deferReasoningToolDetails(message.reasoning),
+    }
+}
+
+function deferReasoningToolDetails(
+    reasoning: Message['reasoning']
+): Message['reasoning'] {
+    return reasoning?.map((entry) => {
+        if (entry.type === 'tool_call') {
+            return {
+                ...entry,
+                content: '',
+                args: undefined,
+                deltas: undefined,
+                detailsDeferred: true,
+            }
+        }
+        if (entry.type === 'agent_call') {
+            return { ...entry, reasoning: deferReasoningToolDetails(entry.reasoning) }
+        }
+        return entry
+    })
+}
+
+export function findToolCallReasoningEntry(
+    reasoning: Message['reasoning'],
+    toolCallId: string
+): ToolCallReasoningEntry | null {
+    for (const entry of reasoning ?? []) {
+        if (entry.type === 'tool_call' && entry.toolCallId === toolCallId) {
+            return { ...entry, detailsDeferred: false }
+        }
+        if (entry.type === 'agent_call') {
+            const nested = findToolCallReasoningEntry(entry.reasoning, toolCallId)
+            if (nested) return nested
+        }
+    }
+    return null
 }
 
 function toolIdentity(value: string | undefined): string {

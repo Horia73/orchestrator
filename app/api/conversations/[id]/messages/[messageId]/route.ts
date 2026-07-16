@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server"
-import { getConversationMessage } from "@/lib/db"
+import {
+  getConversationMessage,
+  getConversationMessageToolCall,
+  getConversationMessageToolSummary,
+} from "@/lib/db"
 import { runWithRequestProfile } from "@/lib/profiles/server"
 
 export async function GET(
@@ -9,7 +13,19 @@ export async function GET(
   return runWithRequestProfile(request, async () => {
       try {
         const { id, messageId } = await params
-        const message = getConversationMessage(id, messageId)
+        const url = new URL(request.url)
+        const toolCallId = url.searchParams.get("toolCallId")
+        if (toolCallId) {
+          const toolCall = getConversationMessageToolCall(id, messageId, toolCallId)
+          if (!toolCall) {
+            return NextResponse.json({ error: "Tool call not found" }, { status: 404 })
+          }
+          return NextResponse.json({ toolCall })
+        }
+
+        const message = url.searchParams.get("detail") === "tool-summary"
+          ? getConversationMessageToolSummary(id, messageId)
+          : getConversationMessage(id, messageId)
         if (!message) {
           return NextResponse.json(
             { error: "Message not found" },

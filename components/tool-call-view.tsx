@@ -87,7 +87,7 @@ export function InlineToolCallView({ entry, searchDisplay = "expanded", ownerLab
     )
 }
 
-function isHiddenToolCall(entry: ToolCallReasoningEntry): boolean {
+export function isHiddenToolCall(entry: ToolCallReasoningEntry): boolean {
     // Strip any MCP server prefix ("mcp__orch-tools__delegate_to",
     // "orch-tools__delegate_to", "orch-tools.delegate_to") so CLI/codex-backed
     // delegations are matched the same as native ones.

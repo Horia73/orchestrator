@@ -19,6 +19,7 @@ import {
     type RequestLogInputMessage,
     LOG_TEXT_MAX_CHARS,
     LOG_REASONING_MAX_CHARS,
+    LOG_TOOL_DETAIL_MAX_CHARS,
     LOG_INPUT_MAX_CHARS,
 } from './schema'
 import type { ContentSegment, ReasoningEntry } from '@/lib/types'
@@ -240,13 +241,24 @@ function boundInputForStorage(messages: RequestLogInputMessage[]): string {
 
 const incToolCountStmt = db.prepare(`UPDATE request_logs SET toolCallCount = toolCallCount + 1 WHERE id = ?`)
 const insertToolStmt = db.prepare(`
-    INSERT INTO tool_logs (requestId, toolName, success, startedAt, durationMs, errorMessage)
-    VALUES (@requestId, @toolName, @success, @startedAt, @durationMs, @errorMessage)
+    INSERT INTO tool_logs (
+        requestId, toolCallId, toolName, title, phase, argsJson, resultText,
+        deltasJson, success, startedAt, durationMs, errorMessage
+    ) VALUES (
+        @requestId, @toolCallId, @toolName, @title, @phase, @argsJson,
+        @resultText, @deltasJson, @success, @startedAt, @durationMs, @errorMessage
+    )
 `)
 
 interface ToolArgs {
     requestId: string
+    toolCallId?: string | null
     toolName: string
+    title?: string | null
+    phase?: number | null
+    args?: Record<string, unknown> | null
+    resultText?: string | null
+    deltas?: import('@/lib/types').ToolStreamDelta[] | null
     success: boolean
     startedAt: number
     durationMs?: number | null
@@ -257,7 +269,13 @@ export function logToolCall(args: ToolArgs): void {
     safe(() => {
         insertToolStmt.run({
             requestId: args.requestId,
+            toolCallId: args.toolCallId ?? null,
             toolName: args.toolName,
+            title: truncateTo(args.title, LOG_TOOL_DETAIL_MAX_CHARS),
+            phase: args.phase ?? null,
+            argsJson: serializeToolDetail(args.args),
+            resultText: truncateTo(args.resultText, LOG_TOOL_DETAIL_MAX_CHARS),
+            deltasJson: serializeToolDetail(args.deltas),
             success: args.success ? 1 : 0,
             startedAt: args.startedAt,
             durationMs: args.durationMs ?? null,
@@ -265,6 +283,26 @@ export function logToolCall(args: ToolArgs): void {
         })
         incToolCountStmt.run(args.requestId)
     })
+}
+
+function serializeToolDetail(value: unknown): string | null {
+    if (value == null) return null
+    try {
+        const json = JSON.stringify(value)
+        return json.length <= LOG_TOOL_DETAIL_MAX_CHARS ? json : null
+    } catch {
+        return null
+    }
+}
+
+/** Make the live Logs transcript progressively useful: titles appear as soon
+ * as a tool starts, and completed details replace them without waiting for the
+ * entire model request to finish. */
+export function logRequestProgress(
+    requestId: string,
+    extra: LogReasoningExtra
+): void {
+    safe(() => persistRequestReasoning(requestId, extra))
 }
 
 interface CompleteArgs {
@@ -1092,7 +1130,13 @@ interface RawRequestLogRow {
 interface RawToolLogRow {
     id: number
     requestId: string
+    toolCallId: string | null
     toolName: string
+    title: string | null
+    phase: number | null
+    argsJson: string | null
+    resultText: string | null
+    deltasJson: string | null
     success: number
     startedAt: number
     durationMs: number | null
@@ -1272,11 +1316,29 @@ function parseToolLogRow(r: RawToolLogRow): ToolLogRow {
     return {
         id: r.id,
         requestId: r.requestId,
+        toolCallId: r.toolCallId,
         toolName: r.toolName,
+        title: r.title,
+        phase: r.phase,
+        args: parseJsonRecord(r.argsJson),
+        resultText: r.resultText,
+        deltas: parseJsonArray<import('@/lib/types').ToolStreamDelta>(r.deltasJson),
         success: r.success === 1,
         startedAt: r.startedAt,
         durationMs: r.durationMs,
         errorMessage: r.errorMessage,
+    }
+}
+
+function parseJsonRecord(value: string | null): Record<string, unknown> | null {
+    if (!value) return null
+    try {
+        const parsed = JSON.parse(value) as unknown
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? parsed as Record<string, unknown>
+            : null
+    } catch {
+        return null
     }
 }
 

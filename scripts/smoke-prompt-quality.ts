@@ -126,6 +126,16 @@ function main() {
     !orchestrator.includes("<worked_example>"),
     "production orchestrator prompt should not inject worked examples"
   )
+  assert.match(
+    orchestrator,
+    /user has explicitly given Orchestrator a standing request and authorization to use any available specialist agents/,
+    "production orchestrator prompt should carry the user's standing delegation authorization"
+  )
+  assert.match(
+    orchestrator,
+    /This standing request authorizes delegation, not the underlying external action/,
+    "standing delegation authorization must preserve action-consent boundaries"
+  )
   for (const file of [
     "lib/ai/prompts/orchestrator/examples.ts",
     "lib/ai/prompts/researcher/examples.ts",

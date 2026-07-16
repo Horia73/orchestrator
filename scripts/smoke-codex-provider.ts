@@ -17,6 +17,7 @@ import { clearCodexAuthFiles, codexAuthRejectedByBoth } from "@/lib/cli/codex-en
 import { codexModelsToLiveEntries, type CodexListedModel } from "@/lib/cli/codex-model-probe"
 import { CODEX_CLI_PACKAGE } from "@/lib/cli/specs"
 import { getEffectiveModel } from "@/lib/models/registry"
+import { latestUserPromptWithPortableHistory } from "@/lib/ai/providers/history"
 
 assert.ok(
   new CodexProvider("").capabilities.kinds.includes("image"),
@@ -112,7 +113,12 @@ assert.match(
 )
 assert.match(
   managedThreadConfig.multi_agent_v2?.multi_agent_mode_hint_text ?? "",
-  /explicit user request for sub-agents is not required/,
+  /user has explicitly made a standing request and authorization/,
+  "Managed Codex runs must carry the user's standing delegation authorization"
+)
+assert.match(
+  managedThreadConfig.multi_agent_v2?.multi_agent_mode_hint_text ?? "",
+  /Treat this standing request as the explicit user request for sub-agents, delegation, and parallel agent work/,
   "Codex must not suppress Orchestrator-managed delegation on non-Ultra runs"
 )
 const nativeCoderThreadParams = codexProviderTestHooks.buildThreadParams({
@@ -133,18 +139,44 @@ assert.equal(
   "Native coder runs must retain Codex's own multi-agent policy"
 )
 
-const legacyManagedSession = codexProviderTestHooks.decodeAppServerSessionId("appserver:legacy-thread")
-assert.deepEqual(
-  legacyManagedSession,
-  { threadId: "legacy-thread" },
-  "Unversioned app-server sessions must remain resumable"
+assert.equal(
+  codexProviderTestHooks.decodeAppServerSessionId("appserver:legacy-managed-thread", false),
+  undefined,
+  "Managed sessions born before the standing delegation policy must refresh with portable history"
 )
-const directManagedSessionId = codexProviderTestHooks.encodeAppServerSessionId("direct-thread")
-assert.equal(directManagedSessionId, "appserver:direct-thread")
+const managedSessionId = codexProviderTestHooks.encodeAppServerSessionId("managed-thread", false)
+assert.equal(managedSessionId, "appserver:managed-policy-v2:managed-thread")
 assert.deepEqual(
-  codexProviderTestHooks.decodeAppServerSessionId("appserver:direct:legacy-direct-thread"),
+  codexProviderTestHooks.decodeAppServerSessionId(managedSessionId, false),
+  { threadId: "managed-thread" },
+  "Current managed app-server sessions must remain resumable"
+)
+assert.deepEqual(
+  codexProviderTestHooks.decodeAppServerSessionId("appserver:legacy-native-thread", true),
+  { threadId: "legacy-native-thread" },
+  "Promptless native coder sessions must remain resumable across the managed-policy migration"
+)
+assert.deepEqual(
+  codexProviderTestHooks.decodeAppServerSessionId("appserver:direct:legacy-direct-thread", true),
   { threadId: "legacy-direct-thread" },
-  "Former appserver:direct sessions must migrate through normal resume"
+  "Former appserver:direct native sessions must migrate through normal resume"
+)
+assert.equal(
+  codexProviderTestHooks.decodeAppServerSessionId("appserver:direct:legacy-managed-thread", false),
+  undefined,
+  "Legacy direct managed sessions must refresh instead of retaining the stale Codex policy"
+)
+const migratedManagedPrompt = latestUserPromptWithPortableHistory([
+  { role: "user", content: "Original request" },
+  { role: "assistant", content: "Earlier answer" },
+  { role: "user", content: "Continue with the browser agent" },
+] as never, Boolean(
+  codexProviderTestHooks.decodeAppServerSessionId("appserver:legacy-managed-thread", false)
+))
+assert.match(
+  migratedManagedPrompt,
+  /<conversation_history>[\s\S]*Original request[\s\S]*Earlier answer[\s\S]*<new_user_message>[\s\S]*Continue with the browser agent/,
+  "Refreshing a stale managed Codex thread must carry the app conversation as portable history"
 )
 assert.equal(CODEX_CLI_PACKAGE, "@openai/codex@0.144.4", "Codex installer must use the production-verified release")
 assert.match(
@@ -296,7 +328,7 @@ rl.on("line", line => {
   assert.deepEqual(errors, [], "A direct namespaced delegation must finish without provider errors")
   assert.equal(content.join(""), "DONE", "The parent may resume only after the delegation item completes")
   assert.deepEqual(toolCalls, ["delegate_to"], "The direct path must not create an exec/wait/shell wrapper")
-  assert.deepEqual(sessions, ["appserver:legacy-thread"])
+  assert.deepEqual(sessions, ["appserver:managed-policy-v2:legacy-thread"])
   const capture = JSON.parse(readFileSync(capturePath, "utf8")) as {
     method: string
     params: {

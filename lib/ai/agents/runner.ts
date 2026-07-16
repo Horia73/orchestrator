@@ -59,6 +59,7 @@ import {
     logRequestFail,
     logRequestAbort,
     logRequestInput,
+    logRequestProgress,
     logToolCall,
 } from '@/lib/observability/store'
 import type { Attachment, ContentSegment, ReasoningEntry } from '@/lib/types'
@@ -440,6 +441,16 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
     let streamMode: 'reasoning' | 'content' = 'reasoning'
     let toolCallCount = 0
     const toolStartTimes = new Map<string, number>()
+    let lastRequestLogProgressAt = 0
+    const persistObservabilityProgress = (force = false) => {
+        const now = Date.now()
+        if (!force && now - lastRequestLogProgressAt < 600) return
+        lastRequestLogProgressAt = now
+        logRequestProgress(subRequestId, {
+            reasoning: sanitizeReasoningForPersistence(reasoning),
+            contentSegments,
+        })
+    }
     let providerError: string | null = null
     let finalUsage: unknown
     let finalThinkingDuration: number | undefined
@@ -501,6 +512,10 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
                     status: 'running',
                     startedAt: Date.now(),
                 })
+                logRequestProgress(subRequestId, {
+                    reasoning: sanitizeReasoningForPersistence(reasoning),
+                    contentSegments,
+                })
                 emitAgent(parentCtx, {
                     type: 'agent_tool_call',
                     runId: subRequestId,
@@ -514,6 +529,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
                     entry.deltas = appendBoundedToolDelta(entry.deltas, delta)
                     entry.status = 'running'
                 }
+                persistObservabilityProgress()
                 emitAgent(parentCtx, {
                     type: 'agent_tool_delta',
                     runId: subRequestId,
@@ -546,23 +562,38 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
                 const start = toolStartTimes.get(toolCallId)
                 const end = Date.now()
                 toolStartTimes.delete(toolCallId)
+                const entry = reasoning.find(item => item.type === 'tool_call' && item.toolCallId === toolCallId)
+                const fullResultText = stringifyToolResult(result)
+                const resultText = sanitizeToolCallSummaries([
+                    {
+                        text: entry?.type === 'tool_call' ? entry.title : toolName,
+                        content: fullResultText,
+                    },
+                ])?.[0]?.content ?? fullResultText
                 logToolCall({
                     requestId: subRequestId,
+                    toolCallId,
                     toolName,
+                    title: entry?.type === 'tool_call' ? entry.title : toolName,
+                    phase: entry?.type === 'tool_call' ? entry.phase : phase,
+                    args: entry?.type === 'tool_call' ? entry.args : undefined,
+                    resultText: fullResultText,
+                    deltas: entry?.type === 'tool_call' ? entry.deltas : undefined,
                     success: result.success,
                     startedAt: start ?? end,
                     durationMs: start ? end - start : null,
                     errorMessage: result.success ? null : result.error ?? null,
                 })
-                const entry = reasoning.find(item => item.type === 'tool_call' && item.toolCallId === toolCallId)
                 if (entry?.type === 'tool_call') {
-                    entry.content = sanitizeToolCallSummaries([
-                        { text: entry.title, content: stringifyToolResult(result) },
-                    ])?.[0]?.content ?? stringifyToolResult(result)
+                    entry.content = resultText
                     entry.success = result.success
                     entry.status = result.success ? 'ok' : 'error'
                     entry.endedAt = Date.now()
                 }
+                logRequestProgress(subRequestId, {
+                    reasoning: sanitizeReasoningForPersistence(reasoning),
+                    contentSegments,
+                })
                 emitAgent(parentCtx, {
                     type: 'agent_tool_result',
                     runId: subRequestId,

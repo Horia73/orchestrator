@@ -11,6 +11,7 @@ import type {
   MemoryRecallReasoningEntry,
   Message,
   SteeredMessageReasoningEntry,
+  ToolCallReasoningEntry,
   ToolStreamDelta,
 } from "@/lib/types"
 import { wrapSteeredMessage } from "@/lib/steered-message"
@@ -27,6 +28,7 @@ import {
   fetchChatRuntimeState,
   fetchActiveChatStreams,
   fetchConversationMessageDetails,
+  fetchConversationToolCallDetails,
   fetchConversationMessagePage,
   fetchConversationSummaries,
   requestConversationTitle,
@@ -145,6 +147,11 @@ interface ChatContextType {
     conversationId: string,
     messageId: string
   ) => Promise<void>
+  loadToolCallDetails: (
+    conversationId: string,
+    messageId: string,
+    toolCallId: string
+  ) => Promise<ToolCallReasoningEntry>
   loadOlderMessages: (id: string) => Promise<void>
   /** Page older messages until `messageId` is loaded (or a cap is hit), so a
    *  deep-link can scroll to a message beyond the initial page. Resolves true
@@ -986,7 +993,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       const load = (async () => {
         const fullMessage = await fetchConversationMessageDetails(
           conversationId,
-          messageId
+          messageId,
+          "tool-summary"
         )
         dispatch({
           type: "MERGE_MESSAGE_DETAILS",
@@ -1000,6 +1008,12 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       messageDetailLoadsRef.current.set(key, load)
       return load
     },
+    []
+  )
+
+  const loadToolCallDetails = React.useCallback(
+    (conversationId: string, messageId: string, toolCallId: string) =>
+      fetchConversationToolCallDetails(conversationId, messageId, toolCallId),
     []
   )
 
@@ -3775,6 +3789,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       selectConversation,
       prefetchConversationMessages: loadInitialMessages,
       loadMessageDetails,
+      loadToolCallDetails,
       loadOlderMessages,
       loadMessagesUntilPresent,
       archiveConversation,
@@ -3793,6 +3808,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       selectConversation,
       loadInitialMessages,
       loadMessageDetails,
+      loadToolCallDetails,
       loadOlderMessages,
       loadMessagesUntilPresent,
       archiveConversation,

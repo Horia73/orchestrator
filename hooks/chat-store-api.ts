@@ -1,6 +1,11 @@
 "use client"
 
-import type { Attachment, Conversation, Message } from "@/lib/types"
+import type {
+  Attachment,
+  Conversation,
+  Message,
+  ToolCallReasoningEntry,
+} from "@/lib/types"
 import type { ChatFollowUpSnapshot } from "@/lib/chat-followup-types"
 import type {
   ActiveChatStream,
@@ -134,16 +139,33 @@ export async function fetchConversationMessagePage(
 
 export async function fetchConversationMessageDetails(
   conversationId: string,
-  messageId: string
+  messageId: string,
+  detail: "full" | "tool-summary" = "full"
 ): Promise<Message> {
+  const detailParam = detail === "tool-summary" ? "?detail=tool-summary" : ""
   const res = await fetch(
-    `/api/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}`,
+    `/api/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}${detailParam}`,
     { cache: "no-store" }
   )
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const data = (await res.json()) as { message?: Message }
   if (!data.message) throw new Error("Missing message")
   return data.message
+}
+
+export async function fetchConversationToolCallDetails(
+  conversationId: string,
+  messageId: string,
+  toolCallId: string
+): Promise<ToolCallReasoningEntry> {
+  const res = await fetch(
+    `/api/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}?toolCallId=${encodeURIComponent(toolCallId)}`,
+    { cache: "no-store" }
+  )
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const data = (await res.json()) as { toolCall?: ToolCallReasoningEntry }
+  if (!data.toolCall) throw new Error("Missing tool call")
+  return data.toolCall
 }
 
 export interface ChatRuntimeState {

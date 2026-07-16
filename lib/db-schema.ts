@@ -82,7 +82,13 @@ export function initializeDatabaseSchema(db: SqliteExecutor): void {
       CREATE TABLE IF NOT EXISTS tool_logs (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           requestId TEXT NOT NULL,
+          toolCallId TEXT,
           toolName TEXT NOT NULL,
+          title TEXT,
+          phase INTEGER,
+          argsJson TEXT,
+          resultText TEXT,
+          deltasJson TEXT,
           success INTEGER NOT NULL,
           startedAt INTEGER NOT NULL,
           durationMs INTEGER,
@@ -666,6 +672,36 @@ export function initializeDatabaseSchema(db: SqliteExecutor): void {
   }
   try {
     db.exec(`ALTER TABLE request_logs ADD COLUMN usageCorrectionVersion TEXT`)
+  } catch {
+    /* column already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE tool_logs ADD COLUMN toolCallId TEXT`)
+  } catch {
+    /* column already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE tool_logs ADD COLUMN title TEXT`)
+  } catch {
+    /* column already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE tool_logs ADD COLUMN phase INTEGER`)
+  } catch {
+    /* column already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE tool_logs ADD COLUMN argsJson TEXT`)
+  } catch {
+    /* column already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE tool_logs ADD COLUMN resultText TEXT`)
+  } catch {
+    /* column already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE tool_logs ADD COLUMN deltasJson TEXT`)
   } catch {
     /* column already exists */
   }

@@ -64,6 +64,7 @@ import {
   logRequestFail,
   logRequestAbort,
   logRequestInput,
+  logRequestProgress,
   logToolCall,
 } from "@/lib/observability/store"
 import { insertArtifact } from "@/lib/artifacts/store"
@@ -828,8 +829,19 @@ export async function POST(request: Request) {
       let reasoningPhase = 0
       let streamMode: "reasoning" | "content" = "reasoning"
       let lastProgressPersistAt = 0
+      let lastRequestLogProgressAt = 0
       let accAttachments: Attachment[] = []
       const modelRetryRecoveryAttempts: ModelRetryRecoveryAttempt[] = []
+
+      const persistObservabilityProgress = (force = false) => {
+        const now = Date.now()
+        if (!force && now - lastRequestLogProgressAt < 600) return
+        lastRequestLogProgressAt = now
+        logRequestProgress(messageId, {
+          reasoning: sanitizeReasoningForPersistence(accReasoning),
+          contentSegments: accContentSegments,
+        })
+      }
 
       const collectAttemptRecoveryToolCalls = (
         startIndex: number
@@ -1067,6 +1079,7 @@ export async function POST(request: Request) {
         }
         send({ type: "tool_delta", toolCallId, toolName, delta })
         persistAssistantProgress({ force: true })
+        persistObservabilityProgress()
       }
 
       const appendContextCompaction = (
@@ -1207,6 +1220,15 @@ export async function POST(request: Request) {
 
         send(event as unknown as Record<string, unknown>)
         persistAssistantProgress({ force: true })
+        if (
+          event.type === "agent_tool_call" ||
+          event.type === "agent_tool_result" ||
+          event.type === "agent_done"
+        ) {
+          persistObservabilityProgress(true)
+        } else if (event.type === "agent_tool_delta") {
+          persistObservabilityProgress()
+        }
       }
 
       const stream = new ReadableStream({
@@ -1749,6 +1771,11 @@ export async function POST(request: Request) {
                         startedAt: Date.now(),
                       })
 
+                      logRequestProgress(messageId, {
+                        reasoning: sanitizeReasoningForPersistence(accReasoning),
+                        contentSegments: accContentSegments,
+                      })
+
                       toolStartTimes.set(toolCall.id, Date.now())
 
                       send({
@@ -1894,13 +1921,33 @@ export async function POST(request: Request) {
                       toolStartTimes.delete(toolCallId)
                       logToolCall({
                         requestId: messageId,
+                        toolCallId,
                         toolName,
+                        title: reasoningToolCall?.type === "tool_call"
+                          ? reasoningToolCall.title
+                          : displayText,
+                        phase: reasoningToolCall?.type === "tool_call"
+                          ? reasoningToolCall.phase
+                          : reasoningPhase,
+                        args: reasoningToolCall?.type === "tool_call"
+                          ? reasoningToolCall.args
+                          : fallbackArgs,
+                        // Keep the richer result in Logs. The chat transcript
+                        // remains bounded separately for fast message history.
+                        resultText: displayContent,
+                        deltas: reasoningToolCall?.type === "tool_call"
+                          ? reasoningToolCall.deltas
+                          : undefined,
                         success: result.success,
                         startedAt: toolStart ?? toolEnd,
                         durationMs: toolStart ? toolEnd - toolStart : null,
                         errorMessage: result.success
                           ? null
                           : (result.error ?? null),
+                      })
+                      logRequestProgress(messageId, {
+                        reasoning: sanitizeReasoningForPersistence(accReasoning),
+                        contentSegments: accContentSegments,
                       })
 
                       send({

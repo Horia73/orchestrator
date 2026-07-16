@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Brain, Check, ChevronDown, Copy, CheckCircle2, CircleAlert, CircleStop, Clock, Download, ExternalLink, FileText, Loader2, Monitor, RefreshCw, Terminal } from "lucide-react"
+import { Brain, Check, ChevronDown, Copy, CheckCircle2, CircleAlert, CircleStop, Clock, Download, ExternalLink, FileText, Loader2, Monitor, RefreshCw, Search, Terminal, Wrench } from "lucide-react"
 import type { AgentCallReasoningEntry, Attachment, ContentSegment, ContextCompactionReasoningEntry, MemoryRecallReasoningEntry, Message, ReasoningEntry, SteeredMessageReasoningEntry, ToolCallReasoningEntry } from "@/lib/types"
 import { parseSteeredMessage } from "@/lib/steered-message"
 import { cn } from "@/lib/utils"
@@ -12,7 +12,7 @@ import { AttachmentCard } from "@/components/attachment-card"
 import { RenderMessageContent } from "@/components/artifacts/render-message-content"
 import { useConversationArtifacts } from "@/components/artifacts/use-conversation-artifacts"
 import { downloadArtifact } from "@/components/artifacts/artifact-inline"
-import { InlineToolCallView, InlineWebSearchGroup, TOOL_CALL_CARD_HEIGHT, getToolCallDisplayTitle, isWebSearchToolCall, shouldExpandToolCallByDefault } from "@/components/tool-call-view"
+import { InlineToolCallView, TOOL_CALL_CARD_HEIGHT, getToolCallDisplayTitle, isHiddenToolCall, isWebSearchToolCall, shouldExpandToolCallByDefault } from "@/components/tool-call-view"
 import { BrowserAgentLiveView } from "@/components/browser-agent-live-view"
 import { useBrowserPanelState } from "@/components/chat/browser-panel-context"
 import { AUDIO_CONTEXT_AGENT_ID, AUDIO_TRANSCRIPT_AGENT_ID, AudioContextAgentCard } from "@/components/chat/audio-context-agent-card"
@@ -89,6 +89,7 @@ const WINDOW_CARDS = 2
 // instead of shaving the first visible card (24).
 const LIVE_WINDOW_CHROME = 76
 const LIVE_COLLAPSED_HEIGHT = WINDOW_CARDS * CARD_UNIT + (WINDOW_CARDS - 1) * CARD_GAP + LIVE_WINDOW_CHROME
+const TOOL_TRACE_MAX_HEIGHT = WINDOW_CARDS * CARD_UNIT + 92
 
 // Finalized collapsed preview (reads from the top): the list's pt-1 (4) plus
 // the bottom overlay hosting "Show more" (h-16 fade + h-8 solid = 96), so the
@@ -283,6 +284,7 @@ function ThoughtBlock({
     thoughtAutoExpandTools = false,
     liveCollapsedTitle = false,
     openOnMount = false,
+    onLoadToolCallDetails,
 }: {
     reasoning: ReasoningEntry[]
     isStreaming?: boolean
@@ -300,6 +302,7 @@ function ThoughtBlock({
     thoughtAutoExpandTools?: boolean
     liveCollapsedTitle?: boolean
     openOnMount?: boolean
+    onLoadToolCallDetails?: (toolCallId: string) => Promise<ToolCallReasoningEntry>
 }) {
     const latestEntry = reasoning[reasoning.length - 1]
     const latestTitle = getEntryTitle(latestEntry)
@@ -411,7 +414,7 @@ function ThoughtBlock({
     const collapsedHeight = isLiveTurn ? LIVE_COLLAPSED_HEIGHT : COLLAPSED_HEIGHT
     const isCollapsible = contentHeight > collapsedHeight + 40
     const visibleContentHeight = isExpanded || !isCollapsible
-        ? (contentHeight > 0 ? `${contentHeight}px` : "none")
+        ? (contentHeight > 0 ? `${Math.min(contentHeight, TOOL_TRACE_MAX_HEIGHT)}px` : "none")
         : `${collapsedHeight}px`
 
     // Measure content
@@ -574,7 +577,7 @@ function ThoughtBlock({
                                 <div
                                     ref={scrollRef}
                                     className={cn(
-                                        "text-[14px] leading-relaxed text-muted-foreground overflow-hidden relative",
+                                        "tool-call-scroll text-[14px] leading-relaxed text-muted-foreground overflow-y-auto overflow-x-hidden overscroll-contain relative [scrollbar-gutter:stable]",
                                         isMounted && !isLiveTurn && "transition-[max-height] duration-[360ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[max-height]"
                                     )}
                                     style={{
@@ -590,6 +593,8 @@ function ThoughtBlock({
                                                     onAgentOpen={onAgentOpen}
                                                     onAttachmentClick={onAttachmentClick}
                                                     searchToolDisplay={searchToolDisplay}
+                                                    isLive={isLiveTurn}
+                                                    onLoadToolCallDetails={onLoadToolCallDetails}
                                                 />
                                             </div>
                                         ) : isShowingContent ? (
@@ -713,6 +718,7 @@ function WorkedForBlock({
     onAttachmentClick,
     suppressArtifactTypes,
     hiddenAgentRunIds,
+    onLoadToolCallDetails,
 }: {
     items: MessageTimelineItem[]
     durationMs?: number
@@ -726,6 +732,7 @@ function WorkedForBlock({
     onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
     suppressArtifactTypes?: string[]
     hiddenAgentRunIds?: ReadonlySet<string>
+    onLoadToolCallDetails?: (toolCallId: string) => Promise<ToolCallReasoningEntry>
 }) {
     const openStorageKey = `worked:${messageId}:open`
     const [savedOpenState] = React.useState<boolean | null>(() => {
@@ -880,7 +887,7 @@ function WorkedForBlock({
                         isOpen ? "translate-y-0 opacity-100" : "-translate-y-1 opacity-0"
                     )}
                 >
-                    <div ref={scrollRef} className="tool-call-scroll mt-2 max-h-[70vh] overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable] [touch-action:pan-y]">
+                    <div ref={scrollRef} className="tool-call-scroll mt-2 max-h-[552px] overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable] [touch-action:pan-y]">
                         {!bodyMounted ? (
                             <div className="flex items-center gap-2 py-2 pl-7 text-[13px] text-muted-foreground">
                                 <Loader2 className="size-3.5 animate-spin" />
@@ -900,6 +907,7 @@ function WorkedForBlock({
                                             searchToolDisplay="expanded"
                                             hiddenAgentRunIds={hiddenAgentRunIds}
                                             toolOwnerLabel={hasParentAgentTools ? "Parent agent" : undefined}
+                                            onLoadToolCallDetails={onLoadToolCallDetails}
                                         />
                                     ) : item.type === "steered" ? (
                                         // Steered messages are section barriers —
@@ -959,6 +967,8 @@ function ReasoningEntryList({
     searchToolDisplay,
     hiddenAgentRunIds,
     toolOwnerLabel,
+    isLive = false,
+    onLoadToolCallDetails,
 }: {
     reasoning: ReasoningEntry[]
     onArtifactClick?: (artifact: ArtifactPayload) => void
@@ -967,8 +977,42 @@ function ReasoningEntryList({
     searchToolDisplay: SearchToolDisplay
     hiddenAgentRunIds?: ReadonlySet<string>
     toolOwnerLabel?: string
+    isLive?: boolean
+    onLoadToolCallDetails?: (toolCallId: string) => Promise<ToolCallReasoningEntry>
 }) {
     const nodes: React.ReactNode[] = []
+    const toolIds = React.useMemo(
+        () => reasoning
+            .filter((entry): entry is ToolCallReasoningEntry =>
+                entry.type === "tool_call" && !isHiddenToolCall(entry)
+            )
+            .map((entry) => entry.toolCallId),
+        [reasoning]
+    )
+    const liveToolKey = toolIds.join("\u0000")
+    const [openToolIds, setOpenToolIds] = React.useState<Set<string>>(() =>
+        new Set(isLive ? toolIds.slice(-2) : [])
+    )
+
+    React.useEffect(() => {
+        if (!isLive) return
+        setOpenToolIds(new Set(toolIds.slice(-2)))
+        // Status/output updates preserve the same ids, so a manual close is not
+        // undone until a genuinely new tool starts.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isLive, liveToolKey])
+
+    const toggleTool = React.useCallback((toolCallId: string) => {
+        setOpenToolIds((current) => {
+            const next = new Set(current)
+            if (next.has(toolCallId)) {
+                next.delete(toolCallId)
+                return next
+            }
+            const ordered = [...next, toolCallId].slice(-2)
+            return new Set(ordered)
+        })
+    }, [])
     const resolvedToolOwnerLabel = toolOwnerLabel ?? (
         reasoning.some(entry => entry.type === "agent_call") ? "Parent agent" : undefined
     )
@@ -993,26 +1037,7 @@ function ReasoningEntryList({
         ) {
             continue
         }
-
-        if (entry.type === "tool_call" && searchToolDisplay !== "compact" && isWebSearchToolCall(entry)) {
-            const entries = [entry]
-            let nextIndex = index + 1
-            while (nextIndex < reasoning.length) {
-                const nextEntry = reasoning[nextIndex]
-                if (nextEntry.type !== "tool_call" || !isWebSearchToolCall(nextEntry)) break
-                entries.push(nextEntry)
-                nextIndex++
-            }
-            nodes.push(
-                <InlineWebSearchGroup
-                    key={`web-search-${entry.id}-${index}-${entries.length}`}
-                    entries={entries}
-                    ownerLabel={resolvedToolOwnerLabel}
-                />
-            )
-            index = nextIndex - 1
-            continue
-        }
+        if (entry.type === "tool_call" && isHiddenToolCall(entry)) continue
 
         if (entry.type === "thought") {
             nodes.push(
@@ -1031,6 +1056,9 @@ function ReasoningEntryList({
                     onArtifactClick={onArtifactClick}
                     searchToolDisplay={searchToolDisplay}
                     ownerLabel={resolvedToolOwnerLabel}
+                    open={openToolIds.has(entry.toolCallId)}
+                    onToggle={() => toggleTool(entry.toolCallId)}
+                    onLoadDetails={onLoadToolCallDetails}
                 />
             )
         } else if (entry.type === "context_compaction") {
@@ -1225,16 +1253,125 @@ function ToolCallBlock({
     onArtifactClick,
     searchToolDisplay,
     ownerLabel,
+    open,
+    onToggle,
+    onLoadDetails,
 }: {
     entry: ToolCallReasoningEntry
     onArtifactClick?: (artifact: ArtifactPayload) => void
     searchToolDisplay?: SearchToolDisplay
     ownerLabel?: string
-    thoughtAutoOpen?: boolean
-    thoughtAutoExpandTools?: boolean
-    liveCollapsedTitle?: boolean
+    open: boolean
+    onToggle: () => void
+    onLoadDetails?: (toolCallId: string) => Promise<ToolCallReasoningEntry>
 }) {
-    return <InlineToolCallView entry={entry} onOpen={onArtifactClick} searchDisplay={searchToolDisplay} ownerLabel={ownerLabel} />
+    const [loadedEntry, setLoadedEntry] = React.useState<ToolCallReasoningEntry | null>(null)
+    const [loading, setLoading] = React.useState(false)
+    const [loadError, setLoadError] = React.useState<string | null>(null)
+    const resolvedEntry = loadedEntry ?? entry
+    const status = resolvedEntry.status ?? (
+        resolvedEntry.content ? (resolvedEntry.success === false ? "error" : "ok") : "running"
+    )
+    const bodyReady = !entry.detailsDeferred || loadedEntry !== null
+
+    React.useEffect(() => {
+        if (!open || !entry.detailsDeferred || !onLoadDetails || resolvedEntry.status !== "running") return
+        let cancelled = false
+        let inFlight = false
+        const refresh = () => {
+            if (inFlight) return
+            inFlight = true
+            void onLoadDetails(entry.toolCallId)
+                .then((details) => {
+                    if (!cancelled) setLoadedEntry(details)
+                })
+                .catch(() => {
+                    // Keep the last good snapshot; the next poll can recover.
+                })
+                .finally(() => { inFlight = false })
+        }
+        const timer = window.setInterval(refresh, 1200)
+        return () => {
+            cancelled = true
+            window.clearInterval(timer)
+        }
+    }, [entry.detailsDeferred, entry.toolCallId, onLoadDetails, open, resolvedEntry.status])
+
+    const handleToggle = React.useCallback(() => {
+        const opening = !open
+        onToggle()
+        if (!opening || bodyReady || loading) return
+        if (!onLoadDetails) {
+            setLoadError("Tool details are unavailable.")
+            return
+        }
+        setLoading(true)
+        setLoadError(null)
+        void onLoadDetails(entry.toolCallId)
+            .then((details) => setLoadedEntry(details))
+            .catch((error: unknown) => {
+                setLoadError(error instanceof Error ? error.message : "Failed to load tool details.")
+            })
+            .finally(() => setLoading(false))
+    }, [bodyReady, entry.toolCallId, loading, onLoadDetails, onToggle, open])
+
+    const Icon = isWebSearchToolCall(resolvedEntry)
+        ? Search
+        : resolvedEntry.toolName === "Bash" || resolvedEntry.toolName === "shell"
+            ? Terminal
+            : Wrench
+    const title = getToolCallDisplayTitle(resolvedEntry)
+
+    return (
+        <div className="relative z-10 min-w-0 text-left">
+            <button
+                type="button"
+                onClick={handleToggle}
+                aria-expanded={open}
+                className={cn(
+                    "group flex w-full min-w-0 items-center gap-3 py-1 text-left",
+                    status === "error" ? "text-destructive" : "text-muted-foreground hover:text-foreground"
+                )}
+            >
+                {loading || status === "running" ? (
+                    <Loader2 className="size-4 shrink-0 animate-spin rounded-full bg-background" />
+                ) : status === "error" ? (
+                    <CircleAlert className="size-4 shrink-0 rounded-full bg-background" />
+                ) : (
+                    <Icon className="size-4 shrink-0 rounded-full bg-background" />
+                )}
+                <span
+                    className={cn(
+                        "min-w-0 truncate text-[14px] font-medium tracking-tight",
+                        (loading || status === "running") && "search-shimmer-text"
+                    )}
+                    title={title}
+                >
+                    {title}
+                </span>
+                <ChevronDown
+                    className={cn(
+                        "size-4 shrink-0 text-muted-foreground/70 transition-transform duration-200",
+                        open ? "rotate-0" : "-rotate-90"
+                    )}
+                />
+            </button>
+
+            {open && loadError && (
+                <div className="ml-7 py-1 text-[12px] text-destructive">{loadError}</div>
+            )}
+            {open && bodyReady && (
+                <div className="mt-1 animate-in fade-in-0 slide-in-from-top-1 duration-200">
+                    <InlineToolCallView
+                        entry={resolvedEntry}
+                        onOpen={onArtifactClick}
+                        searchDisplay={searchToolDisplay}
+                        ownerLabel={ownerLabel}
+                    />
+                </div>
+            )}
+        </div>
+    )
 }
 
 function formatAgentStatus(status: AgentCallReasoningEntry["status"], queued?: boolean): string {
@@ -1599,6 +1736,7 @@ interface MessageBubbleProps {
     onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
     onAgentOpen?: (entry: AgentCallReasoningEntry) => void
     onLoadMessageDetails?: (messageId: string) => Promise<void>
+    onLoadToolCallDetails?: (messageId: string, toolCallId: string) => Promise<ToolCallReasoningEntry>
     autoLoadDeferredDetails?: boolean
     visibleBrowserTakeoverRunIds?: ReadonlySet<string>
 }
@@ -1614,6 +1752,7 @@ function MessageBubbleComponent({
     onAttachmentClick,
     onAgentOpen,
     onLoadMessageDetails,
+    onLoadToolCallDetails,
     autoLoadDeferredDetails = false,
     visibleBrowserTakeoverRunIds,
 }: MessageBubbleProps) {
@@ -1652,6 +1791,16 @@ function MessageBubbleComponent({
     const handleOpenDeferredDetails = React.useCallback(() => {
         void loadDeferredDetails(true)
     }, [loadDeferredDetails])
+
+    const loadToolDetailsForMessage = React.useCallback(
+        (toolCallId: string) => {
+            if (!onLoadToolCallDetails) {
+                return Promise.reject(new Error("Tool details are unavailable."))
+            }
+            return onLoadToolCallDetails(message.id, toolCallId)
+        },
+        [message.id, onLoadToolCallDetails]
+    )
 
     const hasReasoning = Array.isArray(message.reasoning) && message.reasoning.length > 0
     const hasDeferredDetails = Boolean(
@@ -1869,6 +2018,7 @@ function MessageBubbleComponent({
                 thinkingDuration={message.thinkingDuration}
                 messageStatus={message.status}
                 openOnMount={openLoadedDetails}
+                onLoadToolCallDetails={onLoadToolCallDetails ? loadToolDetailsForMessage : undefined}
             />
         ) : item.type === "steered" ? (
             <SteeredMessageBlock
@@ -1944,6 +2094,7 @@ function MessageBubbleComponent({
                                     onAttachmentClick={onAttachmentClick}
                                     suppressArtifactTypes={suppressArtifactTypes}
                                     hiddenAgentRunIds={surfacedBrowserTakeoverIds}
+                                    onLoadToolCallDetails={onLoadToolCallDetails ? loadToolDetailsForMessage : undefined}
                                 />
                             )}
                             {finalItems.map(renderTimelineItem)}

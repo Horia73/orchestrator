@@ -165,6 +165,9 @@ export interface ToolCallReasoningEntry {
   startedAt?: number
   endedAt?: number
   deltas?: ToolStreamDelta[]
+  /** Heavy args/result/stream data was intentionally omitted from a summary.
+   * The UI loads this one tool when its disclosure is opened. */
+  detailsDeferred?: boolean
 }
 
 export interface ContentSegment {
