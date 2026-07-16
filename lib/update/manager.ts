@@ -17,6 +17,10 @@ import { sendInboxPushNotification } from '@/lib/push-notifications'
 import { addMessage, getConversation } from '@/lib/db'
 import type { Message } from '@/lib/types'
 import { isAdminProfileId } from '@/lib/profiles/context'
+import {
+    isDurableAiWorkerProcess,
+    shouldProxyToDurableAiWorker,
+} from '@/lib/ai/durable-worker'
 
 type UpdatePhase = 'idle' | 'queued' | 'updating' | 'restarting' | 'completed' | 'failed'
 type UpdateTargetKind = 'release' | 'branch'
@@ -735,6 +739,14 @@ function serviceManager(): string | null {
     return null
 }
 
+/** Split Docker installs can keep serving AI from the old worker image while
+ * the replacement image is fetched and built. The host bridge closes worker
+ * admission only for the final web/worker rotation. */
+export function usesLateDockerAiDrain(): boolean {
+    return serviceManager() === 'docker'
+        && (shouldProxyToDurableAiWorker() || isDurableAiWorkerProcess())
+}
+
 function dockerHostUpdaterConfig(): { url: string; token: string } | null {
     const url = getEnvValue('ORCHESTRATOR_DOCKER_UPDATE_URL') || getEnvValue('ORCHESTRATOR_HOST_UPDATE_URL')
     const token = getEnvValue('ORCHESTRATOR_DOCKER_UPDATE_TOKEN') || getEnvValue('ORCHESTRATOR_HOST_UPDATE_TOKEN')
@@ -966,8 +978,8 @@ async function startDockerHostUpdateRunner(job: UpdateJob) {
 
         patchJob({
             phase: 'restarting',
-            waitReason: 'Host updater is rebuilding and restarting the Docker stack.',
-            activeRunCount: 0,
+            waitReason: 'Host updater is rebuilding the image; AI remains available until final rotation.',
+            activeRunCount: listAllActiveRuns().length,
         })
     } catch (err) {
         patchJob({
@@ -984,41 +996,47 @@ async function startUpdateRunner() {
     const queued = memory.job
     if (!queued || queued.phase !== 'queued') return
 
-    // Synchronous barrier + recheck: a request that registered before the
-    // barrier is now visible and must drain; one that finishes async setup
-    // afterwards is rejected by the registries. No AI run can slip between the
-    // final idle check and the updater/rebuild.
-    blockAiRunAdmission(queued.id, 'A managed app update is starting.')
-    const activeRuns = listAllActiveRuns()
-    if (activeRuns.length > 0) {
-        patchJob({
-            idleSince: undefined,
-            activeRunCount: activeRuns.length,
-            waitReason: `Draining ${activeRuns.length} active AI run${activeRuns.length === 1 ? '' : 's'} before update.`,
-        })
-        scheduleQueuedJob(queued.id)
-        return
+    const lateDockerDrain = usesLateDockerAiDrain()
+
+    if (!lateDockerDrain) {
+        // Single-process installs still need the synchronous barrier +
+        // recheck before any update work can replace their runtime.
+        blockAiRunAdmission(queued.id, 'A managed app update is starting.')
+        const activeRuns = listAllActiveRuns()
+        if (activeRuns.length > 0) {
+            patchJob({
+                idleSince: undefined,
+                activeRunCount: activeRuns.length,
+                waitReason: `Draining ${activeRuns.length} active AI run${activeRuns.length === 1 ? '' : 's'} before update.`,
+            })
+            scheduleQueuedJob(queued.id)
+            return
+        }
     }
 
     const next = patchJob({
         phase: 'updating',
         startedAt: Date.now(),
-        waitReason: 'Installing update.',
-        activeRunCount: 0,
+        waitReason: lateDockerDrain
+            ? 'Building the Docker image; AI remains available until final rotation.'
+            : 'Installing update.',
+        activeRunCount: lateDockerDrain ? listAllActiveRuns().length : 0,
     })
     if (!next) {
         unblockAiRunAdmission(queued.id)
         return
     }
 
-    try {
-        patchJob({ waitReason: 'Closing browser agent before update.' })
-        await shutdownBrowserSessionManager()
-    } catch {
-        // Browser cleanup is best-effort; the update runner/restart path also
-        // cleans up stale managed-profile processes on next launch.
+    if (!lateDockerDrain) {
+        try {
+            patchJob({ waitReason: 'Closing browser agent before update.' })
+            await shutdownBrowserSessionManager()
+        } catch {
+            // Browser cleanup is best-effort; the update runner/restart path also
+            // cleans up stale managed-profile processes on next launch.
+        }
+        patchJob({ waitReason: 'Installing update.' })
     }
-    patchJob({ waitReason: 'Installing update.' })
 
     if (serviceManager() === 'docker') {
         void startDockerHostUpdateRunner(next)
@@ -1088,6 +1106,14 @@ function scheduleQueuedJob(jobId: string) {
     const tick = () => {
         const job = memory.job
         if (!job || job.id !== jobId || job.phase !== 'queued') return
+
+        // The durable worker continues serving from its current image while
+        // Docker fetches/builds the replacement. The host bridge owns the
+        // short admission drain at the final rotation boundary.
+        if (usesLateDockerAiDrain()) {
+            void startUpdateRunner()
+            return
+        }
 
         const activeRuns = listAllActiveRuns()
         if (activeRuns.length > 0) {
@@ -1182,6 +1208,7 @@ export async function queueUpdate(opts?: {
     const targetBranch = mode === 'branch'
         ? sanitizeBranchName(opts?.branch || status.current.branch || 'master')
         : null
+    const lateDockerDrain = usesLateDockerAiDrain()
     const job: UpdateJob = {
         id: randomUUID(),
         phase: 'queued',
@@ -1192,9 +1219,11 @@ export async function queueUpdate(opts?: {
         queuedAt: now,
         updatedAt: now,
         activeRunCount: status.activeRuns.length,
-        waitReason: status.activeRuns.length > 0
-            ? `Waiting for ${status.activeRuns.length} active AI run${status.activeRuns.length === 1 ? '' : 's'}.`
-            : 'Waiting for a quiet window.',
+        waitReason: lateDockerDrain
+            ? 'Preparing Docker rebuild; AI remains available until final rotation.'
+            : status.activeRuns.length > 0
+                ? `Waiting for ${status.activeRuns.length} active AI run${status.activeRuns.length === 1 ? '' : 's'}.`
+                : 'Waiting for a quiet window.',
         initiatedFromConversationId: opts?.initiatedFromConversationId,
     }
 
@@ -1266,6 +1295,15 @@ export function isUpdateMaintenanceActive(): boolean {
         }
     }
     return Date.now() - job.updatedAt < MAINTENANCE_STALE_MS
+}
+
+/** Whether this process should reject a new AI turn right now. In the split
+ * Docker topology, an update lifecycle may be active for many minutes while
+ * the old worker remains safe and usable; only its final-rotation admission
+ * barrier pauses new work. */
+export function shouldPauseAiForUpdate(): boolean {
+    if (usesLateDockerAiDrain()) return Boolean(getAiRunAdmissionBlock())
+    return isUpdateMaintenanceActive()
 }
 
 export interface CachedPendingUpdate {

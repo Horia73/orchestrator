@@ -14,9 +14,13 @@ import {
 } from '@/lib/ai/run-admission'
 import { runWithProfileContext } from '@/lib/profiles/context'
 import { ADMIN_PROFILE_ID } from '@/lib/profiles/constants'
-import { canProfileReceivePendingUpdate } from '@/lib/update/manager'
+import {
+    canProfileReceivePendingUpdate,
+    usesLateDockerAiDrain,
+} from '@/lib/update/manager'
 import {
     chatUpdateRetryDelayMs,
+    isChatAiWorkerUnavailableResponse,
     isChatUpdateInProgressResponse,
     sleepWithAbortSignal,
 } from '@/hooks/chat-store-utils'
@@ -170,6 +174,16 @@ assert.equal(
     false,
     'a structured application 503 must remain visible to the user',
 )
+assert.equal(
+    isChatAiWorkerUnavailableResponse(503, { code: 'ai_worker_unavailable' }),
+    true,
+    'the short web-up/worker-starting gap should be retried with stable ids',
+)
+assert.equal(
+    isChatAiWorkerUnavailableResponse(503, { code: 'provider_unavailable' }),
+    false,
+    'provider setup errors must not be mistaken for a worker rotation',
+)
 assert.equal(isChatUpdateInProgressResponse(500, { code: 'update_in_progress' }), false)
 assert.equal(chatUpdateRetryDelayMs('30'), 30_000)
 assert.equal(chatUpdateRetryDelayMs('0'), 1_000)
@@ -191,6 +205,31 @@ const memberController = new AbortController()
 
 assert.equal(canProfileReceivePendingUpdate(ADMIN_PROFILE_ID), true, 'admin may receive pending-update hints')
 assert.equal(canProfileReceivePendingUpdate('member_test'), false, 'member agents must not receive pending-update hints')
+
+const previousManager = process.env.ORCHESTRATOR_SERVICE_MANAGER
+const previousWorkerUrl = process.env.ORCHESTRATOR_AI_WORKER_URL
+const previousWorkerRole = process.env.ORCHESTRATOR_AI_WORKER_PROCESS
+process.env.ORCHESTRATOR_SERVICE_MANAGER = 'docker'
+process.env.ORCHESTRATOR_AI_WORKER_URL = 'http://ai-worker:3100'
+delete process.env.ORCHESTRATOR_AI_WORKER_PROCESS
+assert.equal(
+    usesLateDockerAiDrain(),
+    true,
+    'split Docker installs should defer AI drain until final rotation',
+)
+process.env.ORCHESTRATOR_SERVICE_MANAGER = 'systemd'
+delete process.env.ORCHESTRATOR_AI_WORKER_URL
+assert.equal(
+    usesLateDockerAiDrain(),
+    false,
+    'single-process installs must retain the pre-update admission barrier',
+)
+if (previousManager === undefined) delete process.env.ORCHESTRATOR_SERVICE_MANAGER
+else process.env.ORCHESTRATOR_SERVICE_MANAGER = previousManager
+if (previousWorkerUrl === undefined) delete process.env.ORCHESTRATOR_AI_WORKER_URL
+else process.env.ORCHESTRATOR_AI_WORKER_URL = previousWorkerUrl
+if (previousWorkerRole === undefined) delete process.env.ORCHESTRATOR_AI_WORKER_PROCESS
+else process.env.ORCHESTRATOR_AI_WORKER_PROCESS = previousWorkerRole
 
 assert.equal(
     runWithProfileContext({ profileId: ADMIN_PROFILE_ID }, () =>

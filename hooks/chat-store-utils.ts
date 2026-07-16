@@ -68,6 +68,20 @@ export function isChatUpdateInProgressResponse(
   )
 }
 
+/** The web container can be healthy a few seconds before the freshly rotated
+ * durable worker is ready. This structured 503 is distinct from provider/model
+ * errors and is safe to retry briefly with the same stable message ids. */
+export function isChatAiWorkerUnavailableResponse(
+  status: number,
+  payload: unknown,
+  responseBodyWasJson = true
+): boolean {
+  if (!responseBodyWasJson || status !== 503 || !payload || typeof payload !== "object") {
+    return false
+  }
+  return (payload as { code?: unknown }).code === "ai_worker_unavailable"
+}
+
 export function chatUpdateRetryDelayMs(
   retryAfter: string | null,
   now = Date.now()
@@ -268,6 +282,9 @@ export const STREAM_RESUME_STALL_MS = 15_000
  *  confirmed the server never started it). Ids are stable, so re-sending is
  *  idempotent. */
 export const CHAT_SEND_RETRY_ATTEMPTS = 2
+/** A normal worker rotation is only a few seconds. Bound structured worker
+ * unavailability retries so an unrelated long outage still becomes visible. */
+export const CHAT_AI_WORKER_RESTART_RETRY_MS = 90_000
 
 const CHAT_UNREAD_IDS_KEY = "chat:unread-ids"
 

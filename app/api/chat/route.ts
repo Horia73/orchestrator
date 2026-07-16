@@ -56,7 +56,7 @@ import { clearTurnSteering, registerTurnSteering } from "@/lib/chat-steering"
 import { wrapSteeredMessage } from "@/lib/steered-message"
 import {
   getCachedPendingUpdateForProfile,
-  isUpdateMaintenanceActive,
+  shouldPauseAiForUpdate,
 } from "@/lib/update/manager"
 import {
   logRequestStart,
@@ -176,7 +176,7 @@ export async function POST(request: Request) {
   return runWithRequestProfile(request, async () => {
       const requestOrigin = resolveRequestOrigin(request)
 
-      if (isUpdateMaintenanceActive()) {
+      if (shouldPauseAiForUpdate()) {
         return new Response(
           JSON.stringify({
             error: "Update in progress. The app will reconnect after restart.",

@@ -34,6 +34,7 @@ def main() -> None:
         refresh_calls: list[bool] = []
         response_waits: list[bool] = []
         notifications: list[tuple[str, str]] = []
+        lifecycle_events: list[str] = []
 
         bridge.docker_image_id = lambda image: {
             "orchestrator:local": "sha256:live",
@@ -55,13 +56,19 @@ def main() -> None:
 
         bridge.compose_command = lambda: ["docker", "compose"]
         bridge.current_git_ref = lambda: "master"
-        bridge.drain_ai_worker_before_update = lambda: True
-        bridge.wait_for_ai_worker_web_requests = lambda: response_waits.append(True)
+        bridge.drain_ai_worker_before_update = lambda: lifecycle_events.append("drain") or True
+        bridge.wait_for_ai_worker_web_requests = lambda: (
+            lifecycle_events.append("wait-response-bound"),
+            response_waits.append(True),
+        )[-1]
         bridge.save_current_image_for_rollback = lambda *_args: None
         bridge.prune_docker_build_artifacts = lambda *_args: None
         bridge.scrub_stale_build_env = lambda *_args: None
         bridge.capture = lambda command: "abc123def456" if "rev-parse" in command else ""
-        bridge.run = lambda command, env=None: commands.append(list(command))
+        bridge.run = lambda command, env=None: (
+            lifecycle_events.append(f"command:{' '.join(command)}"),
+            commands.append(list(command)),
+        )[-1]
         bridge.refresh_ai_worker_after_update = lambda running: refresh_calls.append(running)
         bridge.notify_app = lambda _job, phase, reason, **_kwargs: notifications.append((phase, reason))
         bridge.rollback_status = lambda: None
@@ -72,10 +79,19 @@ def main() -> None:
             "skipGit": True,
         })
 
+        compose_build = next(command for command in commands if command[:3] == ["docker", "compose", "build"])
+        assert compose_build == ["docker", "compose", "build", "orchestrator"], compose_build
         compose_up = next(command for command in commands if command[:3] == ["docker", "compose", "up"])
         assert compose_up == [
-            "docker", "compose", "up", "--build", "-d", "--no-deps", "orchestrator",
+            "docker", "compose", "up", "-d", "--no-build", "--no-deps",
+            "--force-recreate", "orchestrator",
         ], compose_up
+        build_event = lifecycle_events.index("command:docker compose build orchestrator")
+        drain_event = lifecycle_events.index("drain")
+        up_event = lifecycle_events.index(
+            "command:docker compose up -d --no-build --no-deps --force-recreate orchestrator"
+        )
+        assert build_event < drain_event < up_event, lifecycle_events
         assert not any(command and command[0] == "git" for command in commands), commands
         assert refresh_calls == [True], refresh_calls
         assert response_waits == [True], response_waits

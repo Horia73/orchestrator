@@ -762,10 +762,11 @@ def wait_for_ai_worker_web_requests() -> None:
 def refresh_ai_worker_after_update(worker_was_running: bool) -> None:
     """Move the worker to the freshly tagged image without interrupting work.
 
-    Existing workers were drained before the web rebuild: already-accepted
-    runs continue, while new admissions wait. Once the active count reaches
-    zero, compose recreates only the worker. A first-time install has no old
-    worker and can start the service immediately.
+    Existing workers are drained only after the replacement image is built,
+    immediately before web rotation: already-accepted runs continue, while new
+    admissions wait. Once the active count reaches zero, compose recreates only
+    the worker. A first-time install has no old worker and can start the service
+    immediately.
     """
     if not worker_was_running:
         set_state(phase="restarting", waitReason="Starting durable AI worker.")
@@ -842,10 +843,6 @@ def update_stack(payload: dict) -> None:
         if not (APP_DIR / ".git").exists():
             raise RuntimeError(f"{APP_DIR} is not a git checkout.")
 
-        worker_was_running = drain_ai_worker_before_update()
-        if worker_was_running:
-            wait_for_ai_worker_web_requests()
-
         save_current_image_for_rollback(job_id, target_ref)
         prune_docker_build_artifacts("before rebuild")
 
@@ -864,7 +861,7 @@ def update_stack(payload: dict) -> None:
         notify_app(
             job_id,
             "restarting",
-            "Host updater is rebuilding and restarting the Docker stack.",
+            "Host updater is rebuilding the image; AI remains available until final rotation.",
             target_commit=target_commit,
         )
         compose_env = os.environ.copy()
@@ -877,11 +874,30 @@ def update_stack(payload: dict) -> None:
         # ENV. Old installs sometimes ended up with these in `.env`; scrub
         # them defensively every update.
         scrub_stale_build_env(APP_DIR / ".env")
-        # Rebuild/recreate ONLY the request-serving web container. The durable
-        # AI worker deliberately remains on its old image digest until its
-        # accepted runs finish; refresh_ai_worker_after_update rotates it later.
+        # Build first while the durable worker remains fully open on its old,
+        # immutable image digest. Splitting `build` from `up` is essential: it
+        # keeps the long fetch/build phase available to AI and gives us an
+        # atomic admission boundary immediately before container rotation.
         run([
-            *compose_command(), "up", "--build", "-d", "--no-deps", SERVICE_NAME,
+            *compose_command(), "build", SERVICE_NAME,
+        ], env=compose_env)
+
+        set_state(
+            phase="restarting",
+            waitReason="Closing new AI admissions for final container rotation.",
+        )
+        write_log("Docker image build complete; entering final AI drain and container rotation.")
+        worker_was_running = drain_ai_worker_before_update()
+        if worker_was_running:
+            wait_for_ai_worker_web_requests()
+
+        # Recreate ONLY the request-serving web container from the image that
+        # was just built. The durable worker stays on its old image until every
+        # already-accepted run finishes; refresh_ai_worker_after_update rotates
+        # it later. New chat turns wait/retry during this short final window.
+        run([
+            *compose_command(), "up", "-d", "--no-build", "--no-deps",
+            "--force-recreate", SERVICE_NAME,
         ], env=compose_env)
         refresh_ai_worker_after_update(worker_was_running)
         prune_docker_build_artifacts("after rebuild")

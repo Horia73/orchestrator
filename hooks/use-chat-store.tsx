@@ -53,6 +53,7 @@ import {
 } from "@/lib/chat-update-retry"
 import {
   ChatFetchError,
+  CHAT_AI_WORKER_RESTART_RETRY_MS,
   CHAT_SEND_RETRY_ATTEMPTS,
   INITIAL_MESSAGE_FULL_TAIL_SIZE,
   CLIENT_MAX_MESSAGE_PAGE_SIZE,
@@ -72,6 +73,7 @@ import {
   chatUpdateRetryDelayMs,
   deriveUnreadConversationIds,
   errorMessageFromUnknown,
+  isChatAiWorkerUnavailableResponse,
   isChatUpdateInProgressResponse,
   isConversationUnread,
   isOwnedAssistantStreamMessage,
@@ -642,10 +644,29 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
   const detachStreaming = React.useCallback(() => {
     // Navigation should detach this tab's live reader, not stop the server run.
+    const detachedMessageId = clientStreamMessageIdRef.current
+    const detachedConversationId = streamingConversationIdRef.current
+    const profileId = activeProfileIdRef.current
+    const pending = profileId ? readPendingChatUpdateTurn(profileId) : null
+    const shouldRestorePendingUpdate = Boolean(
+      pending &&
+        pending.assistantMessageId === detachedMessageId &&
+        pending.conversationId === detachedConversationId
+    )
     streamDoneRef.current = true
     clientStreamMessageIdRef.current = null
     cleanupStream()
     dispatch({ type: "SET_STREAMING", isStreaming: false })
+    if (shouldRestorePendingUpdate) {
+      // Detaching while the turn is sleeping on `update_in_progress` aborts
+      // that retry timer. Re-arm the profile-scoped restore effect instead of
+      // leaving its "already started" guard stuck for the rest of the tab.
+      pendingUpdateRestoreStartedRef.current = null
+      window.setTimeout(
+        () => setPendingUpdateStorageRevision((revision) => revision + 1),
+        0
+      )
+    }
   }, [cleanupStream])
 
   // Leaving the chat route (Settings, Watchlist, Monitor, …) hands completion
@@ -2570,6 +2591,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       }, STREAM_STALL_CHECK_INTERVAL_MS)
 
       let sendRetriesLeft = CHAT_SEND_RETRY_ATTEMPTS
+      let aiWorkerUnavailableSince: number | null = null
 
       // Pass the full local conversation for normal turns; the request helper
       // falls back to a provider-relevant slim shape only near size limits.
@@ -2601,13 +2623,26 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                     response.statusText || `HTTP ${response.status || "error"}`,
                 }
               })
-              if (
-                isChatUpdateInProgressResponse(
-                  response.status,
-                  err,
-                  responseBodyWasJson
-                )
-              ) {
+              const updateInProgress = isChatUpdateInProgressResponse(
+                response.status,
+                err,
+                responseBodyWasJson
+              )
+              const workerUnavailable = isChatAiWorkerUnavailableResponse(
+                response.status,
+                err,
+                responseBodyWasJson
+              )
+              if (workerUnavailable && aiWorkerUnavailableSince === null) {
+                aiWorkerUnavailableSince = Date.now()
+              }
+              const workerRestartRetry = Boolean(
+                workerUnavailable &&
+                  aiWorkerUnavailableSince !== null &&
+                  Date.now() - aiWorkerUnavailableSince <=
+                    CHAT_AI_WORKER_RESTART_RETRY_MS
+              )
+              if (updateInProgress || workerRestartRetry) {
                 // The user's row is already persisted. Keep this exact turn
                 // alive across the managed restart and retry with the same
                 // conversation/message ids, so reconnect cannot duplicate it.
@@ -2624,7 +2659,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                   isStreaming: true,
                   conversationId: finalConvId,
                   messageId: assistantMsgId,
-                  status: "updating",
+                  status: updateInProgress ? "updating" : "recovering",
                 })
                 streamLastActivityRef.current = Date.now()
                 await sleepWithAbortSignal(
