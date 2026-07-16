@@ -110,6 +110,76 @@ export async function proxyToDurableAiWorker(
     }
 }
 
+/** Relay one durable-worker SSE connection into a caller-owned stream.
+ *
+ * The browser's /api/sync connection terminates on the web process, while AI
+ * completion events originate in the split durable worker. Keeping this
+ * relay separate from the generic request proxy lets the sync route merge
+ * both processes' event emitters without giving up web-local events such as
+ * conversation read/title/archive changes.
+ */
+export async function relayDurableAiWorkerEventStream(
+    request: Request,
+    onFrame: (frame: Uint8Array) => void,
+    signal?: AbortSignal,
+): Promise<boolean> {
+    const upstream = await proxyToDurableAiWorker(request, '/api/sync')
+    const contentType = upstream.headers.get('content-type') ?? ''
+    if (!upstream.ok || !upstream.body || !contentType.includes('text/event-stream')) {
+        await upstream.body?.cancel().catch(() => {})
+        return false
+    }
+
+    if (signal?.aborted) {
+        await upstream.body.cancel().catch(() => {})
+        return true
+    }
+
+    const reader = upstream.body.getReader()
+    const decoder = new TextDecoder()
+    const encoder = new TextEncoder()
+    let pending = ''
+    const flushFrames = () => {
+        while (pending) {
+            const boundary = /\r?\n\r?\n/.exec(pending)
+            if (!boundary || boundary.index === undefined) return
+            const end = boundary.index + boundary[0].length
+            onFrame(encoder.encode(pending.slice(0, end)))
+            pending = pending.slice(end)
+        }
+    }
+    const cancel = () => {
+        void reader.cancel().catch(() => {})
+    }
+    signal?.addEventListener('abort', cancel, { once: true })
+
+    try {
+        while (!signal?.aborted) {
+            const { done, value } = await reader.read()
+            if (done) break
+            if (value?.length) {
+                pending += decoder.decode(value, { stream: true })
+                // Emit only complete SSE frames. Otherwise a web-local event
+                // could be enqueued between two network chunks of one worker
+                // event and corrupt the browser's EventSource stream.
+                flushFrames()
+            }
+        }
+        pending += decoder.decode()
+        flushFrames()
+        return true
+    } catch {
+        return false
+    } finally {
+        signal?.removeEventListener('abort', cancel)
+        try {
+            reader.releaseLock()
+        } catch {
+            // A cancellation can release/close the reader before cleanup.
+        }
+    }
+}
+
 function firstHeaderValue(value: string | null): string | null {
     return value?.split(',')[0]?.trim() || null
 }

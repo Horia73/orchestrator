@@ -21,7 +21,14 @@ async function main() {
                 'Content-Type': 'text/event-stream',
                 Connection: 'keep-alive',
             })
-            response.end('data: {"type":"done"}\n\n')
+            if (request.url === '/api/sync') {
+                // Deliberately split a single SSE frame across network writes:
+                // the relay must reassemble it before merging web-local events.
+                response.write('data: {"type":')
+                setImmediate(() => response.end('"done"}\n\n'))
+            } else {
+                response.end('data: {"type":"done"}\n\n')
+            }
         })
     })
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -59,6 +66,27 @@ async function main() {
         assert.equal(received[0]?.headers['x-forwarded-proto'], 'https')
         assert.equal(received[0]?.headers.cookie, 'orchestrator_profile=profile-session')
         assert.equal(received[0]?.body, JSON.stringify({ conversationId: 'smoke' }))
+
+        const relayedFrames: Uint8Array[] = []
+        const relayed = await worker.relayDurableAiWorkerEventStream(
+            new Request('https://orchestrator.example/api/sync', {
+                headers: {
+                    host: 'orchestrator.example',
+                    cookie: 'orchestrator_profile=profile-session',
+                },
+            }),
+            frame => relayedFrames.push(frame),
+        )
+        assert.equal(relayed, true)
+        assert.equal(
+            Buffer.concat(relayedFrames.map(frame => Buffer.from(frame))).toString('utf-8'),
+            'data: {"type":"done"}\n\n',
+        )
+        assert.equal(relayedFrames.length, 1)
+        assert.equal(received.length, 2)
+        assert.equal(received[1]?.method, 'GET')
+        assert.equal(received[1]?.url, '/api/sync')
+        assert.equal(received[1]?.headers.cookie, 'orchestrator_profile=profile-session')
 
         process.env.ORCHESTRATOR_AI_WORKER_PROCESS = '1'
         assert.equal(worker.shouldProxyToDurableAiWorker(), false)
