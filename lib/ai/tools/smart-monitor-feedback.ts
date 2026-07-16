@@ -13,8 +13,8 @@ import type { ToolDef, ToolResult } from '@/lib/ai/agents/types'
 //     MonitorRule shape the watch itself uses — adapter-side evaluation of
 //     patterns is automatic (see lib/monitoring/smart-monitor.ts).
 //
-// The tool can also remove a previously-added suppress pattern by id, so the
-// model can retract a filter that turned out to over-suppress.
+// The tool can also remove previously-added suppress patterns by id, either as
+// part of normal match feedback or as a standalone periodic maintenance pass.
 // ---------------------------------------------------------------------------
 
 export const monitorWakeFeedbackTool: ToolDef = {
@@ -24,15 +24,15 @@ export const monitorWakeFeedbackTool: ToolDef = {
         'Record per-watch feedback after a Smart Monitor wake.',
         'Call this once per watch that produced matches in the wake — even if you also called notify_inbox for it — so the engine can learn what is worth waking you for.',
         'Set was_worth_it=true when the matches deserved attention. Set was_worth_it=false when they were noise/routine; in that case also pass add_suppress_pattern with a structured MonitorRule that captures the noise signature so future ticks drop similar candidates BEFORE waking you.',
-        'Use remove_suppress_pattern_id to retract a previously-added pattern that is now over-suppressing.',
+        'Use remove_suppress_pattern_id to retract one previously-added pattern, or remove_suppress_pattern_ids during a periodic housekeeping audit to retire several expired, redundant, obsolete, invalid, or over-broad patterns. A removal-only audit may omit was_worth_it; normal match feedback must still provide it.',
         'For a closed-loop FOLLOW-UP watch whose match the engine auto-resolved: pass follow_up_outcome="confirmed" when the matched item really was the expected effect (the engine then removes the watch after this wake), or follow_up_outcome="not_yet" when it was something else (your own message, an unrelated mail) — that re-arms the watch to keep waiting, optionally with extend_deadline_days.',
     ].join(' '),
     input_schema: {
         type: 'object',
         properties: {
             watch_id: { type: 'string', description: 'The watch id from the <wake_reason> block. Must reference an existing watch.' },
-            was_worth_it: { type: 'boolean', description: 'True if the matches deserved your attention this tick. False if they were noise.' },
-            reason: { type: 'string', description: 'Short explanation (≤500 chars). Persisted in the audit log; shown in the watch detail UI so the user can see why you classified it that way.' },
+            was_worth_it: { type: 'boolean', description: 'True if the matches deserved your attention this tick. False if they were noise. May be omitted only for a removal-only suppress-pattern audit.' },
+            reason: { type: 'string', description: 'Short explanation (≤500 chars) for the feedback or maintenance decision. Persisted in the audit log.' },
             add_suppress_pattern: {
                 type: 'object',
                 description: 'Optional. When was_worth_it=false, attach a rule that captures the noise signature; future ticks evaluate it and drop matching candidates before any wake. Reuses MonitorRule shape.',
@@ -44,10 +44,15 @@ export const monitorWakeFeedbackTool: ToolDef = {
                 required: ['reason', 'rule'],
             },
             remove_suppress_pattern_id: { type: 'string', description: 'Optional. Remove a previously-added suppress pattern (use the id shown in <wake_reason>).' },
+            remove_suppress_pattern_ids: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional maintenance batch. Remove each listed suppress-pattern id after auditing the watch. Do not remove a pattern merely because its hit count is zero.',
+            },
             follow_up_outcome: { type: 'string', enum: ['confirmed', 'not_yet'], description: 'Only for follow-up watches. "confirmed" = the auto-resolving match was the expected effect. "not_yet" = false resolution; re-arm the watch and keep waiting for the real effect.' },
             extend_deadline_days: { type: 'number', description: 'Optional, with follow_up_outcome="not_yet": push the follow-up deadline this many days past the original.' },
         },
-        required: ['watch_id', 'was_worth_it', 'reason'],
+        required: ['watch_id', 'reason'],
     },
     tags: ['monitoring'],
 }
@@ -55,14 +60,33 @@ export const monitorWakeFeedbackTool: ToolDef = {
 export async function executeMonitorWakeFeedback(args: Record<string, unknown>): Promise<ToolResult> {
     const watchId = typeof args.watch_id === 'string' ? args.watch_id.trim() : ''
     if (!watchId) return { success: false, error: 'watch_id is required.' }
-    if (typeof args.was_worth_it !== 'boolean') return { success: false, error: 'was_worth_it (boolean) is required.' }
     const reason = typeof args.reason === 'string' ? args.reason.trim() : ''
     if (!reason) return { success: false, error: 'reason is required.' }
     if (reason.length > 500) return { success: false, error: 'reason must be ≤500 characters.' }
 
-    const wasWorthIt = args.was_worth_it as boolean
     const addSuppressArg = args.add_suppress_pattern as Record<string, unknown> | undefined
     const removeSuppressIdArg = args.remove_suppress_pattern_id as string | undefined
+    const removeSuppressIdsArg = args.remove_suppress_pattern_ids
+    if (removeSuppressIdsArg !== undefined && !Array.isArray(removeSuppressIdsArg)) {
+        return { success: false, error: 'remove_suppress_pattern_ids must be an array of ids.' }
+    }
+    const rawRemovalIds = [
+        ...(typeof removeSuppressIdArg === 'string' ? [removeSuppressIdArg] : []),
+        ...(Array.isArray(removeSuppressIdsArg) ? removeSuppressIdsArg : []),
+    ]
+    if (rawRemovalIds.some((id) => typeof id !== 'string' || !id.trim())) {
+        return { success: false, error: 'remove_suppress_pattern_ids must contain only non-empty string ids.' }
+    }
+    const removalIds = [...new Set(rawRemovalIds.map((id) => (id as string).trim()))]
+    const maintenanceOnly = args.was_worth_it === undefined
+        && removalIds.length > 0
+        && addSuppressArg === undefined
+        && args.follow_up_outcome === undefined
+        && args.extend_deadline_days === undefined
+    if (typeof args.was_worth_it !== 'boolean' && !maintenanceOnly) {
+        return { success: false, error: 'was_worth_it (boolean) is required outside a removal-only suppress-pattern audit.' }
+    }
+    const wasWorthIt = typeof args.was_worth_it === 'boolean' ? args.was_worth_it : null
 
     const store = await import('@/lib/monitor/store')
     const { MonitorRuleSchema, assertRuleDepth } = await import('@/lib/monitor/schema')
@@ -70,24 +94,32 @@ export async function executeMonitorWakeFeedback(args: Record<string, unknown>):
 
     const watch = store.getMonitorWatch(watchId)
     if (!watch) return { success: false, error: `No watch with id ${watchId}.` }
+    const knownPatternIds = new Set(watch.suppressPatterns.map((pattern) => pattern.id))
+    const missingPatternIds = removalIds.filter((id) => !knownPatternIds.has(id))
+    if (missingPatternIds.length > 0) {
+        return { success: false, error: `No suppress pattern(s) ${missingPatternIds.join(', ')} on watch ${watchId}.` }
+    }
 
     // 1. Record the feedback event itself.
     store.recordWatchEvent(watchId, 'feedback', {
-        was_worth_it: wasWorthIt,
+        ...(wasWorthIt === null
+            ? { maintenance: 'suppress_pattern_audit' }
+            : { was_worth_it: wasWorthIt }),
         reason,
         ...(args.follow_up_outcome === 'confirmed' || args.follow_up_outcome === 'not_yet'
             ? { follow_up_outcome: args.follow_up_outcome }
             : {}),
     })
 
-    // 2. Optional: remove an over-suppressing pattern.
-    let removed: { patternId: string } | null = null
-    if (typeof removeSuppressIdArg === 'string' && removeSuppressIdArg.trim()) {
-        const ok = store.removeSuppressPattern(watchId, removeSuppressIdArg.trim())
+    // 2. Optional: remove one or more audited patterns. Validate the complete
+    //    batch above before mutating so a bad id cannot cause a partial audit.
+    const removed: Array<{ patternId: string }> = []
+    for (const patternId of removalIds) {
+        const ok = store.removeSuppressPattern(watchId, patternId)
         if (!ok) {
-            return { success: false, error: `No suppress pattern ${removeSuppressIdArg} on watch ${watchId}.` }
+            return { success: false, error: `Failed to remove suppress pattern ${patternId} from watch ${watchId}.` }
         }
-        removed = { patternId: removeSuppressIdArg.trim() }
+        removed.push({ patternId })
     }
 
     // 3. Optional: add a new suppress pattern. Validate against the watch's
@@ -172,7 +204,8 @@ export async function executeMonitorWakeFeedback(args: Record<string, unknown>):
             was_worth_it: wasWorthIt,
             recorded: true,
             added_suppress_pattern: added,
-            removed_suppress_pattern: removed,
+            removed_suppress_pattern: removed.length === 1 ? removed[0] : null,
+            removed_suppress_patterns: removed,
             follow_up: followUpResult,
         },
     }

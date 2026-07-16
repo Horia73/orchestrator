@@ -20,6 +20,7 @@ process.chdir(tmpRoot)
 
 async function main(): Promise<void> {
     const {
+        addSuppressPattern,
         createMonitorWatch,
         getMonitorWatch,
         listWatchEvents,
@@ -139,7 +140,8 @@ async function main(): Promise<void> {
             taskId: 'task_smart',
             taskState: {},
         })
-        check('prompt lists active suppress pattern', prompt.includes('Learned suppress patterns to consider') && prompt.includes('morning routine'))
+        check('prompt lists active suppress pattern', prompt.includes('Learned suppress patterns (1 active, 0 expired; storage is unbounded)') && prompt.includes('morning routine'))
+        check('prompt requires periodic suppress-pattern audit', prompt.includes('lastSuppressPatternAuditAt') && prompt.includes('Roughly once every 7 days'))
         check('prompt shows recent FEEDBACK entry in history', prompt.includes('FEEDBACK (NOT worth-it)'))
     }
 
@@ -205,6 +207,31 @@ async function main(): Promise<void> {
         check('remove suppress pattern via feedback succeeds', fb.success === true)
         const after = getMonitorWatch(w.id)!
         check('suppress patterns now empty', after.suppressPatterns.length === 0)
+    }
+
+    {
+        const first = addSuppressPattern(w.id, {
+            reason: 'expired duplicate from an old audit',
+            rule: { kind: 'gmail_subject_contains', substrings: ['old duplicate'] },
+            expiresAt: Date.now() - 1000,
+        })
+        const second = addSuppressPattern(w.id, {
+            reason: 'obsolete broad filter from an old audit',
+            rule: { kind: 'gmail_from', senders: ['obsolete@example.com'] },
+        })
+        const audit = await executeMonitorWakeFeedback({
+            watch_id: w.id,
+            reason: 'Periodic suppress-pattern audit removed one expired duplicate and one obsolete filter.',
+            remove_suppress_pattern_ids: [first!.id, second!.id],
+        })
+        check('removal-only audit succeeds without was_worth_it', audit.success === true)
+        const data = audit.data as Record<string, unknown> | undefined
+        const removed = data?.removed_suppress_patterns as Array<{ patternId: string }> | undefined
+        check('audit batch reports both removed patterns', removed?.length === 2)
+        check('audit batch removes both patterns', getMonitorWatch(w.id)!.suppressPatterns.length === 0)
+        const auditEvent = listWatchEvents(w.id, { kinds: ['feedback'] })
+            .find((event) => event.payload?.maintenance === 'suppress_pattern_audit')
+        check('audit maintenance event is recorded', auditEvent !== undefined)
     }
 
     {

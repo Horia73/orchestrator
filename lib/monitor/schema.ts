@@ -558,7 +558,11 @@ export const MonitorWatchSchema = z.object({
     followUp: WatchFollowUpSchema.nullable().default(null),
     enabled: z.boolean(),
     state: WatchStateSchema,
-    suppressPatterns: z.array(SuppressPatternSchema).max(64).default([]),
+    // Learned noise rules are intentionally unbounded. They are durable
+    // per-watch knowledge, so crossing an arbitrary count must never make the
+    // entire watch store unreadable. The Smart Monitor agent periodically
+    // audits and retires stale/redundant patterns instead.
+    suppressPatterns: z.array(SuppressPatternSchema).default([]),
     /** Last completed cheap-tick attempt (ok or error). */
     lastCheckedAt: z.number().int().positive().nullable(),
     /** Engine-scheduled next tick. The master timer wakes at min(nextCheckAt). */

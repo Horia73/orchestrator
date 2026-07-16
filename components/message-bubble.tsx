@@ -52,63 +52,175 @@ function findDisclosureScrollContainer(element: HTMLElement): HTMLElement | null
     return document.scrollingElement as HTMLElement | null
 }
 
+type ToolDisclosureShiftState = {
+    contributions: Map<string, number>
+    instantContributionIds: Set<string>
+    cleanupTimer: number | null
+}
+
+const toolDisclosureShiftStates = new WeakMap<HTMLElement, ToolDisclosureShiftState>()
+
+function disclosureShiftTotal(root: HTMLElement): number {
+    const state = toolDisclosureShiftStates.get(root)
+    if (!state) return 0
+    let total = 0
+    for (const amount of state.contributions.values()) total += amount
+    return total
+}
+
+function setToolDisclosureShift(
+    root: HTMLElement,
+    contributionId: string,
+    amount: number,
+    { instant = false }: { instant?: boolean } = {}
+): void {
+    let state = toolDisclosureShiftStates.get(root)
+    if (!state) {
+        state = {
+            contributions: new Map(),
+            instantContributionIds: new Set(),
+            cleanupTimer: null,
+        }
+        toolDisclosureShiftStates.set(root, state)
+    }
+
+    if (state.cleanupTimer !== null) {
+        window.clearTimeout(state.cleanupTimer)
+        state.cleanupTimer = null
+    }
+    if (amount > 0) state.contributions.set(contributionId, amount)
+    else state.contributions.delete(contributionId)
+    if (instant) state.instantContributionIds.add(contributionId)
+    else state.instantContributionIds.delete(contributionId)
+
+    const total = disclosureShiftTotal(root)
+    const newlyActivated = !root.classList.contains("tool-disclosure-shift-root")
+    root.classList.add("tool-disclosure-shift-root")
+    root.classList.toggle(
+        "tool-disclosure-shift-instant",
+        state.instantContributionIds.size > 0
+    )
+    if (newlyActivated) {
+        root.style.setProperty("--tool-disclosure-shift-y", "0px")
+        // Commit the zero position so the following change transitions instead
+        // of appearing already shifted on its first painted frame.
+        void root.getBoundingClientRect()
+    }
+    root.style.setProperty("--tool-disclosure-shift-y", `${-total}px`)
+
+    if (total === 0) {
+        state.cleanupTimer = window.setTimeout(() => {
+            const current = toolDisclosureShiftStates.get(root)
+            if (!current || disclosureShiftTotal(root) !== 0) return
+            root.classList.remove("tool-disclosure-shift-root")
+            root.classList.remove("tool-disclosure-shift-instant")
+            root.style.removeProperty("--tool-disclosure-shift-y")
+            toolDisclosureShiftStates.delete(root)
+        }, 340)
+    }
+}
+
+function findToolDisclosureShiftRoot(
+    button: HTMLElement,
+    scrollContainer: HTMLElement
+): HTMLElement | null {
+    const marked = button.closest<HTMLElement>(
+        '[data-chat-message-list="true"], [data-disclosure-shift-root="true"]'
+    )
+    if (marked && marked !== scrollContainer && scrollContainer.contains(marked)) {
+        return marked
+    }
+
+    let root: HTMLElement | null = button
+    while (root?.parentElement && root.parentElement !== scrollContainer) {
+        root = root.parentElement
+    }
+    return root === scrollContainer ? null : root
+}
+
+function renderedDisclosureShift(root: HTMLElement): number {
+    const translate = window.getComputedStyle(root).translate
+    if (!translate || translate === "none") return 0
+    const parts = translate.split(/\s+/)
+    const y = Number.parseFloat(parts[1] ?? parts[0] ?? "0")
+    return Number.isFinite(y) ? Math.max(0, -y) : 0
+}
+
 /**
  * Keep a disclosure row visually fixed while content above it animates. The
- * page's existing scroll container absorbs the layout delta; there is no
- * nested scrollbar or visible scroll animation. A short hold also covers
- * progressively mounted tool details and markdown.
+ * surrounding layout yields upward with CSS translate; scrollTop is never
+ * touched. A short hold also covers progressively mounted details/markdown.
  */
 function useDisclosureAnchor(
     buttonRef: React.RefObject<HTMLButtonElement | null>
 ): (durationMs?: number) => void {
+    const contributionId = React.useId()
     const frameRef = React.useRef<number | null>(null)
-    const interactionCleanupRef = React.useRef<(() => void) | null>(null)
+    const rootRef = React.useRef<HTMLElement | null>(null)
 
     const stop = React.useCallback(() => {
         if (frameRef.current !== null) {
             window.cancelAnimationFrame(frameRef.current)
             frameRef.current = null
         }
-        interactionCleanupRef.current?.()
-        interactionCleanupRef.current = null
     }, [])
 
-    React.useEffect(() => stop, [stop])
+    React.useEffect(() => () => {
+        stop()
+        const root = rootRef.current
+        if (root) setToolDisclosureShift(root, contributionId, 0)
+    }, [contributionId, stop])
 
     return React.useCallback((durationMs = 500) => {
         const button = buttonRef.current
         if (!button || typeof window === "undefined") return
         const scrollContainer = findDisclosureScrollContainer(button)
         if (!scrollContainer) return
+        const root = findToolDisclosureShiftRoot(button, scrollContainer)
+        if (!root) return
 
         stop()
-        const anchorTop = button.getBoundingClientRect().top
-        const holdUntil = window.performance.now() + durationMs
-        const cancelForUserInput = () => stop()
-        scrollContainer.addEventListener("wheel", cancelForUserInput, { passive: true, once: true })
-        scrollContainer.addEventListener("touchstart", cancelForUserInput, { passive: true, once: true })
-        scrollContainer.addEventListener("pointerdown", cancelForUserInput, { passive: true, once: true })
-        interactionCleanupRef.current = () => {
-            scrollContainer.removeEventListener("wheel", cancelForUserInput)
-            scrollContainer.removeEventListener("touchstart", cancelForUserInput)
-            scrollContainer.removeEventListener("pointerdown", cancelForUserInput)
+        if (rootRef.current && rootRef.current !== root) {
+            setToolDisclosureShift(rootRef.current, contributionId, 0)
         }
+        rootRef.current = root
+        const currentOwn = toolDisclosureShiftStates
+            .get(root)
+            ?.contributions.get(contributionId) ?? 0
+        const closedBaseTop =
+            button.getBoundingClientRect().top +
+            renderedDisclosureShift(root) -
+            currentOwn
+        const holdUntil = window.performance.now() + durationMs
         const preserve = () => {
             const currentButton = buttonRef.current
             if (!currentButton) {
                 stop()
                 return
             }
-            const delta = currentButton.getBoundingClientRect().top - anchorTop
-            if (Math.abs(delta) > 0.25) scrollContainer.scrollTop += delta
+            const baseTop =
+                currentButton.getBoundingClientRect().top +
+                renderedDisclosureShift(root)
+            const desired = Math.max(0, baseTop - closedBaseTop)
+            const registered = toolDisclosureShiftStates
+                .get(root)
+                ?.contributions.get(contributionId) ?? 0
+            if (Math.abs(desired - registered) > 0.25) {
+                // The disclosure body already owns the 440ms easing. Applying
+                // another transition to its compensating layout shift makes a
+                // long trace lag behind and visibly jump. Track the body's
+                // measured growth in the same frame instead.
+                setToolDisclosureShift(root, contributionId, desired, { instant: true })
+            }
             if (window.performance.now() < holdUntil) {
                 frameRef.current = window.requestAnimationFrame(preserve)
             } else {
+                setToolDisclosureShift(root, contributionId, desired)
                 stop()
             }
         }
         frameRef.current = window.requestAnimationFrame(preserve)
-    }, [buttonRef, stop])
+    }, [buttonRef, contributionId, stop])
 }
 
 type SearchToolDisplay = "expanded" | "compact"
@@ -163,8 +275,6 @@ const WINDOW_CARDS = 2
 // instead of shaving the first visible card (24).
 const LIVE_WINDOW_CHROME = 76
 const LIVE_COLLAPSED_HEIGHT = WINDOW_CARDS * CARD_UNIT + (WINDOW_CARDS - 1) * CARD_GAP + LIVE_WINDOW_CHROME
-const TOOL_TRACE_MAX_HEIGHT = WINDOW_CARDS * CARD_UNIT + 92
-
 // Finalized collapsed preview (reads from the top): the list's pt-1 (4) plus
 // the bottom overlay hosting "Show more" (h-16 fade + h-8 solid = 96), so the
 // second card clears the fade entirely.
@@ -478,9 +588,7 @@ function ThoughtBlock({
     }, [keepOpenForBrowser])
 
     // Content measurement
-    const headerRef = React.useRef<HTMLButtonElement>(null)
     const contentRef = React.useRef<HTMLDivElement>(null)
-    const scrollRef = React.useRef<HTMLDivElement>(null)
     const [contentHeight, setContentHeight] = React.useState(0)
 
     // Fixed collapsed height — always exactly 2 whole tool cards, so the
@@ -488,8 +596,11 @@ function ThoughtBlock({
     const collapsedHeight = isLiveTurn ? LIVE_COLLAPSED_HEIGHT : COLLAPSED_HEIGHT
     const isCollapsible = contentHeight > collapsedHeight + 40
     const visibleContentHeight = isExpanded || !isCollapsible
-        ? (contentHeight > 0 ? `${Math.min(contentHeight, TOOL_TRACE_MAX_HEIGHT)}px` : "none")
+        ? (contentHeight > 0 ? `${contentHeight}px` : "none")
         : `${collapsedHeight}px`
+    const liveCollapsedOffset = !isExpanded && isCollapsible && isLiveStreaming
+        ? Math.max(0, contentHeight - collapsedHeight)
+        : 0
 
     // Measure content
     React.useEffect(() => {
@@ -529,26 +640,6 @@ function ThoughtBlock({
         }
         wasStreamingRef.current = isLiveTurn
     }, [autoExpand, hasStoredOpen, isLiveTurn, keepOpenForBrowser, shouldDefaultExpand, thoughtAutoOpen, updateOpen])
-
-    // Auto-scroll content during streaming. Keep the live viewport hard-pinned:
-    // smooth scroll animations fight character-level reasoning deltas and make
-    // the panel drift up, then snap back, while text is still arriving.
-    React.useEffect(() => {
-        if (!isOpen || !scrollRef.current || isExpanded) {
-            return
-        }
-        if (!isLiveStreaming) {
-            requestAnimationFrame(() => {
-                if (scrollRef.current) scrollRef.current.scrollTop = 0
-            })
-            return
-        }
-        requestAnimationFrame(() => {
-            const node = scrollRef.current
-            if (!node) return
-            node.scrollTop = node.scrollHeight
-        })
-    }, [reasoning, isOpen, isExpanded, isLiveStreaming])
 
     const [isMounted, setIsMounted] = React.useState(false)
     React.useEffect(() => { setIsMounted(true) }, [])
@@ -600,7 +691,6 @@ function ThoughtBlock({
     return (
         <div className="flex w-full min-w-0 flex-col">
             <button
-                ref={headerRef}
                 type="button"
                 onClick={() => {
                     const next = !isOpen
@@ -649,16 +739,23 @@ function ThoughtBlock({
                             <div className="absolute left-[7.5px] top-[11px] bottom-[13px] w-[1.5px] bg-border/60" />
                             <div className="relative pb-[10px]">
                                 <div
-                                    ref={scrollRef}
                                     className={cn(
-                                        "tool-call-scroll text-[14px] leading-relaxed text-muted-foreground overflow-y-auto overflow-x-hidden overscroll-contain relative [scrollbar-gutter:stable]",
+                                        "relative overflow-hidden text-[14px] leading-relaxed text-muted-foreground",
                                         isMounted && !isLiveTurn && "transition-[max-height] duration-[360ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[max-height]"
                                     )}
                                     style={{
                                         maxHeight: visibleContentHeight
                                     }}
                                 >
-                                    <div ref={contentRef}>
+                                    <div
+                                        ref={contentRef}
+                                        className="transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
+                                        style={
+                                            liveCollapsedOffset > 0
+                                                ? { transform: `translateY(-${liveCollapsedOffset}px)` }
+                                                : undefined
+                                        }
+                                    >
                                         {isShowingContent && reasoning.length > 0 ? (
                                             <div className="mb-2 flex flex-col gap-2 pt-1">
                                                 <ReasoningEntryList
@@ -702,7 +799,6 @@ function ThoughtBlock({
                                                 onClick={() => {
                                                     updateExpanded(true)
                                                     userOpenedRef.current = true
-                                                    if (scrollRef.current) scrollRef.current.scrollTop = 0
                                                     window.dispatchEvent(new Event("stop-chat-autoscroll"))
                                                 }}
                                                 className="text-[13px] text-muted-foreground hover:text-foreground"
@@ -715,18 +811,12 @@ function ThoughtBlock({
 
                                 {isCollapsible && isExpanded && (
                                     <div className="mt-2 relative z-20">
-                                        <button
-                                            type="button"
-                                            onClick={() => {
-                                                updateExpanded(false)
-                                                // After a long expansion the header is scrolled far
-                                                // above the viewport; bring it back so the dropdown
-                                                // is one easy click away from closing.
-                                                requestAnimationFrame(() => {
-                                                    headerRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" })
-                                                })
-                                                window.dispatchEvent(new Event("stop-chat-autoscroll"))
-                                            }}
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    updateExpanded(false)
+                                                    window.dispatchEvent(new Event("stop-chat-autoscroll"))
+                                                }}
                                             className="text-[13px] text-muted-foreground hover:text-foreground"
                                         >
                                             Show less
@@ -1341,9 +1431,10 @@ function ToolCallBlock({
     onLoadDetails?: (toolCallId: string) => Promise<ToolCallReasoningEntry>
 }) {
     const buttonRef = React.useRef<HTMLButtonElement | null>(null)
-    const wasOpenRef = React.useRef(false)
-    const [openDirection, setOpenDirection] = React.useState<"up" | "down">("down")
-    const beginAnchorHold = useDisclosureAnchor(buttonRef)
+    const shiftContributionId = React.useId()
+    const shiftUpRef = React.useRef(false)
+    const preparedShiftRootRef = React.useRef<HTMLElement | null>(null)
+    const registeredShiftRootRef = React.useRef<HTMLElement | null>(null)
     const [loadedEntry, setLoadedEntry] = React.useState<ToolCallReasoningEntry | null>(null)
     const [loading, setLoading] = React.useState(false)
     const [loadError, setLoadError] = React.useState<string | null>(null)
@@ -1355,6 +1446,65 @@ function ToolCallBlock({
     const bodyReady = !entry.detailsDeferred || loadedEntry !== null
     const canOpen = bodyReady || Boolean(onLoadDetails)
 
+    const prepareLayoutShift = React.useCallback(() => {
+        const button = buttonRef.current
+        if (!button || typeof window === "undefined") {
+            shiftUpRef.current = false
+            preparedShiftRootRef.current = null
+            return
+        }
+        const scrollContainer = findDisclosureScrollContainer(button)
+        if (!scrollContainer) {
+            shiftUpRef.current = false
+            preparedShiftRootRef.current = null
+            return
+        }
+        const root = findToolDisclosureShiftRoot(button, scrollContainer)
+        if (!root) {
+            shiftUpRef.current = false
+            preparedShiftRootRef.current = null
+            return
+        }
+
+        const containerTop = scrollContainer === document.scrollingElement
+            ? 0
+            : scrollContainer.getBoundingClientRect().top
+        preparedShiftRootRef.current = root
+        // Decide from the row's actual painted position. The root may already
+        // be shifted by an outer Worked-for disclosure; adding that existing
+        // compensation back here misclassifies a row near the viewport top as
+        // "low" and opens it upward off-screen.
+        shiftUpRef.current =
+            button.getBoundingClientRect().top - containerTop >=
+            TOOL_CALL_CARD_HEIGHT + 12
+    }, [])
+
+    useIsomorphicLayoutEffect(() => {
+        const nextRoot = preparedShiftRootRef.current
+        const registeredRoot = registeredShiftRootRef.current
+        if (registeredRoot && registeredRoot !== nextRoot) {
+            setToolDisclosureShift(registeredRoot, shiftContributionId, 0)
+            registeredShiftRootRef.current = null
+        }
+
+        if (open && bodyReady && shiftUpRef.current && nextRoot) {
+            setToolDisclosureShift(
+                nextRoot,
+                shiftContributionId,
+                TOOL_CALL_CARD_HEIGHT + 4
+            )
+            registeredShiftRootRef.current = nextRoot
+        } else if (registeredRoot) {
+            setToolDisclosureShift(registeredRoot, shiftContributionId, 0)
+            registeredShiftRootRef.current = null
+        }
+    }, [bodyReady, open, shiftContributionId])
+
+    React.useEffect(() => () => {
+        const root = registeredShiftRootRef.current
+        if (root) setToolDisclosureShift(root, shiftContributionId, 0)
+    }, [shiftContributionId])
+
     React.useEffect(() => {
         if (!open || !bodyReady) {
             setDetailsVisible(false)
@@ -1363,27 +1513,6 @@ function ToolCallBlock({
         const frame = window.requestAnimationFrame(() => setDetailsVisible(true))
         return () => window.cancelAnimationFrame(frame)
     }, [bodyReady, open])
-
-    const chooseOpenDirection = React.useCallback(() => {
-        const button = buttonRef.current
-        if (!button || typeof window === "undefined") return "down" as const
-        const rect = button.getBoundingClientRect()
-        const requiredSpace = TOOL_CALL_CARD_HEIGHT + 12
-        const direction = rect.top >= requiredSpace ? "up" : "down"
-        setOpenDirection(direction)
-        return direction
-    }, [])
-
-    useIsomorphicLayoutEffect(() => {
-        if (open === wasOpenRef.current) return
-        if (open) {
-            const direction = chooseOpenDirection()
-            if (direction === "up") beginAnchorHold(700)
-        } else if (openDirection === "up") {
-            beginAnchorHold(700)
-        }
-        wasOpenRef.current = open
-    }, [beginAnchorHold, chooseOpenDirection, open, openDirection])
 
     React.useEffect(() => {
         if (!open || !entry.detailsDeferred || !onLoadDetails || resolvedEntry.status !== "running") return
@@ -1411,6 +1540,8 @@ function ToolCallBlock({
     const handleToggle = React.useCallback(() => {
         const opening = !open
         if (opening && !canOpen) return
+        window.dispatchEvent(new Event("stop-chat-autoscroll"))
+        if (opening) prepareLayoutShift()
         onToggle()
         if (!opening || bodyReady || loading) return
         if (!onLoadDetails) return
@@ -1422,7 +1553,7 @@ function ToolCallBlock({
                 setLoadError(error instanceof Error ? error.message : "Failed to load tool details.")
             })
             .finally(() => setLoading(false))
-    }, [bodyReady, canOpen, entry.toolCallId, loading, onLoadDetails, onToggle, open])
+    }, [bodyReady, canOpen, entry.toolCallId, loading, onLoadDetails, onToggle, open, prepareLayoutShift])
 
     const Icon = isWebSearchToolCall(resolvedEntry)
         ? Search
@@ -1435,7 +1566,6 @@ function ToolCallBlock({
             aria-hidden={!detailsVisible}
             className={cn(
                 "grid min-w-0 will-change-[grid-template-rows,opacity] transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
-                openDirection === "up" ? "order-0" : "order-2",
                 detailsVisible ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
             )}
         >
@@ -1445,10 +1575,8 @@ function ToolCallBlock({
                         "transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
                         detailsVisible
                             ? "translate-y-0 opacity-100"
-                            : openDirection === "up"
-                                ? "translate-y-1 opacity-0"
-                                : "-translate-y-1 opacity-0",
-                        openDirection === "up" ? "mb-1" : "mt-1"
+                            : "-translate-y-1 opacity-0",
+                        "mt-1"
                     )}
                 >
                     <InlineToolCallView
@@ -1472,7 +1600,6 @@ function ToolCallBlock({
                 disabled={!canOpen}
                 className={cn(
                     "group flex w-full min-w-0 items-center gap-3 py-1 text-left",
-                    openDirection === "up" ? "order-1" : "order-0",
                     status === "error" ? "text-destructive" : "text-muted-foreground hover:text-foreground",
                     !canOpen && "cursor-default hover:text-muted-foreground"
                 )}
@@ -1504,7 +1631,7 @@ function ToolCallBlock({
             </button>
 
             {open && loadError && (
-                <div className="order-1 ml-7 py-1 text-[12px] text-destructive">{loadError}</div>
+                <div className="ml-7 py-1 text-[12px] text-destructive">{loadError}</div>
             )}
             {detailsPanel}
         </div>

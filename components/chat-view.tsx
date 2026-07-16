@@ -2931,6 +2931,20 @@ export function ChatView() {
     ]
   )
 
+  const handleLoadStreamingToolCallDetails = React.useCallback(
+    (toolCallId: string) => {
+      if (!conversationId || !activeStreamingMessageId) {
+        return Promise.reject(new Error("No source message for streaming tool"))
+      }
+      return loadToolCallDetails(
+        conversationId,
+        activeStreamingMessageId,
+        toolCallId
+      )
+    },
+    [activeStreamingMessageId, conversationId, loadToolCallDetails]
+  )
+
   const hasArtifact =
     (artifactOpen && !!artifact) ||
     !!genArtifact ||
@@ -3496,7 +3510,12 @@ export function ChatView() {
                               onArtifactExpand={handleArtifactExpand}
                               onAgentOpen={handleAgentOpen}
                               onAttachmentClick={openPreview}
-                              messageId={state.streamingMessageId ?? undefined}
+                              onLoadToolCallDetails={
+                                activeStreamingMessageId
+                                  ? handleLoadStreamingToolCallDetails
+                                  : undefined
+                              }
+                              messageId={activeStreamingMessageId ?? undefined}
                               thinkingSeconds={state.thinkingSeconds}
                               thinkingDone={state.thinkingDone}
                             />

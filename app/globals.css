@@ -830,3 +830,20 @@ html[data-orch-home-page="true"] body {
     backdrop-filter: none !important;
   }
 }
+
+/* A low tool disclosure keeps its title above its card while the surrounding
+   page content yields upward. This is a visual layout shift, never a scrollTop
+   mutation, and composes with existing `transform` animations through the
+   independent CSS translate property. */
+.tool-disclosure-shift-root {
+  translate: 0 var(--tool-disclosure-shift-y, 0px);
+  transition: translate 300ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: translate;
+}
+
+/* A progressively mounted Worked-for trace already animates its own height.
+   Its matching layout compensation must follow that height frame-for-frame;
+   easing it a second time causes the disclosure row to jump. */
+.tool-disclosure-shift-root.tool-disclosure-shift-instant {
+  transition: none;
+}

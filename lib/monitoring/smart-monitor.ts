@@ -347,6 +347,7 @@ export function buildSmartMonitorAgentPrompt(options: {
     lines.push('- Notify Inbox only for things that are important, time-sensitive, personally directed, account/security/payment related, deadline/travel/order affecting, operationally relevant, or clearly actionable under the watch intent.')
     lines.push('- For non-urgent accumulated items, summarize only when the watch/user preference calls for it or the volume is meaningfully high. Otherwise stay silent.')
     lines.push('- Digest behavior is model-owned, not a fixed watch policy. If items should be batched for a later summary, store a compact digestQueue/lastDigestAt in task_state and widen your minimum sleep so the next wake lands at the digest time.')
+    lines.push('- Learned suppress patterns have no numeric cap: never stop learning or fail a watch merely because it has many. Roughly once every 7 days, preferably on a quiet safety-ceiling wake, audit every watch\'s patterns and stamp lastSuppressPatternAuditAt in task_state. Remove expired, duplicate, contradictory, clearly obsolete, invalid, or dangerously broad patterns with monitor_wake_feedback.remove_suppress_pattern_ids. Keep useful durable filters, and do not delete one merely because its hit count is zero. This housekeeping stays silent unless you discover a real user-visible monitoring risk.')
     lines.push('- Never perform source-side write actions unless the watch allowed action explicitly permits it AND the user already approved the exact rule/action boundary. Notify-only remains the default.')
     lines.push('- When a surfaced item leaves the user with an obvious decision, include notify_inbox `actions` with short quick-reply labels. Use actions for archive/keep, mark read/unread, approve/skip, reply/dismiss, summarize now/later, or review-first choices; do not make the user type the same command manually.')
     lines.push('- For triage/digest messages, especially Gmail or WhatsApp routine cleanup, include 2-4 actions when you mention candidates. Example labels: "Archive candidates", "Keep all", "Review first". Each action value must state the exact scope and tell the agent to skip ambiguous items.')
@@ -367,7 +368,7 @@ export function buildSmartMonitorAgentPrompt(options: {
     lines.push(`  • maxWakeGapMs — safety ceiling. Currently ~${maxHours}h. You will be woken at least this often even with zero detected changes, to re-derive intent / flush digests / run due custom checks. Widen it during long quiet stretches, tighten it if you need guaranteed periodic housekeeping.`)
     lines.push('- Do NOT touch the reserved `_smartGate` field in task_state; the engine owns it (last wake time + buffered items). Changing it can drop pending notifications.')
     lines.push('- Quiet-hour preferences are context, not a hard gate. Use local time, task history, and urgency to decide whether to notify now, defer, or widen minWakeGapMs.')
-    lines.push('- Always call set_task_state with the full updated small state: per-source watermarks/lastSeen ids, quietRuns/activeRuns, lastNotifiedAt, lastCheckedAt, digestQueue/lastDigestAt if useful, minWakeGapMs/maxWakeGapMs, and any useful time-of-day signal.')
+    lines.push('- Always call set_task_state with the full updated small state: per-source watermarks/lastSeen ids, quietRuns/activeRuns, lastNotifiedAt, lastCheckedAt, digestQueue/lastDigestAt if useful, lastSuppressPatternAuditAt after a completed pattern audit, minWakeGapMs/maxWakeGapMs, and any useful time-of-day signal.')
     lines.push('')
     lines.push(...buildRuntimeTimeBlock(now, watches))
     lines.push('')
@@ -425,9 +426,13 @@ export function buildSmartMonitorAgentPrompt(options: {
         }
 
         const active = w.suppressPatterns.filter((p) => p.expiresAt === null || p.expiresAt > now)
-        if (active.length > 0) {
-            lines.push('Learned suppress patterns to consider:')
-            for (const p of active) lines.push(`  - ${renderSuppressPattern(p)}`)
+        const expired = w.suppressPatterns.length - active.length
+        if (w.suppressPatterns.length > 0) {
+            lines.push(`Learned suppress patterns (${active.length} active, ${expired} expired; storage is unbounded):`)
+            for (const p of w.suppressPatterns) {
+                const status = p.expiresAt !== null && p.expiresAt <= now ? 'expired' : 'active'
+                lines.push(`  - [${status}] ${renderSuppressPattern(p)}`)
+            }
         }
         lines.push('')
     }

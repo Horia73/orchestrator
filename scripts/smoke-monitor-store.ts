@@ -247,6 +247,17 @@ async function main(): Promise<void> {
     const removed = removeSuppressPattern(created.id, pattern!.id)
     check('removeSuppressPattern returns true', removed === true)
 
+    // Regression: learned patterns are durable and intentionally unbounded.
+    // Crossing the old 64-entry ceiling must not make the watch unreadable.
+    for (let i = 0; i < 70; i++) {
+        addSuppressPattern(created.id, {
+            reason: `learned noise pattern ${i}`,
+            rule: { kind: 'gmail_subject_contains', substrings: [`noise-${i}`] },
+        })
+    }
+    const beyondLegacyLimit = getMonitorWatch(created.id)
+    check('suppress patterns remain readable beyond legacy limit', beyondLegacyLimit?.suppressPatterns.length === 70)
+
     // ---- 10. Watch events: append, list, kinds, prune -----------------------
     for (let i = 0; i < 5; i++) {
         recordWatchEvent(created.id, 'check', { i })

@@ -651,6 +651,12 @@ function deferReasoningToolDetails(
 ): ReasoningEntry[] | undefined {
   return reasoning?.map((entry) => {
     if (entry.type === "tool_call") {
+      // TodoWrite is hidden from the tool transcript, but its small arguments
+      // drive the persistent TodoBar above the composer. Deferring those args
+      // makes the bar disappear every time the live 2.5s recovery snapshot
+      // replaces the richer SSE state, then reappear on the next todo event.
+      // Keep this UI state carrier intact while heavy visible tools remain lazy.
+      if (entry.toolName === "TodoWrite") return entry
       return {
         ...entry,
         content: "",
