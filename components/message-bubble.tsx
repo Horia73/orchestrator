@@ -260,12 +260,12 @@ function parseBackgroundJobNotice(content: string): { headline: string; body: st
 // ThoughtBlock helpers
 // ---------------------------------------------------------------------------
 
-// Collapsed thought windows are sized in whole tool cards. Every boxed
-// tool-call panel renders at the same fixed height (TOOL_CALL_CARD_HEIGHT,
-// shared with tool-call-view), so the clipped preview always ends on a card
-// boundary and "Show more" only appears after 2 complete cards — the same on
-// desktop and mobile; there is no step-down to 1 card or per-device floor.
-const CARD_UNIT = TOOL_CALL_CARD_HEIGHT
+// Collapsed thought windows are sized in whole tool blocks: the disclosure
+// title row, the small gap below it, and the fixed-height detail card. Counting
+// only TOOL_CALL_CARD_HEIGHT clips the titles off the two-card promise.
+const TOOL_TITLE_HEIGHT = 28 // text line + the title button's py-1
+const TOOL_PANEL_GAP = 4 // details panel's mt-1
+const TOOL_BLOCK_UNIT = TOOL_TITLE_HEIGHT + TOOL_PANEL_GAP + TOOL_CALL_CARD_HEIGHT
 const CARD_GAP = 8 // the entry list's gap-2
 const WINDOW_CARDS = 2
 
@@ -274,11 +274,11 @@ const WINDOW_CARDS = 2
 // spacer (40), and headroom so the h-6 top gradient fades the previous entry
 // instead of shaving the first visible card (24).
 const LIVE_WINDOW_CHROME = 76
-const LIVE_COLLAPSED_HEIGHT = WINDOW_CARDS * CARD_UNIT + (WINDOW_CARDS - 1) * CARD_GAP + LIVE_WINDOW_CHROME
+const LIVE_COLLAPSED_HEIGHT = WINDOW_CARDS * TOOL_BLOCK_UNIT + (WINDOW_CARDS - 1) * CARD_GAP + LIVE_WINDOW_CHROME
 // Finalized collapsed preview (reads from the top): the list's pt-1 (4) plus
 // the bottom overlay hosting "Show more" (h-16 fade + h-8 solid = 96), so the
 // second card clears the fade entirely.
-const COLLAPSED_HEIGHT = WINDOW_CARDS * CARD_UNIT + (WINDOW_CARDS - 1) * CARD_GAP + 4 + 96
+const COLLAPSED_HEIGHT = WINDOW_CARDS * TOOL_BLOCK_UNIT + (WINDOW_CARDS - 1) * CARD_GAP + 4 + 96
 const WORKED_DETAILS_INITIAL_BUDGET = 10
 const WORKED_DETAILS_RENDER_CHUNK = 18
 const WORKED_DETAILS_CHUNK_DELAY_MS = 24
@@ -749,7 +749,13 @@ function ThoughtBlock({
                                 >
                                     <div
                                         ref={contentRef}
-                                        className="transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
+                                        className={cn(
+                                            // The card already animates its own height. During a
+                                            // live turn this bottom-anchor must track that height
+                                            // in the same frame; a second easing curve continually
+                                            // retargets and reads as jitter when a new tool arrives.
+                                            !isLiveStreaming && "transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
+                                        )}
                                         style={
                                             liveCollapsedOffset > 0
                                                 ? { transform: `translateY(-${liveCollapsedOffset}px)` }
@@ -1159,12 +1165,14 @@ function ReasoningEntryList({
         new Set(isLive ? toolIds.slice(-2) : [])
     )
 
-    React.useEffect(() => {
+    useIsomorphicLayoutEffect(() => {
         if (!isLive) return
         setOpenToolIds(new Set(toolIds.slice(-2)))
+        // Apply the new two-tool window before paint. A passive effect exposes
+        // one frame where the new row is closed and the old third row is still
+        // open, so both card animations start from visibly inconsistent state.
         // Status/output updates preserve the same ids, so a manual close is not
         // undone until a genuinely new tool starts.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isLive, liveToolKey])
 
     const toggleTool = React.useCallback((toolCallId: string) => {
@@ -1507,7 +1515,7 @@ function ToolCallBlock({
         if (root) setToolDisclosureShift(root, shiftContributionId, 0)
     }, [shiftContributionId])
 
-    React.useEffect(() => {
+    useIsomorphicLayoutEffect(() => {
         if (!open || !bodyReady) {
             setDetailsVisible(false)
             return
