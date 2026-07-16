@@ -164,6 +164,7 @@ import { writeFileSync } from "node:fs"
 const send = value => process.stdout.write(JSON.stringify(value) + "\\n")
 const parentViolation = process.env.FAKE_PARENT_VIOLATION === "1"
 const asyncDelegation = process.env.FAKE_ASYNC_DELEGATION === "1"
+const codeModeWait = process.env.FAKE_CODE_MODE_WAIT === "1"
 const rl = readline.createInterface({ input: process.stdin })
 rl.on("line", line => {
   const message = JSON.parse(line)
@@ -196,7 +197,9 @@ rl.on("line", line => {
     return
   }
   if (message.method === "thread/resume") {
-    writeFileSync(process.env.FAKE_CAPTURE_PATH, JSON.stringify({ method: message.method, params: message.params }))
+    if (process.env.FAKE_CAPTURE_PATH) {
+      writeFileSync(process.env.FAKE_CAPTURE_PATH, JSON.stringify({ method: message.method, params: message.params }))
+    }
     send({ id: message.id, result: { thread: { id: message.params.threadId } } })
     return
   }
@@ -232,6 +235,21 @@ rl.on("line", line => {
     send({ method: "item/completed", params: { item: {
       id: "pre-delegation-reasoning", type: "reasoning",
     } } })
+    if (codeModeWait) {
+      // A legacy flat dynamic tool can be called from inside Code Mode. Once
+      // exec yields its live cell, Codex starts a small reasoning item before
+      // issuing the provider-internal wait(cell_id) call. That reasoning must
+      // stay invisible without being mistaken for parent work.
+      send({ method: "item/started", params: { item: {
+        id: "code-mode-wait-reasoning", type: "reasoning",
+      } } })
+      send({ method: "item/reasoning/summaryTextDelta", params: {
+        itemId: "code-mode-wait-reasoning", delta: "Wait for the live Code Mode cell.",
+      } })
+      send({ method: "item/completed", params: { item: {
+        id: "code-mode-wait-reasoning", type: "reasoning",
+      } } })
+    }
     if (parentViolation) {
       send({ method: "item/started", params: { item: {
         id: "forbidden-shell", type: "commandExecution", command: "git status --short", cwd: "/tmp",
@@ -289,13 +307,51 @@ rl.on("line", line => {
   }
   assert.equal(capture.method, "thread/resume")
   assert.equal(capture.params.threadId, "legacy-thread")
-  assert.equal(capture.params.dynamicTools?.[0]?.type, "namespace")
-  assert.equal(capture.params.dynamicTools?.[0]?.name, "orchestrator")
-  assert.equal(capture.params.dynamicTools?.[0]?.tools?.[0]?.name, "delegate_to")
+  assert.equal(
+    capture.params.dynamicTools,
+    undefined,
+    "Codex 0.144.x cannot replace a thread's stored dynamic-tool catalog during resume"
+  )
   assert.deepEqual(
     capture.params.config?.features?.code_mode?.direct_only_tool_namespaces,
     ["orchestrator"],
-    "thread/resume must replace a legacy flat catalog with direct-only namespaced tools"
+    "thread/resume should still apply the current direct-only process configuration"
+  )
+
+  const codeModeWaitErrors: string[] = []
+  const codeModeWaitToolCalls: string[] = []
+  const codeModeWaitThinking: string[] = []
+  const codeModeWaitContent: string[] = []
+  process.env.FAKE_CODE_MODE_WAIT = "1"
+  try {
+    await codexProviderTestHooks.runCodexAppServer({
+      bin: fakeCodex,
+      prompt: "Exercise a legacy Code Mode delegation wait.",
+      model: "gpt-5.6-sol",
+      tools: [delegateToTool],
+      builtins: [],
+      prevSession: { threadId: "legacy-thread" },
+      nativeCoderRun: false,
+      callbacks: {
+        onThinking(text) { codeModeWaitThinking.push(text) },
+        onThinkingDone() {},
+        onContent(text) { codeModeWaitContent.push(text) },
+        onToolCall(call) { codeModeWaitToolCalls.push(call.name) },
+        onToolResult() {},
+        onDone() {},
+        onError(error) { codeModeWaitErrors.push(error) },
+      },
+    })
+  } finally {
+    delete process.env.FAKE_CODE_MODE_WAIT
+  }
+  assert.deepEqual(codeModeWaitErrors, [], "Code Mode's native wait cycle must not abort the parent")
+  assert.equal(codeModeWaitContent.join(""), "DONE")
+  assert.deepEqual(codeModeWaitToolCalls, ["delegate_to"])
+  assert.equal(
+    codeModeWaitThinking.join(""),
+    "Delegate synchronously.",
+    "Internal wait-loop reasoning must stay out of the user-visible thinking stream"
   )
 
   const violationErrors: string[] = []

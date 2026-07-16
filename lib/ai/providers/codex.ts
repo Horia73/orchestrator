@@ -235,6 +235,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
         const messageTextByItem = new Map<string, string>()
         const blockingDelegations = new Set<string>()
         const activeReasoningItems = new Set<string>()
+        const delegationWaitReasoningItems = new Set<string>()
         let parentActivityViolation = false
         let thinkingStartedAt: number | null = null
         let thinkingTotalMs = 0
@@ -696,8 +697,20 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                     const delta = typeof params?.delta === 'string' ? params.delta : ''
                     if (!delta) return
                     const itemId = typeof params?.itemId === 'string' ? params.itemId : ''
+                    if (delegationWaitReasoningItems.has(itemId)) return
                     const beganBeforeDelegation = itemId !== '' && activeReasoningItems.has(itemId)
-                    if (!beganBeforeDelegation && stopParentActivityDuringDelegation('reasoning')) return
+                    if (!beganBeforeDelegation && blockingDelegations.size > 0) {
+                        // Legacy Codex threads can retain their original flat
+                        // dynamic-tool catalog because thread/resume cannot
+                        // replace dynamicTools. A synchronous delegation then
+                        // runs inside a Code Mode cell: after exec yields, Codex
+                        // must briefly reason before issuing the native wait
+                        // call for that live cell. Suppress that internal wait
+                        // reasoning while the normal activity guard continues
+                        // to block messages and every observable parent tool.
+                        if (itemId) delegationWaitReasoningItems.add(itemId)
+                        return
+                    }
                     if (thinkingStartedAt === null) thinkingStartedAt = Date.now()
                     callbacks.onThinking(delta)
                     return
@@ -777,6 +790,14 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
         const handleItemStarted = (item?: AnyObj) => {
             if (!item || typeof item.id !== 'string') return
             const itemType = item.type as string | undefined
+            if (itemType === 'reasoning' && blockingDelegations.size > 0) {
+                // Code Mode's exec -> wait control loop is safe parent-idle
+                // machinery, not resumed user-visible work. The wait tool is
+                // executed internally by Codex; any subsequent shell, file,
+                // MCP, dynamic-tool, or message item still fails closed below.
+                delegationWaitReasoningItems.add(item.id)
+                return
+            }
             if (itemType !== 'dynamicToolCall' && stopParentActivityDuringDelegation(itemType ?? 'tool')) {
                 return
             }
@@ -825,6 +846,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
             }
 
             if (itemType === 'reasoning') {
+                if (delegationWaitReasoningItems.delete(item.id)) return
                 const beganBeforeDelegation = activeReasoningItems.delete(item.id)
                 if (!beganBeforeDelegation && stopParentActivityDuringDelegation('reasoning')) return
                 closeThinking()
@@ -939,13 +961,16 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                 let threadResult: AnyObj
                 if (prevSession) {
                     try {
-                        // Supplying dynamicTools on resume replaces the stored
-                        // catalog. This upgrades both unversioned and former
-                        // appserver:direct sessions without inheriting a flat,
-                        // code-mode-wrapped catalog through thread/fork.
+                        // Codex 0.144.x accepts dynamicTools only on
+                        // thread/start. A resumed thread retains the catalog it
+                        // was born with, so do not pretend this field upgrades
+                        // legacy flat catalogs. The delegation activity guard
+                        // above supports their native exec -> wait lifecycle.
+                        const resumeParams = { ...threadParams }
+                        delete resumeParams.dynamicTools
                         threadResult = await request('thread/resume', {
                             threadId: prevSession.threadId,
-                            ...threadParams,
+                            ...resumeParams,
                         }) as AnyObj
                     } catch (err) {
                         rememberDiagnostic(`resume failed: ${err instanceof Error ? err.message : String(err)}`)
