@@ -646,7 +646,7 @@ function ensureDefaultAdminProfile(database: Database.Database): void {
     )
     .run(
       ADMIN_PROFILE_ID,
-      "Horia",
+      process.env.ORCHESTRATOR_ADMIN_NAME?.trim() || "Admin",
       "#2f6f73",
       pinData?.hash ?? null,
       pinData?.salt ?? null,

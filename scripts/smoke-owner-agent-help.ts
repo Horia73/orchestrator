@@ -23,6 +23,7 @@ const { getToolsForAgent } = await import("@/lib/ai/tools/registry")
 const {
   executeCompleteOwnerAgentHelp,
   executeRequestOwnerAgentHelp,
+  OWNER_ASSISTANCE_POLICY,
   REQUEST_OWNER_AGENT_HELP_TOOL_ID,
 } = await import("@/lib/ai/tools/owner-agent-help")
 const {
@@ -81,21 +82,35 @@ check(
 const enabledOwnerHelpTool = enabledTools.find(
   (tool) => tool.id === REQUEST_OWNER_AGENT_HELP_TOOL_ID,
 )
+const ownerRoutingPolicy =
+  ORCHESTRATOR_ACTION_POLICY.match(
+    /<owner_agent_routing>[\s\S]*?<\/owner_agent_routing>/,
+  )?.[0] ?? ""
 check(
-  "owner help tool replaces email wording for internal owner assistance",
-  enabledOwnerHelpTool?.description.includes(
-    "even when the user literally says to email him",
-  ),
+  "owner help tool is limited to genuine admin blockers",
+  enabledOwnerHelpTool?.description.includes("genuinely blocked") &&
+    enabledOwnerHelpTool.description.includes("project_dev") &&
+    enabledOwnerHelpTool.description.includes("standing-authorized"),
   enabledOwnerHelpTool?.description,
 )
 check(
-  "orchestrator policy makes internal owner help the primary route",
-  ORCHESTRATOR_ACTION_POLICY.includes(
-    "Purpose outranks channel wording",
-  ) &&
-    ORCHESTRATOR_ACTION_POLICY.includes(
-      "do not activate Gmail, Resend, WhatsApp",
+  "orchestrator policy sends only genuine admin blockers to owner help",
+  ownerRoutingPolicy.includes("genuinely blocked") &&
+    ownerRoutingPolicy.includes(
+      "project_dev\` and does not require admin help",
     ),
+)
+check(
+  "owner help routing has no hardcoded person or channel workaround",
+  [
+    enabledOwnerHelpTool?.description ?? "",
+    ownerRoutingPolicy,
+    OWNER_ASSISTANCE_POLICY,
+  ].every(
+    (text) =>
+      !text.includes("admin_horia") &&
+      !/\b(email|gmail|resend|whatsapp)\b/i.test(text),
+  ),
 )
 check(
   "owner help hidden from the admin agent",
