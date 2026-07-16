@@ -33,8 +33,10 @@ export const requestOwnerAgentHelpTool: ToolDef = {
   id: REQUEST_OWNER_AGENT_HELP_TOOL_ID,
   name: REQUEST_OWNER_AGENT_HELP_TOOL_ID,
   description: [
-    "Ask the built-in admin profile's personal agent for internal help and wait for its result.",
-    "Use this only when owner-level context, judgment, or tools could resolve a blocker more cleanly than contacting the owner by email or another external channel.",
+    "Primary internal route for asking the built-in admin profile's personal agent for help and waiting for its result.",
+    "Use this whenever Horia's context, judgment, authorization routing, or owner-scoped tools could resolve a blocker.",
+    "If the profile user says to ask, tell, message, or email Horia in order to get help, approval, access, a decision, or an internal action, call this tool instead of sending an email or other external message—even when the user literally says to email him.",
+    "Use external email only when the email itself is the intended deliverable, not as transport for an internal owner-assistance request.",
     "The owner agent runs inside the admin profile under its own policies, permissions, memory, and integrations. It may answer, do already-authorized owner-scoped work, or escalate to the owner's in-app Inbox.",
     "This request is NOT human approval, does not transfer admin permissions, and does not satisfy confirmed_by_user for a sensitive or external action. Do not include passwords, tokens, or unnecessary private data.",
     "The tool is opt-in per profile and rate-limited. Return its response to the profile user without claiming the owner personally approved anything unless the response explicitly says a standing authorization was found.",

@@ -16,6 +16,9 @@ function check(label: string, condition: unknown, detail?: unknown) {
 }
 
 const { orchestrator } = await import("@/lib/ai/agents/orchestrator")
+const { ORCHESTRATOR_ACTION_POLICY } = await import(
+  "@/lib/ai/prompts/orchestrator/action-policy"
+)
 const { getToolsForAgent } = await import("@/lib/ai/tools/registry")
 const {
   executeCompleteOwnerAgentHelp,
@@ -74,6 +77,25 @@ check(
 check(
   "owner help exposed when member permission is on",
   enabledTools.some((tool) => tool.id === REQUEST_OWNER_AGENT_HELP_TOOL_ID),
+)
+const enabledOwnerHelpTool = enabledTools.find(
+  (tool) => tool.id === REQUEST_OWNER_AGENT_HELP_TOOL_ID,
+)
+check(
+  "owner help tool replaces email wording for internal owner assistance",
+  enabledOwnerHelpTool?.description.includes(
+    "even when the user literally says to email him",
+  ),
+  enabledOwnerHelpTool?.description,
+)
+check(
+  "orchestrator policy makes internal owner help the primary route",
+  ORCHESTRATOR_ACTION_POLICY.includes(
+    "Purpose outranks channel wording",
+  ) &&
+    ORCHESTRATOR_ACTION_POLICY.includes(
+      "do not activate Gmail, Resend, WhatsApp",
+    ),
 )
 check(
   "owner help hidden from the admin agent",
