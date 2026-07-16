@@ -875,6 +875,7 @@ export async function POST(request: Request) {
         : ""
       let terminalMessageStatus: Message["status"] | null = null
       let terminalStreamError: string | null = null
+      let terminalPersistedAt: number | null = null
       const persistedArtifactsThisTurn: ArtifactRow[] = []
 
       const persistAssistantProgress = (opts?: {
@@ -906,6 +907,9 @@ export async function POST(request: Request) {
           effectiveStatus === "ok" ||
           effectiveStatus === "error" ||
           effectiveStatus === "aborted"
+        const persistedAt = isTerminalPersist
+          ? (terminalPersistedAt ??= now)
+          : assistantMsg.timestamp
 
         // Error turns surface the failure inside the bubble. Persist exactly
         // what the live client renders so a refresh shows the same message.
@@ -939,12 +943,16 @@ export async function POST(request: Request) {
           // Total turn wall-clock, stamped only on the terminal persist (the row's
           // timestamp is rewritten to `now` here, so the start is otherwise lost).
           durationMs: isTerminalPersist
-            ? Math.max(0, now - assistantMsg.timestamp)
+            ? Math.max(0, persistedAt - assistantMsg.timestamp)
             : undefined,
           toolCalls: accToolCalls.length > 0 ? accToolCalls : undefined,
           attachments:
             persistAttachments.length > 0 ? persistAttachments : undefined,
-          timestamp: isTerminalPersist ? now : assistantMsg.timestamp,
+          // Async child events may keep updating their agent card after the
+          // parent answer has already completed. Preserve the original
+          // terminal timestamp/duration so those transcript updates do not
+          // repeatedly make an old parent answer look newly completed.
+          timestamp: persistedAt,
         })
         addMessage(conversationId, message)
         // Terminal events ship this persisted row to the live client, which

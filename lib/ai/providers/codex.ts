@@ -154,6 +154,8 @@ const ORCHESTRATOR_MULTI_AGENT_MODE_HINT = [
     'This session uses Orchestrator-managed specialist delegation.',
     'When delegate_to or delegate_parallel is exposed, follow the Orchestrator',
     '<delegation_policy>, <browser_agent_policy>, <agent_boundaries>, and runtime_context;',
+    'synchronous delegation suspends the parent, while run_async=true explicitly allows the parent',
+    'to continue and manage the batch with manage_delegations.',
     'an explicit user request for sub-agents is not required unless those instructions say otherwise.',
     'Do not invent or use Codex-native sub-agents.',
 ].join(' ')
@@ -574,7 +576,9 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                 }
             }
             const surfacedName = tool?.name ?? (toolName || 'tool')
-            const blocksParentOutput = BLOCKING_DELEGATION_TOOLS.has(tool?.id ?? toolName)
+            const blocksParentOutput =
+                BLOCKING_DELEGATION_TOOLS.has(tool?.id ?? toolName)
+                && callArgs.run_async !== true
 
             if (!acceptedNamespace) {
                 const qualifiedName = `${namespace}.${toolName || 'tool'}`

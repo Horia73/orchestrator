@@ -101,6 +101,16 @@ export async function registerRuntime(): Promise<void> {
     } catch (err) {
         console.error('[background-jobs] failed to arm watcher', err)
     }
+    // Async specialist batches normally keep the durable worker registered
+    // until every child settles. If the process itself crashed, seal the
+    // durable rows as lost and wake only batches the parent explicitly
+    // detached, so potentially side-effecting work is never replayed blindly.
+    try {
+        const { startAsyncDelegationRecovery } = await import('@/lib/ai/async-delegations')
+        startAsyncDelegationRecovery()
+    } catch (err) {
+        console.error('[async-delegations] failed to arm recovery', err)
+    }
     // A host/container restart kills detached self-development previews but
     // leaves their isolated worktrees intact. Recover only the newest recent
     // dirty run, then wake its owning conversation to continue the same gate.

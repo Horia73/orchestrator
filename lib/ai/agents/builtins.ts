@@ -29,6 +29,7 @@ export const LEGACY_WORKSPACE_TOOL_IDS: string[] = [
 export const DELEGATE_TOOL_IDS: string[] = [
     'delegate_to',
     'delegate_parallel',
+    'manage_delegations',
 ]
 
 export const OWNER_AGENT_HELP_TOOL_IDS: string[] = [

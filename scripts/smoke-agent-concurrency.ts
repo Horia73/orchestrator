@@ -22,7 +22,9 @@ process.env.AGENT_RAMP_MS = '0'
 
 import {
     acquireRun,
+    releaseAsyncTree,
     releaseTree,
+    retainTreeForAsync,
     tryReserveTreeSpawn,
     __setGateCapacitiesForTest,
     __setProviderCapForTest,
@@ -159,6 +161,17 @@ async function main() {
     check('total-active never exceeded cap (3)', maxTotal <= 3, `peak=${maxTotal}`)
     check('main never exceeded cap (2)', maxMain <= 2, `peak=${maxMain}`)
     check('counters drained to zero', liveTotal === 0 && liveMain === 0, `total=${liveTotal} main=${liveMain}`)
+
+    // ---- Scenario 1b: detached descendant keeps the tree budget alive ------
+    // An intermediate parent may finish before its async child. The parent's
+    // owner release must be deferred until the detached lease is returned.
+    const asyncRoot = 'tree_async_lease'
+    check('async lease fixture reserves root spawn', tryReserveTreeSpawn(asyncRoot))
+    retainTreeForAsync(asyncRoot)
+    releaseTree(asyncRoot)
+    check('owner release waits for detached async child', getAgentGateStats().liveTrees === 1)
+    releaseAsyncTree(asyncRoot)
+    check('final async child release clears root budget', getAgentGateStats().liveTrees === 0)
 
     // ---- Scenario 2: many top-level runs at once ----------------------------
     // 8 independent top-level runs (each delegating 4) with main=3/total=6.

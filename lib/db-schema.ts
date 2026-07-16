@@ -155,6 +155,55 @@ export function initializeDatabaseSchema(db: SqliteExecutor): void {
       );
       CREATE INDEX IF NOT EXISTS idx_agent_thread_messages_thread ON agent_thread_messages(threadId, timestamp ASC);
 
+      -- Asynchronous specialist delegation. A batch may contain one or many
+      -- child runs. Unlike synchronous delegate_to/delegate_parallel calls,
+      -- the parent model is allowed to continue while these rows are active,
+      -- then collect/wait/cancel them through manage_delegations. The worker
+      -- also registers each live batch in the update-drain registry; these
+      -- rows are the durable recovery/status record if the process dies.
+      CREATE TABLE IF NOT EXISTS async_delegation_batches (
+          id TEXT PRIMARY KEY,
+          conversationId TEXT NOT NULL,
+          createdByAgentId TEXT NOT NULL,
+          parentAgentThreadId TEXT,
+          parentRequestId TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'running', -- running | ok | error | aborted | lost
+          maxConcurrency INTEGER NOT NULL DEFAULT 1,
+          wakeOnComplete INTEGER NOT NULL DEFAULT 0,
+          startedAt INTEGER NOT NULL,
+          endedAt INTEGER,
+          notifiedAt INTEGER,
+          collectedAt INTEGER,
+          FOREIGN KEY (conversationId) REFERENCES conversations(id) ON DELETE CASCADE,
+          FOREIGN KEY (parentAgentThreadId) REFERENCES agent_threads(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_async_delegation_batches_scope
+          ON async_delegation_batches(conversationId, createdByAgentId, parentAgentThreadId, startedAt DESC);
+      CREATE INDEX IF NOT EXISTS idx_async_delegation_batches_status
+          ON async_delegation_batches(status, startedAt DESC);
+
+      CREATE TABLE IF NOT EXISTS async_delegation_jobs (
+          id TEXT PRIMARY KEY,
+          batchId TEXT NOT NULL,
+          agentId TEXT NOT NULL,
+          agentThreadId TEXT NOT NULL,
+          assignedName TEXT,
+          taskLabel TEXT,
+          prompt TEXT NOT NULL,
+          position INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'queued', -- queued | running | ok | error | aborted | lost
+          result TEXT,
+          error TEXT,
+          startedAt INTEGER,
+          endedAt INTEGER,
+          FOREIGN KEY (batchId) REFERENCES async_delegation_batches(id) ON DELETE CASCADE,
+          FOREIGN KEY (agentThreadId) REFERENCES agent_threads(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_async_delegation_jobs_batch
+          ON async_delegation_jobs(batchId, position);
+      CREATE INDEX IF NOT EXISTS idx_async_delegation_jobs_status
+          ON async_delegation_jobs(status, startedAt DESC);
+
       -- Tracked background jobs (Bash run_in_background / start_background_job).
       -- Jobs are detached OS processes owned by the server, not by the agent
       -- turn that started them; on exit the server posts a completion notice

@@ -8,7 +8,7 @@ import { getAiRunAdmissionBlock } from '@/lib/ai/run-admission'
 
 export interface ActiveAgentRun {
     id: string
-    kind: 'inbox' | 'scheduled' | 'app'
+    kind: 'inbox' | 'scheduled' | 'app' | 'delegation'
     conversationId: string
     startedAt: number
 }
@@ -23,8 +23,15 @@ if (!globalForAgentRuns.__orchestratorAgentRuns) {
     globalForAgentRuns.__orchestratorAgentRuns = agentRuns
 }
 
-export function registerAgentRun(run: ActiveAgentRun): boolean {
-    if (getAiRunAdmissionBlock()) return false
+export function registerAgentRun(
+    run: ActiveAgentRun,
+    options?: { alreadyAdmitted?: boolean },
+): boolean {
+    // Nested async delegations inherit admission from the parent turn that is
+    // already draining. Registering that inherited work must remain possible
+    // after the updater closes admission, otherwise the worker could disappear
+    // underneath a child the accepted parent just launched.
+    if (!options?.alreadyAdmitted && getAiRunAdmissionBlock()) return false
     agentRuns.set(run.id, run)
     return true
 }

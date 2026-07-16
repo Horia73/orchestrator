@@ -16,6 +16,7 @@ import {
 import { getAgentThread, listAgentThreadsForContext, type AgentThread } from '@/lib/db'
 import { buildRuntimeAccessContext } from '@/lib/runtime-access'
 import { BROWSER_AGENT_CAPABILITY_HINT } from '@/lib/ai/agents/browser-agent-capabilities'
+import { listPendingAsyncDelegationsForPrompt } from '@/lib/ai/async-delegations'
 import { dateStampInTimezone, formatDateTimeInTimezone, systemTimezone } from '@/lib/timezone'
 import {
     compactMemoryFileForPrompt,
@@ -373,7 +374,7 @@ export function buildAgentsSection(ctx: PromptContext): string {
         .join('\n')
     return [
         '<runtime_agents>',
-        'Sub-agents you may delegate to with `delegate_to`, or with `delegate_parallel` for independent jobs. The bracketed hint is the runtime truth about each agent — honor it:',
+        'Sub-agents you may delegate to with `delegate_to`, or with `delegate_parallel` for independent jobs. Both wait synchronously by default. Set `run_async=true` only when child work is independent from useful parent work you can do now; then use `manage_delegations` to collect/wait/detach/cancel. The bracketed hint is the runtime truth about each agent — honor it:',
         details,
         '</runtime_agents>',
     ].join('\n')
@@ -451,7 +452,7 @@ export function buildRuntimeContext(ctx: PromptContext): string {
         const ids = ctx.availableAgents.map(a => a.id)
         const canDelegate = ids.length > 0 && ctx.delegationDepth < cap
         if (canDelegate) {
-            lines.push(`delegation: you are at depth ${ctx.delegationDepth} of max ${cap}. You MAY delegate via delegate_to to [${ids.join(', ')}] — <runtime_agents> says what each does and whether it can sub-delegate. They run at depth ${ctx.delegationDepth + 1}; a chain past depth ${cap} is truncated. Hand a specialist the need and the context it can't see, not a step-by-step script — it owns its own method and depth.`)
+            lines.push(`delegation: you are at depth ${ctx.delegationDepth} of max ${cap}. You MAY delegate via delegate_to to [${ids.join(', ')}] — <runtime_agents> says what each does and whether it can sub-delegate. They run at depth ${ctx.delegationDepth + 1}; a chain past depth ${cap} is truncated. Hand a specialist the need and the context it can't see, not a step-by-step script — it owns its own method and depth. Synchronous delegation suspends you until the child returns. For truly independent overlap, set run_async=true; before your final answer, manage every launched batch by collect/wait, detach for one completion wake, or cancel.`)
         } else {
             lines.push(`delegation: you are at depth ${ctx.delegationDepth} of max ${cap} and have no sub-agents available here — do this task yourself and return; do not claim you delegated.`)
         }
@@ -505,6 +506,7 @@ export function buildRuntimeContext(ctx: PromptContext): string {
     return [
         runtime,
         buildAgentThreadsContextBlock(ctx),
+        buildAsyncDelegationsContextBlock(ctx),
         buildIntegrationsContextBlock(ctx.declaredToolIds ?? [], exposureOpts, toolSummaries),
         // Native subsystems (watchlist, monitoring, scheduling) — orchestrator-
         // only. Sub-agents never schedule or set up monitors themselves.
@@ -603,7 +605,7 @@ function buildAgentThreadsContextBlock(ctx: PromptContext): string {
 
     const lines = [
         '<agent_threads>',
-        'Persistent parent↔agent threads scoped to this conversation. These are NOT the user chat. A sub-agent sees only the messages in its own agent_thread plus the runtime context you provide. Continue an existing specialist thread by passing its `thread_id` to delegate_to/delegate_parallel; create a new one for a genuinely separate workstream.',
+        'Persistent parent↔agent threads scoped to this conversation. These are NOT the user chat. A sub-agent sees only the messages in its own agent_thread plus the runtime context you provide. Continue an existing specialist thread by passing its `thread_id` to delegate_to/delegate_parallel; create a new one for a genuinely separate workstream. Async batch ids are lifecycle handles, while agent_thread ids remain the specialist conversation/resume handles.',
     ]
     if (current) {
         lines.push(`current: ${formatAgentThread(current)}`)
@@ -613,6 +615,29 @@ function buildAgentThreadsContextBlock(ctx: PromptContext): string {
         for (const thread of threads) lines.push(`- ${formatAgentThread(thread)}`)
     }
     lines.push('</agent_threads>')
+    return lines.join('\n')
+}
+
+function buildAsyncDelegationsContextBlock(ctx: PromptContext): string {
+    if (!ctx.conversationId || !ctx.agentId) return ''
+    const batches = listPendingAsyncDelegationsForPrompt({
+        conversationId: ctx.conversationId,
+        createdByAgentId: ctx.agentId,
+        parentAgentThreadId: ctx.agentThreadId ?? null,
+        limit: 8,
+    })
+    if (batches.length === 0) return ''
+    const lines = [
+        '<async_delegations>',
+        'Uncollected async delegation batches owned by this caller/thread. Use manage_delegations; do not duplicate their work.',
+    ]
+    for (const batch of batches) {
+        const jobs = batch.jobs
+            .map(job => `${job.agentId}:${job.status}:thread=${job.agentThreadId}`)
+            .join(', ')
+        lines.push(`- batch_id=${batch.id}; status=${batch.status}; wake_on_complete=${Boolean(batch.wakeOnComplete)}; jobs=[${jobs}]`)
+    }
+    lines.push('</async_delegations>')
     return lines.join('\n')
 }
 

@@ -210,6 +210,11 @@ interface GateState {
     providers: Map<string, PrioritySemaphore>
     /** rootRunId -> agents spawned across this top-level run's whole sub-tree. */
     treeSpawns: Map<string, number>
+    /** Detached async children keep the root budget alive after an intermediate
+     *  parent run finishes. The owner release is deferred until every lease is
+     *  returned. */
+    treeRetainers: Map<string, number>
+    treeOwnerReleasePending: Set<string>
     treeBudget: number
     /** Timestamp (ms) the next fresh admission is allowed — drives the ramp. */
     nextAdmitAt: number
@@ -227,6 +232,8 @@ function createState(): GateState {
         total: new PrioritySemaphore(limits.total),
         providers: new Map<string, PrioritySemaphore>(),
         treeSpawns: new Map<string, number>(),
+        treeRetainers: new Map<string, number>(),
+        treeOwnerReleasePending: new Set<string>(),
         treeBudget: envInt('AGENT_TREE_BUDGET', 100),
         nextAdmitAt: 0,
     }
@@ -237,6 +244,10 @@ const state: GateState = globalForGate.__orchestratorAgentGate ?? createState()
 if (!globalForGate.__orchestratorAgentGate) {
     globalForGate.__orchestratorAgentGate = state
 }
+// Hot-reload/backward compatibility for a process whose global gate predates
+// async tree leases.
+state.treeRetainers ??= new Map<string, number>()
+state.treeOwnerReleasePending ??= new Set<string>()
 
 function getProviderSemaphore(provider: string): PrioritySemaphore {
     const key = provider.toLowerCase()
@@ -383,7 +394,35 @@ export function tryReserveTreeSpawn(rootRunId: string | undefined): boolean {
 /** Drop a finished top-level run's tree-budget counter. Call once when the
  *  top-level run completes (in its finally). */
 export function releaseTree(rootRunId: string | undefined): void {
-    if (rootRunId) state.treeSpawns.delete(rootRunId)
+    if (!rootRunId) return
+    if ((state.treeRetainers.get(rootRunId) ?? 0) > 0) {
+        state.treeOwnerReleasePending.add(rootRunId)
+        return
+    }
+    state.treeSpawns.delete(rootRunId)
+    state.treeOwnerReleasePending.delete(rootRunId)
+}
+
+/** Keep one root tree's spawn budget alive while detached async descendants
+ *  outlive the parent agent that originally owned the tree. */
+export function retainTreeForAsync(rootRunId: string | undefined): void {
+    if (!rootRunId) return
+    state.treeRetainers.set(rootRunId, (state.treeRetainers.get(rootRunId) ?? 0) + 1)
+}
+
+/** Return a detached async lease. If the owner already finished, this final
+ *  release also drops the tree budget counter. */
+export function releaseAsyncTree(rootRunId: string | undefined): void {
+    if (!rootRunId) return
+    const next = Math.max(0, (state.treeRetainers.get(rootRunId) ?? 0) - 1)
+    if (next > 0) {
+        state.treeRetainers.set(rootRunId, next)
+        return
+    }
+    state.treeRetainers.delete(rootRunId)
+    if (state.treeOwnerReleasePending.delete(rootRunId)) {
+        state.treeSpawns.delete(rootRunId)
+    }
 }
 
 export const agentGateLimits = {
@@ -431,6 +470,8 @@ export function __setGateCapacitiesForTest(main: number, total: number, treeBudg
     state.total.capacity = total
     state.treeBudget = treeBudget
     state.treeSpawns.clear()
+    state.treeRetainers.clear()
+    state.treeOwnerReleasePending.clear()
     state.providers.clear()
     state.nextAdmitAt = 0
 }

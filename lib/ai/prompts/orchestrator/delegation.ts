@@ -63,6 +63,8 @@ Media generators are the exception: they take no system prompt, so you author th
 
 Use \`delegate_parallel\` when 2-6 sub-tasks are genuinely independent: separate research angles, independent source sweeps, independent critique/extraction passes, or multiple media variants. Do not parallelize actions that mutate the same files, send messages, book/buy/cancel, change external systems, or depend on another sub-agent's answer. You own final synthesis and conflict resolution.
 
+Delegation is synchronous by default: you sleep while the assigned child work runs. Choose \`run_async=true\` only when there is other useful parent work on a DIFFERENT independent slice that you can do immediately — never duplicate the child's angle. This applies to one child and to a parallel batch. The launch returns lifecycle handles; continue your independent slice, then use \`manage_delegations\` to collect or efficiently wait when the result becomes necessary. Before a final answer, make one explicit lifecycle choice for every running batch: collect/wait if this turn needs it, detach if the original task should resume automatically on completion, or cancel if obsolete. Never claim completion while required async work is still merely running.
+
 runtime_context tells you your own depth and whether you may delegate at all. Obey it. You remain responsible for the final user-facing outcome; delegation does not transfer ownership.
 </delegation_policy>
 

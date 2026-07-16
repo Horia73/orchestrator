@@ -10,6 +10,20 @@ import { createAgentThread, getAgentThread, getAgentThreadMessages, type AgentTh
 import { parseBrowserSessionMode, type BrowserSessionMode } from '@/lib/browser-agent-runtime/session-mode'
 import type { Attachment } from '@/lib/types'
 import { classifyUploadMime, MAX_UPLOAD_FILES, resolveExistingUploadPath, uploadContentType } from '@/lib/uploads'
+import {
+    ASYNC_DELEGATION_WAIT_DEFAULT_MS,
+    ASYNC_DELEGATION_WAIT_MAX_MS,
+    cancelAsyncDelegationBatch,
+    getAsyncDelegationBatchForCaller,
+    listAsyncDelegationBatchesForCaller,
+    markAsyncDelegationCollected,
+    notifyAsyncDelegationCompletion,
+    serializeAsyncDelegationBatch,
+    setAsyncDelegationWake,
+    startAsyncDelegationBatch,
+    waitForAsyncDelegationBatch,
+} from '@/lib/ai/async-delegations'
+import { getActiveProfileId } from '@/lib/profiles/context'
 
 // Lazy import for runner: it pulls in tools/registry, and we sit inside that
 // graph too. Eager top-level import causes a circular evaluation deadlock —
@@ -29,6 +43,7 @@ export const delegateToTool: ToolDef = {
     name: 'delegate_to',
     description: [
         'Delegate a task to a specialist sub-agent and wait for its final answer.',
+        'For genuinely independent work that should overlap with your own next steps, set run_async=true. The call then returns immediately with a batch_id and agent_thread_id while the child keeps running; use manage_delegations to collect, wait, detach for an automatic completion wake, or cancel it. Async mode does NOT suspend your parent turn.',
         'Use this when the task is outside your remit, when a specialist would do better, or when you want a fresh perspective on your own output.',
         'Returns the sub-agent\'s complete response, output length metadata, and agent_thread_id. The complete response is also persisted in the agent thread; if a UI preview is clipped, do not treat that as data loss. Pass thread_id to continue an existing parent↔agent thread; omit it to create a new one.',
         'To let the sub-agent see a file directly (image, PDF, document), pass attachment_ids — upload ids from the current user message or from find_past_uploads; the files are forwarded into its turn for providers that support them.',
@@ -80,6 +95,14 @@ export const delegateToTool: ToolDef = {
                 enum: ['persistent', 'incognito'],
                 description: 'Only for browser_agent. persistent uses the saved browser profile; incognito uses a temporary isolated profile with no saved cookies/logins/localStorage. Reuse the same thread_id for continuations.',
             },
+            run_async: {
+                type: 'boolean',
+                description: 'When true, launch the child and return immediately so you can continue useful independent parent work. Default false waits synchronously for the complete result.',
+            },
+            wake_on_complete: {
+                type: 'boolean',
+                description: 'Async mode only. When true, completion posts an automated follow-up and wakes this conversation. Default false; prefer launching false, then use manage_delegations action="detach" only if you intentionally end the turn before collecting.',
+            },
         },
         required: ['agent_id', 'prompt'],
     },
@@ -91,6 +114,7 @@ export const delegateParallelTool: ToolDef = {
     name: 'delegate_parallel',
     description: [
         'Delegate multiple independent tasks to specialist sub-agents concurrently and wait for all final answers.',
+        'For independent jobs that should overlap with useful parent work, set run_async=true. The call returns immediately with one batch_id plus every job/thread id; manage the whole batch with manage_delegations. Async mode does NOT suspend the parent.',
         'Use only for workstreams that do not depend on each other and do not mutate the same files or external systems.',
         'Each job returns its complete response, output length metadata, and agent_thread_id. The complete response is also persisted in the agent thread; if a UI preview is clipped, do not treat that as data loss. Each job may pass thread_id to continue an existing parent↔agent thread, or omit it to create a new one.',
         'Prefer researcher for open web discovery, availability checks, comparisons, rankings, and vendor/product lookup. Browser_agent jobs must be bounded execution/verification tasks on known pages/sites, not open-ended research/discovery/comparison; include a complete action contract and stop boundary. For loading/API diagnostics, request inspectDiagnostics and same-origin fetchUrl results. Reuse thread_id for the same browser flow; use separate threads only for independent flows. For browser_agent only, browser_session_mode="incognito" runs without the saved profile/cookies/logins/localStorage. Do not parallelize browser jobs that can create duplicate orders/bookings/sends or mutate the same external account.',
@@ -153,8 +177,46 @@ export const delegateParallelTool: ToolDef = {
                 type: 'integer',
                 description: 'Optional concurrency limit. Defaults to 10 and is capped at 10.',
             },
+            run_async: {
+                type: 'boolean',
+                description: 'When true, launch the batch and return immediately. Default false waits synchronously for all results.',
+            },
+            wake_on_complete: {
+                type: 'boolean',
+                description: 'Async mode only. When true, wake the conversation once the entire batch settles. Default false; action="detach" can enable this later.',
+            },
         },
         required: ['jobs'],
+    },
+    tags: ['delegation'],
+}
+
+export const manageDelegationsTool: ToolDef = {
+    id: 'manage_delegations',
+    name: 'manage_delegations',
+    description: [
+        'Manage async specialist batches launched by delegate_to/delegate_parallel with run_async=true.',
+        'list shows recent batches in this caller/thread scope. collect returns current state and persisted results without blocking. wait blocks efficiently for up to max_wait_ms and returns results if settled. detach enables one automatic completion follow-up/wake so you may end the turn safely. cancel stops queued/running children.',
+        'Lifecycle rule: before your final answer, either collect/wait for every async batch you still need, detach a still-running batch when the original task should resume automatically later, or cancel work that is no longer needed. Do not silently abandon a running batch.',
+    ].join(' '),
+    input_schema: {
+        type: 'object',
+        properties: {
+            action: {
+                type: 'string',
+                enum: ['list', 'collect', 'wait', 'detach', 'cancel'],
+                description: 'Operation to perform.',
+            },
+            batch_id: {
+                type: 'string',
+                description: 'Async batch id returned by a delegation launch. Required except for list.',
+            },
+            max_wait_ms: {
+                type: 'integer',
+                description: `For wait: block up to this many milliseconds. Default ${ASYNC_DELEGATION_WAIT_DEFAULT_MS}, capped at ${ASYNC_DELEGATION_WAIT_MAX_MS}.`,
+            },
+        },
+        required: ['action'],
     },
     tags: ['delegation'],
 }
@@ -178,30 +240,61 @@ export async function executeDelegateTo(
         }
     }
 
+    if (args.run_async === true) {
+        try {
+            const launched = await startAsyncDelegationBatch({
+                ctx: ctx!,
+                jobs: [{
+                    agentId: prepared.target.id,
+                    agentThreadId: prepared.thread.id,
+                    assignedName: prepared.assignedName,
+                    taskLabel: prepared.thread.title,
+                    prompt: prepared.prompt,
+                    run: async asyncCtx => decoratePreparedDelegationResult(
+                        await runPreparedDelegation(prepared, asyncCtx),
+                        prepared,
+                    ),
+                }],
+                maxConcurrency: 1,
+                wakeOnComplete: args.wake_on_complete === true,
+            })
+            return {
+                success: true,
+                data: {
+                    mode: 'async',
+                    batch_id: launched.batchId,
+                    jobs: launched.jobs.map(job => ({
+                        job_id: job.jobId,
+                        agent_id: job.agentId,
+                        agent_name: job.assignedName,
+                        agent_thread_id: job.agentThreadId,
+                        task: job.taskLabel,
+                    })),
+                    wake_on_complete: args.wake_on_complete === true,
+                    note: args.wake_on_complete === true
+                        ? 'Child launched. The parent may continue now; the conversation will be woken once it settles.'
+                        : 'Child launched. Continue useful independent parent work, then call manage_delegations to collect/wait; detach before ending the turn if completion should wake the conversation.',
+                },
+            }
+        } catch (error) {
+            return {
+                success: false,
+                error: `${error instanceof Error ? error.message : String(error)} (agent_thread_id: ${prepared.thread.id})`,
+                data: { agent_thread_id: prepared.thread.id },
+            }
+        }
+    }
+
     // Release-while-waiting: this agent is now idle awaiting its child, so give
     // up its active slot for the duration and reclaim it before resuming. This
     // is what makes a small global concurrency cap deadlock-free under nested
     // delegation. See lib/ai/concurrency-gate.ts.
     ctx?.permit?.releaseForChildren()
     try {
-        const result = await runPreparedDelegation(prepared, ctx!)
-        if (result.success && result.data && typeof result.data === 'object' && !Array.isArray(result.data)) {
-            return {
-                ...result,
-                data: withDelegationOutputMetadata(result.data as Record<string, unknown>, prepared.thread.id),
-            }
-        }
-        return result.success
-            ? result
-            : {
-                ...result,
-                error: `${result.error ?? 'Delegation failed'} (agent_thread_id: ${prepared.thread.id})`,
-                data: {
-                    agentId: prepared.target.id,
-                    agentThreadId: prepared.thread.id,
-                    agent_thread_id: prepared.thread.id,
-                },
-            }
+        return decoratePreparedDelegationResult(
+            await runPreparedDelegation(prepared, ctx!),
+            prepared,
+        )
     } finally {
         await ctx?.permit?.reacquireForResume()
     }
@@ -252,6 +345,60 @@ export async function executeDelegateParallel(
         ? Math.floor(args.max_concurrency)
         : MAX_PARALLEL_DELEGATIONS
     const concurrency = Math.max(1, Math.min(requestedConcurrency, MAX_PARALLEL_DELEGATIONS, jobs.length))
+
+    if (args.run_async === true) {
+        for (let index = 0; index < jobs.length; index++) {
+            if (!tryReserveTreeSpawn(ctx.rootRunId)) {
+                return {
+                    success: false,
+                    error: `Delegation limit reached before async job ${index + 1}: this task has already spawned its maximum of ${agentGateLimits.treeBudget} sub-agents. Do NOT retry delegation; finish the remaining work yourself.`,
+                }
+            }
+        }
+        try {
+            const launched = await startAsyncDelegationBatch({
+                ctx,
+                jobs: jobs.map(job => ({
+                    agentId: job.target.id,
+                    agentThreadId: job.thread.id,
+                    assignedName: job.assignedName,
+                    taskLabel: job.thread.title,
+                    prompt: job.prompt,
+                    run: async asyncCtx => decoratePreparedDelegationResult(
+                        await runPreparedDelegation(job, asyncCtx),
+                        job,
+                    ),
+                })),
+                maxConcurrency: concurrency,
+                wakeOnComplete: args.wake_on_complete === true,
+            })
+            return {
+                success: true,
+                data: {
+                    mode: 'async',
+                    batch_id: launched.batchId,
+                    max_concurrency: concurrency,
+                    jobs: launched.jobs.map(job => ({
+                        job_id: job.jobId,
+                        agent_id: job.agentId,
+                        agent_name: job.assignedName,
+                        agent_thread_id: job.agentThreadId,
+                        task: job.taskLabel,
+                    })),
+                    wake_on_complete: args.wake_on_complete === true,
+                    note: args.wake_on_complete === true
+                        ? 'Batch launched. The parent may continue now; one completion wake will fire after every job settles.'
+                        : 'Batch launched. Continue useful independent parent work, then collect/wait; detach before ending the turn if completion should wake the conversation.',
+                },
+            }
+        } catch (error) {
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : String(error),
+                data: { agent_thread_ids: jobs.map(job => job.thread.id) },
+            }
+        }
+    }
 
     // Release-while-waiting: the delegating agent is idle until every job
     // returns, so it gives up its active slot for the duration (reclaimed in the
@@ -318,10 +465,135 @@ export async function executeDelegateParallel(
     }
 }
 
+export async function executeManageDelegations(
+    args: Record<string, unknown>,
+    ctx?: ToolExecutionContext,
+): Promise<ToolResult> {
+    if (!ctx) return { success: false, error: 'manage_delegations requires an execution context.' }
+    const action = typeof args.action === 'string' ? args.action : ''
+    if (action === 'list') {
+        const batches = listAsyncDelegationBatchesForCaller(ctx, 12)
+        return {
+            success: true,
+            data: {
+                batches: batches.map(batch => serializeAsyncDelegationBatch(batch)),
+                note: batches.length === 0 ? 'No async delegation batches in this caller/thread scope.' : undefined,
+            },
+        }
+    }
+
+    const batchId = typeof args.batch_id === 'string' ? args.batch_id.trim() : ''
+    if (!batchId) return { success: false, error: `batch_id is required for action '${action || '(missing)'}'.` }
+    const batch = getAsyncDelegationBatchForCaller(batchId, ctx)
+    if (!batch) return { success: false, error: `Unknown async delegation batch in this caller/thread scope: ${batchId}` }
+
+    if (action === 'collect') {
+        setAsyncDelegationWake(batchId, ctx, false)
+        if (batch.status !== 'running') markAsyncDelegationCollected(batchId, ctx)
+        const refreshed = getAsyncDelegationBatchForCaller(batchId, ctx) ?? batch
+        return {
+            success: true,
+            data: {
+                ...serializeAsyncDelegationBatch(refreshed, { includeResults: true }),
+                note: refreshed.status === 'running'
+                    ? 'Some jobs are still running. Continue independent work, wait, detach, or cancel.'
+                    : 'Persisted results collected. Full child output also remains in each agent_thread_id.',
+            },
+        }
+    }
+
+    if (action === 'wait') {
+        setAsyncDelegationWake(batchId, ctx, false)
+        const requested = typeof args.max_wait_ms === 'number' && Number.isFinite(args.max_wait_ms)
+            ? Math.floor(args.max_wait_ms)
+            : ASYNC_DELEGATION_WAIT_DEFAULT_MS
+        // Once the parent explicitly waits it is no longer doing concurrent
+        // work. Release its gate slot exactly like synchronous delegation so a
+        // nested async child can start even under a tiny total cap, then reclaim
+        // the slot before the parent consumes the result.
+        ctx.permit?.releaseForChildren()
+        let waited: Awaited<ReturnType<typeof waitForAsyncDelegationBatch>>
+        try {
+            waited = await waitForAsyncDelegationBatch(batchId, ctx, requested)
+        } finally {
+            await ctx.permit?.reacquireForResume()
+        }
+        if (!waited) return { success: false, error: `Async delegation batch disappeared: ${batchId}` }
+        if (waited.status !== 'running') markAsyncDelegationCollected(batchId, ctx)
+        const refreshed = getAsyncDelegationBatchForCaller(batchId, ctx) ?? waited
+        return {
+            success: true,
+            data: {
+                ...serializeAsyncDelegationBatch(refreshed, { includeResults: true }),
+                note: refreshed.status === 'running'
+                    ? 'Still running when the wait window closed. Wait again, continue independent work, detach, or cancel.'
+                    : 'The batch settled while you waited; act on these results now.',
+            },
+        }
+    }
+
+    if (action === 'detach') {
+        const updated = setAsyncDelegationWake(batchId, ctx, true)
+        if (!updated) return { success: false, error: `Could not detach async delegation batch: ${batchId}` }
+        if (updated.status !== 'running') {
+            await notifyAsyncDelegationCompletion(getActiveProfileId(), batchId)
+        }
+        return {
+            success: true,
+            data: {
+                ...serializeAsyncDelegationBatch(getAsyncDelegationBatchForCaller(batchId, ctx) ?? updated),
+                note: updated.status === 'running'
+                    ? 'Completion wake enabled. You may end this turn; one automated follow-up will resume the original task when the whole batch settles.'
+                    : 'The batch had already settled; its completion follow-up was queued now.',
+            },
+        }
+    }
+
+    if (action === 'cancel') {
+        const cancelled = cancelAsyncDelegationBatch(batchId, ctx)
+        if (!cancelled.ok) return { success: false, error: cancelled.error }
+        const refreshed = getAsyncDelegationBatchForCaller(batchId, ctx) ?? batch
+        return {
+            success: true,
+            data: {
+                ...serializeAsyncDelegationBatch(refreshed, { includeResults: true }),
+                note: refreshed.status === 'running'
+                    ? 'Cancellation signal sent; running children are stopping.'
+                    : 'The batch was already settled.',
+            },
+        }
+    }
+
+    return { success: false, error: `Unknown action: ${action || '(missing)'}. Use list, collect, wait, detach, or cancel.` }
+}
+
 // Max jobs per delegate_parallel call. The *global* concurrency gate
 // (lib/ai/concurrency-gate.ts) is what actually bounds how many run at once, so
 // this is just the per-call request ceiling.
 const MAX_PARALLEL_DELEGATIONS = 10
+
+function decoratePreparedDelegationResult(
+    result: ToolResult,
+    prepared: PreparedDelegation,
+): ToolResult {
+    if (result.success && result.data && typeof result.data === 'object' && !Array.isArray(result.data)) {
+        return {
+            ...result,
+            data: withDelegationOutputMetadata(result.data as Record<string, unknown>, prepared.thread.id),
+        }
+    }
+    return result.success
+        ? result
+        : {
+            ...result,
+            error: `${result.error ?? 'Delegation failed'} (agent_thread_id: ${prepared.thread.id})`,
+            data: {
+                agentId: prepared.target.id,
+                agentThreadId: prepared.thread.id,
+                agent_thread_id: prepared.thread.id,
+            },
+        }
+}
 
 function withDelegationOutputMetadata(
     data: Record<string, unknown>,

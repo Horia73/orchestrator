@@ -163,6 +163,7 @@ import { writeFileSync } from "node:fs"
 
 const send = value => process.stdout.write(JSON.stringify(value) + "\\n")
 const parentViolation = process.env.FAKE_PARENT_VIOLATION === "1"
+const asyncDelegation = process.env.FAKE_ASYNC_DELEGATION === "1"
 const rl = readline.createInterface({ input: process.stdin })
 rl.on("line", line => {
   const message = JSON.parse(line)
@@ -171,6 +172,18 @@ rl.on("line", line => {
       id: "delegate-call", type: "dynamicToolCall", namespace: "orchestrator", tool: "delegate_to",
       status: "completed", success: false, contentItems: [{ type: "inputText", text: "diagnostic failure" }],
     } } })
+    if (asyncDelegation) {
+      send({ method: "item/started", params: { item: {
+        id: "allowed-shell", type: "commandExecution", command: "git status --short", cwd: "/tmp",
+      } } })
+      send({ method: "item/commandExecution/outputDelta", params: {
+        itemId: "allowed-shell", delta: "M package.json\\n",
+      } })
+      send({ method: "item/completed", params: { item: {
+        id: "allowed-shell", type: "commandExecution", command: "git status --short", cwd: "/tmp",
+        status: "completed", exitCode: 0, aggregatedOutput: "M package.json\\n",
+      } } })
+    }
     if (!parentViolation) {
       send({ method: "item/agentMessage/delta", params: { itemId: "final-message", delta: "DONE" } })
       send({ method: "item/completed", params: { item: { id: "final-message", type: "agentMessage", text: "DONE" } } })
@@ -207,11 +220,11 @@ rl.on("line", line => {
     } })
     send({ method: "item/started", params: { item: {
       id: "delegate-call", type: "dynamicToolCall", namespace: "orchestrator", tool: "delegate_to",
-      status: "inProgress", arguments: { agent_id: "browser_agent", prompt: "diagnostic" },
+      status: "inProgress", arguments: { agent_id: "browser_agent", prompt: "diagnostic", ...(asyncDelegation ? { run_async: true } : {}) },
     } } })
     send({ id: 700, method: "item/tool/call", params: {
       callId: "delegate-call", namespace: "orchestrator", tool: "delegate_to",
-      arguments: { agent_id: "browser_agent", prompt: "diagnostic" },
+      arguments: { agent_id: "browser_agent", prompt: "diagnostic", ...(asyncDelegation ? { run_async: true } : {}) },
     } })
     // Codex 0.144.4 can close the already-started reasoning item after the
     // direct client tool request is in flight. This is stream tail, not the
@@ -315,6 +328,39 @@ rl.on("line", line => {
     violationToolCalls,
     ["delegate_to"],
     "Forbidden parent shell activity must be interrupted before it reaches the UI/tool log"
+  )
+
+  const asyncErrors: string[] = []
+  const asyncToolCalls: string[] = []
+  const asyncContent: string[] = []
+  process.env.FAKE_ASYNC_DELEGATION = "1"
+  try {
+    await codexProviderTestHooks.runCodexAppServer({
+      bin: fakeCodex,
+      prompt: "Exercise explicit async delegation.",
+      model: "gpt-5.6-sol",
+      tools: [delegateToTool],
+      builtins: [],
+      nativeCoderRun: false,
+      callbacks: {
+        onThinking() {},
+        onThinkingDone() {},
+        onContent(text) { asyncContent.push(text) },
+        onToolCall(call) { asyncToolCalls.push(call.name) },
+        onToolResult() {},
+        onDone() {},
+        onError(error) { asyncErrors.push(error) },
+      },
+    })
+  } finally {
+    delete process.env.FAKE_ASYNC_DELEGATION
+  }
+  assert.deepEqual(asyncErrors, [], "run_async delegation must permit subsequent parent activity")
+  assert.equal(asyncContent.join(""), "DONE")
+  assert.deepEqual(
+    asyncToolCalls,
+    ["delegate_to", "shell"],
+    "Explicit async delegation must attribute and surface both child launch and later parent tool work"
   )
 } finally {
   rmSync(directToolFixtureRoot, { recursive: true, force: true })

@@ -300,7 +300,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
     const canDelegate = (runtimeTarget.canCallAgents?.length ?? 0) > 0 && subDepth < MAX_AGENT_DEPTH
     const baseTools = getToolsForAgent(runtimeTarget.tools).filter(tool => {
         // Do not advertise an unusable delegation tool at the depth cap.
-        if (tool.id !== 'delegate_to' && tool.id !== 'delegate_parallel') return true
+        if (tool.id !== 'delegate_to' && tool.id !== 'delegate_parallel' && tool.id !== 'manage_delegations') return true
         return canDelegate
     })
     // Gate integration operational tools, then remove custom schemas that
@@ -314,7 +314,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
         ? filterReadOnlyIfNeeded(
             filterIntegrationToolExposure(
                 dedupeTools(canDelegate
-                    ? [...baseTools, ...getToolsForBuiltins(runtimeTarget.builtins), ...getToolsForAgent(['delegate_to', 'delegate_parallel'])]
+                    ? [...baseTools, ...getToolsForBuiltins(runtimeTarget.builtins), ...getToolsForAgent(['delegate_to', 'delegate_parallel', 'manage_delegations'])]
                     : [...baseTools, ...getToolsForBuiltins(runtimeTarget.builtins)]),
                 {
                     conversationId: parentCtx.conversationId,
@@ -1181,11 +1181,18 @@ function buildToolTitle(toolName: string, args: Record<string, unknown> | undefi
     if (toolName === 'list_dir') return pathArg ? `List ${pathArg}` : 'List directory'
     if (toolName === 'delegate_to') {
         const agentId = typeof args?.agent_id === 'string' ? args.agent_id : 'agent'
-        return `Delegate to ${agentId}`
+        return args?.run_async === true ? `Launch ${agentId} asynchronously` : `Delegate to ${agentId}`
     }
     if (toolName === 'delegate_parallel') {
         const count = Array.isArray(args?.jobs) ? args.jobs.length : 0
+        if (args?.run_async === true) {
+            return count > 0 ? `Launch ${count} async agent jobs` : 'Launch async agent jobs'
+        }
         return count > 0 ? `Delegate ${count} jobs in parallel` : 'Delegate in parallel'
+    }
+    if (toolName === 'manage_delegations') {
+        const action = typeof args?.action === 'string' ? args.action : 'manage'
+        return `${action[0]?.toUpperCase() ?? ''}${action.slice(1)} async delegations`
     }
     if (toolName === 'RunActivatedIntegrationTool') {
         return typeof args?.tool_id === 'string' ? `Run ${args.tool_id}` : 'Run integration tool'

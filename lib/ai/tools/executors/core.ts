@@ -5,7 +5,11 @@ import { executeCopyUploadToWorkspace } from "../copy-upload"
 import { executeTranscribeAudio } from "../transcribe-audio"
 import { executeCreateBackup } from "../create-backup"
 import { executeHostStatus } from "../host-status"
-import { executeDelegateParallel, executeDelegateTo } from "../delegate-to"
+import {
+  executeDelegateParallel,
+  executeDelegateTo,
+  executeManageDelegations,
+} from "../delegate-to"
 import {
   executeCompleteOwnerAgentHelp,
   executeRequestOwnerAgentHelp,
@@ -58,6 +62,7 @@ export const coreToolExecutors: Record<string, ToolExecutor> = {
   host_status: executeHostStatus,
   delegate_to: executeDelegateTo,
   delegate_parallel: executeDelegateParallel,
+  manage_delegations: executeManageDelegations,
   request_owner_agent_help: executeRequestOwnerAgentHelp,
   complete_owner_agent_help: executeCompleteOwnerAgentHelp,
   Read: executeRead,

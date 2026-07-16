@@ -91,6 +91,8 @@ When runtime permits and the work splits cleanly, run independent channels in pa
 
 Prefer \`delegate_parallel\` for 2-6 independent channels. Each job still needs its own stop boundary and thread choice.
 
+Synchronous delegation is the default: you sleep until the child or batch returns. Use \`run_async=true\` only when you have useful parent work that is genuinely independent of the child result. After launch, continue that work and use \`manage_delegations\` to collect or wait when you need the result. If you intentionally end the turn while it still runs, detach the batch so exactly one completion wake resumes the task. Cancel obsolete work. Never leave a running async batch without one of those lifecycle decisions.
+
 Do not parallelize actions that could create duplicate bookings/orders or inconsistent external state.
 </parallelism_policy>
 `.trim()

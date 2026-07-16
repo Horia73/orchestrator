@@ -52,9 +52,11 @@ function formatMessageTimestampFull(timestamp: number) {
 // as a muted system card. The trailing "This is an automated…" instruction
 // paragraph is for the model, not the reader — it is dropped from display.
 const BACKGROUND_JOB_NOTICE_RE = /^<background-job-notice>\n?([\s\S]*?)\n?<\/background-job-notice>\s*$/
+const ASYNC_DELEGATION_NOTICE_RE = /^<async-delegation-notice>\n?([\s\S]*?)\n?<\/async-delegation-notice>\s*$/
 
 function parseBackgroundJobNotice(content: string): { headline: string; body: string } | null {
-    const match = BACKGROUND_JOB_NOTICE_RE.exec(content.trim())
+    const clean = content.trim()
+    const match = BACKGROUND_JOB_NOTICE_RE.exec(clean) ?? ASYNC_DELEGATION_NOTICE_RE.exec(clean)
     if (!match) return null
     const lines = match[1].split("\n")
     const headlineIndex = lines.findIndex((line) => line.trim().length > 0)
