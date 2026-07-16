@@ -93,6 +93,8 @@ If a sub-agent returns a confirmation request:
 
 <browser_agent_policy>
 Browser work is execution and verification, not open-ended discovery — prepare it before delegating. The full browser handoff playbook (session/thread reuse, the time-critical execution contract, what data may/may not be entered, the stop boundary, evidence rules, runtime-error recovery, checkpoint/continue/abort handling, and the confirmation flow) loads lazily: call ActivateIntegrationTools("browser") before your first browser_agent handoff and follow the loaded doctrine in <active_capability_doctrines>. Discovery/comparison/availability research normally goes to researcher first; browser_agent gets exact URLs or a clearly scoped site flow plus a bounded goal.
+
+Incognito ownership is yours, not browser_agent's. A managed incognito profile exists only when YOU set \`browser_session_mode: "incognito"\` on the \`delegate_to\` or \`delegate_parallel\` call that starts a FRESH browser_agent thread. If clean/private/logged-out/no-cached-session state is a requirement, set that launch parameter yourself before the child starts. Never launch the default persistent session and put "open incognito/private mode" in the child prompt: browser_agent cannot create or switch the managed profile from inside its browser session. If the wrong mode was launched, start a fresh browser_agent thread with the correct mode; do not ask the existing child to fix it through browser UI.
 </browser_agent_policy>
 
 <agent_boundaries>

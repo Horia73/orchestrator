@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils"
 import type {
   AgentCallReasoningEntry,
   Attachment,
+  ToolCallReasoningEntry,
 } from "@/lib/types"
 
 type SelectedAgentTool = {
@@ -31,11 +32,13 @@ export function AgentWorkspacePanel({
   childRuns,
   onClose,
   onAttachmentClick,
+  onLoadToolCallDetails,
 }: {
   run: AgentCallReasoningEntry
   childRuns?: AgentCallReasoningEntry[]
   onClose: () => void
   onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
+  onLoadToolCallDetails?: (toolCallId: string) => Promise<ToolCallReasoningEntry>
 }) {
   const [selectedTool, setSelectedTool] =
     React.useState<SelectedAgentTool | null>(null)
@@ -194,6 +197,7 @@ export function AgentWorkspacePanel({
           }
           onSelectedArtifactClose={() => setSelectedTool(null)}
           onAttachmentClick={onAttachmentClick}
+          onLoadToolCallDetails={onLoadToolCallDetails}
         />
         {(childRun || splitTool) && (
           <div className="h-px bg-border" aria-hidden="true" />
@@ -225,6 +229,7 @@ export function AgentWorkspacePanel({
               }
               onSelectedArtifactClose={() => setSelectedTool(null)}
               onAttachmentClick={onAttachmentClick}
+              onLoadToolCallDetails={onLoadToolCallDetails}
             />
           </div>
         ) : null}
@@ -412,6 +417,7 @@ function AgentRunPane({
   onArtifactClick,
   onSelectedArtifactClose,
   onAttachmentClick,
+  onLoadToolCallDetails,
 }: {
   run: AgentCallReasoningEntry
   compact?: boolean
@@ -420,6 +426,7 @@ function AgentRunPane({
   onArtifactClick?: (artifact: ArtifactPayload) => void
   onSelectedArtifactClose?: () => void
   onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
+  onLoadToolCallDetails?: (toolCallId: string) => Promise<ToolCallReasoningEntry>
 }) {
   const isBrowserAgent = run.agentId === "browser_agent"
 
@@ -485,6 +492,7 @@ function AgentRunPane({
           }
           onArtifactClick={onArtifactClick}
           onAttachmentClick={onAttachmentClick}
+          onLoadToolCallDetails={onLoadToolCallDetails}
         />
       )}
       {selectedArtifact && !isBrowserAgent && (

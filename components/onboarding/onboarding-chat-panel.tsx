@@ -21,7 +21,7 @@ export function OnboardingChatPanel({
   opener: string
   onConversationId: (id: string) => void
 }) {
-  const { newChat, sendMessage, state } = useChatStore()
+  const { newChat, sendMessage, loadToolCallDetails, state } = useChatStore()
   const scrollRef = React.useRef<HTMLDivElement | null>(null)
   const startedRef = React.useRef(false)
   const openerSentRef = React.useRef(false)
@@ -55,6 +55,13 @@ export function OnboardingChatPanel({
     [state.activeConversationId, state.conversations],
   )
   const conversationId = activeConversation?.id ?? state.activeConversationId ?? ""
+  const handleLoadToolCallDetails = React.useCallback(
+    (messageId: string, toolCallId: string) => {
+      if (!conversationId) return Promise.reject(new Error("No onboarding conversation"))
+      return loadToolCallDetails(conversationId, messageId, toolCallId)
+    },
+    [conversationId, loadToolCallDetails]
+  )
   const isStreamingThis = Boolean(
     state.isStreaming && conversationId && state.streamingConversationId === conversationId,
   )
@@ -91,6 +98,7 @@ export function OnboardingChatPanel({
                 message={message}
                 compact
                 isLatestAssistantMessage={message.id === latestAssistantMessageId}
+                onLoadToolCallDetails={handleLoadToolCallDetails}
               />
             ))}
             {isStreamingThis ? (

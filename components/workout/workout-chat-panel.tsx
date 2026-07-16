@@ -82,7 +82,7 @@ export function WorkoutChatPanel({
   onCollapse,
   onWorkoutArtifact,
 }: WorkoutChatPanelProps) {
-  const { newChat, selectConversation, sendMessageToConversation, state } = useChatStore()
+  const { newChat, selectConversation, sendMessageToConversation, loadToolCallDetails, state } = useChatStore()
   const keyboardInset = useMobileKeyboardInset()
   const scrollbarVisible = useRevealOnScroll()
   const scrollRef = React.useRef<HTMLDivElement | null>(null)
@@ -189,6 +189,14 @@ export function WorkoutChatPanel({
     [state.activeConversationId, state.conversations]
   )
   const conversationId = activeConversation?.id ?? state.activeConversationId ?? ""
+  const handleLoadToolCallDetails = React.useCallback(
+    (messageId: string, toolCallId: string) => {
+      const id = activeConversation?.id ?? sideConversationId
+      if (!id) return Promise.reject(new Error("No workout conversation"))
+      return loadToolCallDetails(id, messageId, toolCallId)
+    },
+    [activeConversation?.id, loadToolCallDetails, sideConversationId]
+  )
   const isStreamingThisConversation = Boolean(
     state.isStreaming &&
       conversationId &&
@@ -343,6 +351,7 @@ export function WorkoutChatPanel({
                     suppressArtifactTypes={SUPPRESS}
                     isLatestAssistantMessage={message.id === latestAssistantMessageId}
                     onArtifactExpand={handleArtifactExpand}
+                    onLoadToolCallDetails={handleLoadToolCallDetails}
                   />
                 ))}
                 {isStreamingThisConversation && (

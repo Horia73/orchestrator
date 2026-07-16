@@ -37,6 +37,80 @@ import { hideInlineImageAttachments } from "@/lib/chat-attachment-display"
 const useIsomorphicLayoutEffect =
   typeof window !== "undefined" ? React.useLayoutEffect : React.useEffect
 
+function findDisclosureScrollContainer(element: HTMLElement): HTMLElement | null {
+    let parent = element.parentElement
+    while (parent) {
+        const overflowY = window.getComputedStyle(parent).overflowY
+        if (
+            (overflowY === "auto" || overflowY === "scroll") &&
+            parent.scrollHeight > parent.clientHeight
+        ) {
+            return parent
+        }
+        parent = parent.parentElement
+    }
+    return document.scrollingElement as HTMLElement | null
+}
+
+/**
+ * Keep a disclosure row visually fixed while content above it animates. The
+ * page's existing scroll container absorbs the layout delta; there is no
+ * nested scrollbar or visible scroll animation. A short hold also covers
+ * progressively mounted tool details and markdown.
+ */
+function useDisclosureAnchor(
+    buttonRef: React.RefObject<HTMLButtonElement | null>
+): (durationMs?: number) => void {
+    const frameRef = React.useRef<number | null>(null)
+    const interactionCleanupRef = React.useRef<(() => void) | null>(null)
+
+    const stop = React.useCallback(() => {
+        if (frameRef.current !== null) {
+            window.cancelAnimationFrame(frameRef.current)
+            frameRef.current = null
+        }
+        interactionCleanupRef.current?.()
+        interactionCleanupRef.current = null
+    }, [])
+
+    React.useEffect(() => stop, [stop])
+
+    return React.useCallback((durationMs = 500) => {
+        const button = buttonRef.current
+        if (!button || typeof window === "undefined") return
+        const scrollContainer = findDisclosureScrollContainer(button)
+        if (!scrollContainer) return
+
+        stop()
+        const anchorTop = button.getBoundingClientRect().top
+        const holdUntil = window.performance.now() + durationMs
+        const cancelForUserInput = () => stop()
+        scrollContainer.addEventListener("wheel", cancelForUserInput, { passive: true, once: true })
+        scrollContainer.addEventListener("touchstart", cancelForUserInput, { passive: true, once: true })
+        scrollContainer.addEventListener("pointerdown", cancelForUserInput, { passive: true, once: true })
+        interactionCleanupRef.current = () => {
+            scrollContainer.removeEventListener("wheel", cancelForUserInput)
+            scrollContainer.removeEventListener("touchstart", cancelForUserInput)
+            scrollContainer.removeEventListener("pointerdown", cancelForUserInput)
+        }
+        const preserve = () => {
+            const currentButton = buttonRef.current
+            if (!currentButton) {
+                stop()
+                return
+            }
+            const delta = currentButton.getBoundingClientRect().top - anchorTop
+            if (Math.abs(delta) > 0.25) scrollContainer.scrollTop += delta
+            if (window.performance.now() < holdUntil) {
+                frameRef.current = window.requestAnimationFrame(preserve)
+            } else {
+                stop()
+            }
+        }
+        frameRef.current = window.requestAnimationFrame(preserve)
+    }, [buttonRef, stop])
+}
+
 type SearchToolDisplay = "expanded" | "compact"
 
 function formatMessageTimestamp(timestamp: number) {
@@ -701,7 +775,7 @@ function ThoughtBlock({
 // is the committed-message counterpart to the live, per-phase ThoughtBlocks;
 // streaming keeps those expanded and this never renders mid-stream. Simpler than
 // ThoughtBlock by design (no live height/auto-scroll machinery): default closed,
-// open-state persisted, expanded body capped with internal scroll. A finished
+// open-state persisted, expanded body anchored above its disclosure row. A finished
 // turn renders straight into the collapsed state — it never pops open just to
 // animate shut, which used to flash on every remount and desync the tail spacer.
 // ---------------------------------------------------------------------------
@@ -735,6 +809,8 @@ function WorkedForBlock({
     onLoadToolCallDetails?: (toolCallId: string) => Promise<ToolCallReasoningEntry>
 }) {
     const openStorageKey = `worked:${messageId}:open`
+    const buttonRef = React.useRef<HTMLButtonElement | null>(null)
+    const beginAnchorHold = useDisclosureAnchor(buttonRef)
     const [savedOpenState] = React.useState<boolean | null>(() => {
         const saved = localStorage.getItem(openStorageKey)
         return saved === null ? null : saved === "true"
@@ -745,13 +821,14 @@ function WorkedForBlock({
         return false
     })
     const toggleOpen = React.useCallback(() => {
+        beginAnchorHold(1200)
         setIsOpen((prev) => {
             const next = !prev
             localStorage.setItem(openStorageKey, String(next))
             if (next) window.dispatchEvent(new Event("stop-chat-autoscroll"))
             return next
         })
-    }, [openStorageKey])
+    }, [beginAnchorHold, openStorageKey])
 
     React.useEffect(() => {
         if (!openOnMount) return
@@ -817,9 +894,6 @@ function WorkedForBlock({
     const [isMounted, setIsMounted] = React.useState(false)
     React.useEffect(() => { setIsMounted(true) }, [])
 
-    // Chain the wheel to the page once this box hits its scroll boundary.
-    const scrollRef = useTrapWheel<HTMLDivElement>()
-
     // Duration is the source of truth; older rows (and providers that never
     // stamped it) fall back to the activity summary, then a bare "Worked".
     const statusLabel = status === "aborted"
@@ -845,34 +919,6 @@ function WorkedForBlock({
 
     return (
         <div className="flex w-full min-w-0 flex-col">
-            <button
-                type="button"
-                onClick={toggleOpen}
-                aria-expanded={isOpen}
-                className={cn(
-                    "flex items-center gap-1.5 text-[15px] transition-colors group w-fit max-w-full min-w-0",
-                    status === "error"
-                        ? "text-destructive hover:text-destructive"
-                        : "text-muted-foreground hover:text-foreground"
-                )}
-            >
-                {status === "aborted" ? (
-                    <CircleStop className="size-4 shrink-0" />
-                ) : status === "error" ? (
-                    <CircleAlert className="size-4 shrink-0" />
-                ) : null}
-                <span className="min-w-0 truncate">{label}</span>
-                <ChevronDown
-                    className={cn(
-                        "size-4 shrink-0 transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
-                        status === "error"
-                            ? "text-destructive/80 group-hover:text-destructive"
-                            : "text-muted-foreground/70 group-hover:text-foreground",
-                        isOpen ? "rotate-0" : "-rotate-90"
-                    )}
-                />
-            </button>
-
             <div
                 className={cn(
                     "grid will-change-[grid-template-rows,opacity]",
@@ -887,7 +933,7 @@ function WorkedForBlock({
                         isOpen ? "translate-y-0 opacity-100" : "-translate-y-1 opacity-0"
                     )}
                 >
-                    <div ref={scrollRef} className="tool-call-scroll mt-2 max-h-[552px] overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable] [touch-action:pan-y]">
+                    <div className="mb-2 pr-1">
                         {!bodyMounted ? (
                             <div className="flex items-center gap-2 py-2 pl-7 text-[13px] text-muted-foreground">
                                 <Loader2 className="size-3.5 animate-spin" />
@@ -951,6 +997,35 @@ function WorkedForBlock({
                     </div>
                 </div>
             </div>
+
+            <button
+                ref={buttonRef}
+                type="button"
+                onClick={toggleOpen}
+                aria-expanded={isOpen}
+                className={cn(
+                    "group flex w-fit max-w-full min-w-0 items-center gap-1.5 text-[15px] transition-colors",
+                    status === "error"
+                        ? "text-destructive hover:text-destructive"
+                        : "text-muted-foreground hover:text-foreground"
+                )}
+            >
+                {status === "aborted" ? (
+                    <CircleStop className="size-4 shrink-0" />
+                ) : status === "error" ? (
+                    <CircleAlert className="size-4 shrink-0" />
+                ) : null}
+                <span className="min-w-0 truncate">{label}</span>
+                <ChevronDown
+                    className={cn(
+                        "size-4 shrink-0 transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+                        status === "error"
+                            ? "text-destructive/80 group-hover:text-destructive"
+                            : "text-muted-foreground/70 group-hover:text-foreground",
+                        isOpen ? "rotate-0" : "-rotate-90"
+                    )}
+                />
+            </button>
         </div>
     )
 }
@@ -1265,14 +1340,50 @@ function ToolCallBlock({
     onToggle: () => void
     onLoadDetails?: (toolCallId: string) => Promise<ToolCallReasoningEntry>
 }) {
+    const buttonRef = React.useRef<HTMLButtonElement | null>(null)
+    const wasOpenRef = React.useRef(false)
+    const [openDirection, setOpenDirection] = React.useState<"up" | "down">("down")
+    const beginAnchorHold = useDisclosureAnchor(buttonRef)
     const [loadedEntry, setLoadedEntry] = React.useState<ToolCallReasoningEntry | null>(null)
     const [loading, setLoading] = React.useState(false)
     const [loadError, setLoadError] = React.useState<string | null>(null)
+    const [detailsVisible, setDetailsVisible] = React.useState(false)
     const resolvedEntry = loadedEntry ?? entry
     const status = resolvedEntry.status ?? (
         resolvedEntry.content ? (resolvedEntry.success === false ? "error" : "ok") : "running"
     )
     const bodyReady = !entry.detailsDeferred || loadedEntry !== null
+    const canOpen = bodyReady || Boolean(onLoadDetails)
+
+    React.useEffect(() => {
+        if (!open || !bodyReady) {
+            setDetailsVisible(false)
+            return
+        }
+        const frame = window.requestAnimationFrame(() => setDetailsVisible(true))
+        return () => window.cancelAnimationFrame(frame)
+    }, [bodyReady, open])
+
+    const chooseOpenDirection = React.useCallback(() => {
+        const button = buttonRef.current
+        if (!button || typeof window === "undefined") return "down" as const
+        const rect = button.getBoundingClientRect()
+        const requiredSpace = TOOL_CALL_CARD_HEIGHT + 12
+        const direction = rect.top >= requiredSpace ? "up" : "down"
+        setOpenDirection(direction)
+        return direction
+    }, [])
+
+    useIsomorphicLayoutEffect(() => {
+        if (open === wasOpenRef.current) return
+        if (open) {
+            const direction = chooseOpenDirection()
+            if (direction === "up") beginAnchorHold(700)
+        } else if (openDirection === "up") {
+            beginAnchorHold(700)
+        }
+        wasOpenRef.current = open
+    }, [beginAnchorHold, chooseOpenDirection, open, openDirection])
 
     React.useEffect(() => {
         if (!open || !entry.detailsDeferred || !onLoadDetails || resolvedEntry.status !== "running") return
@@ -1299,12 +1410,10 @@ function ToolCallBlock({
 
     const handleToggle = React.useCallback(() => {
         const opening = !open
+        if (opening && !canOpen) return
         onToggle()
         if (!opening || bodyReady || loading) return
-        if (!onLoadDetails) {
-            setLoadError("Tool details are unavailable.")
-            return
-        }
+        if (!onLoadDetails) return
         setLoading(true)
         setLoadError(null)
         void onLoadDetails(entry.toolCallId)
@@ -1313,7 +1422,7 @@ function ToolCallBlock({
                 setLoadError(error instanceof Error ? error.message : "Failed to load tool details.")
             })
             .finally(() => setLoading(false))
-    }, [bodyReady, entry.toolCallId, loading, onLoadDetails, onToggle, open])
+    }, [bodyReady, canOpen, entry.toolCallId, loading, onLoadDetails, onToggle, open])
 
     const Icon = isWebSearchToolCall(resolvedEntry)
         ? Search
@@ -1321,16 +1430,51 @@ function ToolCallBlock({
             ? Terminal
             : Wrench
     const title = getToolCallDisplayTitle(resolvedEntry)
+    const detailsPanel = bodyReady ? (
+        <div
+            aria-hidden={!detailsVisible}
+            className={cn(
+                "grid min-w-0 will-change-[grid-template-rows,opacity] transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+                openDirection === "up" ? "order-0" : "order-2",
+                detailsVisible ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+            )}
+        >
+            <div className="min-h-0 overflow-hidden">
+                <div
+                    className={cn(
+                        "transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+                        detailsVisible
+                            ? "translate-y-0 opacity-100"
+                            : openDirection === "up"
+                                ? "translate-y-1 opacity-0"
+                                : "-translate-y-1 opacity-0",
+                        openDirection === "up" ? "mb-1" : "mt-1"
+                    )}
+                >
+                    <InlineToolCallView
+                        entry={resolvedEntry}
+                        onOpen={onArtifactClick}
+                        searchDisplay={searchToolDisplay}
+                        ownerLabel={ownerLabel}
+                    />
+                </div>
+            </div>
+        </div>
+    ) : null
 
     return (
-        <div className="relative z-10 min-w-0 text-left">
+        <div className="relative z-10 flex min-w-0 flex-col text-left">
             <button
+                ref={buttonRef}
                 type="button"
                 onClick={handleToggle}
                 aria-expanded={open}
+                disabled={!canOpen}
                 className={cn(
                     "group flex w-full min-w-0 items-center gap-3 py-1 text-left",
-                    status === "error" ? "text-destructive" : "text-muted-foreground hover:text-foreground"
+                    openDirection === "up" ? "order-1" : "order-0",
+                    status === "error" ? "text-destructive" : "text-muted-foreground hover:text-foreground",
+                    !canOpen && "cursor-default hover:text-muted-foreground"
                 )}
             >
                 {loading || status === "running" ? (
@@ -1349,27 +1493,20 @@ function ToolCallBlock({
                 >
                     {title}
                 </span>
-                <ChevronDown
-                    className={cn(
-                        "size-4 shrink-0 text-muted-foreground/70 transition-transform duration-200",
-                        open ? "rotate-0" : "-rotate-90"
-                    )}
-                />
+                {canOpen && (
+                    <ChevronDown
+                        className={cn(
+                            "size-4 shrink-0 text-muted-foreground/70 transition-transform duration-200",
+                            open ? "rotate-0" : "-rotate-90"
+                        )}
+                    />
+                )}
             </button>
 
             {open && loadError && (
-                <div className="ml-7 py-1 text-[12px] text-destructive">{loadError}</div>
+                <div className="order-1 ml-7 py-1 text-[12px] text-destructive">{loadError}</div>
             )}
-            {open && bodyReady && (
-                <div className="mt-1 animate-in fade-in-0 slide-in-from-top-1 duration-200">
-                    <InlineToolCallView
-                        entry={resolvedEntry}
-                        onOpen={onArtifactClick}
-                        searchDisplay={searchToolDisplay}
-                        ownerLabel={ownerLabel}
-                    />
-                </div>
-            )}
+            {detailsPanel}
         </div>
     )
 }
@@ -2204,6 +2341,7 @@ interface StreamingBubbleProps {
     onArtifactExpand?: (artifact: ArtifactRow) => void
     onAgentOpen?: (entry: AgentCallReasoningEntry) => void
     onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
+    onLoadToolCallDetails?: (toolCallId: string) => Promise<ToolCallReasoningEntry>
     thinkingSeconds?: number
     thinkingDone?: boolean
     searchToolDisplay?: SearchToolDisplay
@@ -2231,7 +2369,7 @@ function streamingStatusLabel(
     return `Connecting${suffix}`
 }
 
-export function StreamingBubble({ reasoning, content, contentSegments, streamingMode, streamingStatus, compact = false, suppressArtifactTypes, showCursor = true, showStreamingStatusLabel = false, onArtifactClick, onArtifactExpand, onAgentOpen, onAttachmentClick, thinkingSeconds, thinkingDone, messageId, searchToolDisplay = "expanded", thoughtAutoOpen = true, thoughtAutoExpandTools = false, liveCollapsedTitle = false }: StreamingBubbleProps) {
+export function StreamingBubble({ reasoning, content, contentSegments, streamingMode, streamingStatus, compact = false, suppressArtifactTypes, showCursor = true, showStreamingStatusLabel = false, onArtifactClick, onArtifactExpand, onAgentOpen, onAttachmentClick, onLoadToolCallDetails, thinkingSeconds, thinkingDone, messageId, searchToolDisplay = "expanded", thoughtAutoOpen = true, thoughtAutoExpandTools = false, liveCollapsedTitle = false }: StreamingBubbleProps) {
     const reasoningGroups = React.useMemo(() => groupReasoningByPhase(reasoning), [reasoning])
     const timeline = React.useMemo(() => buildInterleavedTimeline(reasoningGroups, contentSegments), [reasoningGroups, contentSegments])
     const activeReasoningPhase = reasoningGroups.length > 0 ? reasoningGroups[reasoningGroups.length - 1].phase : null
@@ -2269,6 +2407,7 @@ export function StreamingBubble({ reasoning, content, contentSegments, streaming
                         thoughtAutoOpen={thoughtAutoOpen}
                         thoughtAutoExpandTools={thoughtAutoExpandTools}
                         liveCollapsedTitle={liveCollapsedTitle}
+                        onLoadToolCallDetails={onLoadToolCallDetails}
                     />
                 ) : item.type === "steered" ? (
                     <SteeredMessageBlock

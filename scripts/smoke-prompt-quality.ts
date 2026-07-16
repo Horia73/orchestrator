@@ -136,6 +136,16 @@ function main() {
     /This standing request authorizes delegation, not the underlying external action/,
     "standing delegation authorization must preserve action-consent boundaries"
   )
+  assert.match(
+    orchestrator,
+    /Incognito ownership is yours, not browser_agent's[\s\S]*browser_session_mode: "incognito"[\s\S]*fresh browser_agent thread/i,
+    "orchestrator must own managed incognito selection before browser_agent launch"
+  )
+  assert.match(
+    orchestrator,
+    /Never launch the default persistent session[\s\S]*browser_agent cannot create or switch the managed profile/i,
+    "orchestrator must not delegate incognito switching to browser_agent"
+  )
   for (const file of [
     "lib/ai/prompts/orchestrator/examples.ts",
     "lib/ai/prompts/researcher/examples.ts",

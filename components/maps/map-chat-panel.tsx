@@ -38,7 +38,7 @@ export function MapChatPanel({
   onCollapse,
   onMapArtifact,
 }: MapChatPanelProps) {
-  const { newChat, selectConversation, sendMessage, state } = useChatStore()
+  const { newChat, selectConversation, sendMessage, loadToolCallDetails, state } = useChatStore()
   const keyboardInset = useMobileKeyboardInset()
   const scrollbarVisible = useRevealOnScroll()
   const scrollRef = React.useRef<HTMLDivElement | null>(null)
@@ -88,6 +88,13 @@ export function MapChatPanel({
   )
   const conversationId =
     activeConversation?.id ?? state.activeConversationId ?? ""
+  const handleLoadToolCallDetails = React.useCallback(
+    (messageId: string, toolCallId: string) => {
+      if (!conversationId) return Promise.reject(new Error("No map conversation"))
+      return loadToolCallDetails(conversationId, messageId, toolCallId)
+    },
+    [conversationId, loadToolCallDetails]
+  )
   const isStreamingThisConversation = Boolean(
     state.isStreaming &&
     conversationId &&
@@ -252,6 +259,7 @@ export function MapChatPanel({
                       message.id === latestAssistantMessageId
                     }
                     onArtifactExpand={handleArtifactExpand}
+                    onLoadToolCallDetails={handleLoadToolCallDetails}
                   />
                 ))}
                 {showStreamingBubble && (

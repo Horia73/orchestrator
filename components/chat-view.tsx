@@ -431,6 +431,20 @@ export function ChatView() {
     isStreamingThisConversation,
     state.streamingReasoning,
   ])
+  const agentRunMessageIds = React.useMemo(() => {
+    const byRunId = new Map<string, string>()
+    for (const message of transcriptMessages) {
+      for (const run of collectAgentRuns(message.reasoning)) {
+        byRunId.set(run.runId, message.id)
+      }
+    }
+    if (state.streamingMessageId) {
+      for (const run of collectAgentRuns(state.streamingReasoning)) {
+        byRunId.set(run.runId, state.streamingMessageId)
+      }
+    }
+    return byRunId
+  }, [transcriptMessages, state.streamingMessageId, state.streamingReasoning])
   const activeTurnAgentRuns = React.useMemo(() => {
     const runs: AgentCallReasoningEntry[] = []
     if (activeInProgressAssistantMessage?.reasoning) {
@@ -475,6 +489,9 @@ export function ChatView() {
     cachedActiveAgentRun.run.runId === activeAgentRunId
       ? cachedActiveAgentRun.run
       : null)
+  const activePanelAgentMessageId = activePanelAgentRun
+    ? agentRunMessageIds.get(activePanelAgentRun.runId) ?? null
+    : null
 
   // A completed or paused browser leaves the side panel immediately. For a
   // real `ask`, the inline live view remains visible in the chat (outside the
@@ -2896,6 +2913,24 @@ export function ChatView() {
     [conversationId, loadToolCallDetails]
   )
 
+  const handleLoadAgentToolCallDetails = React.useCallback(
+    (toolCallId: string) => {
+      if (!conversationId || !activePanelAgentMessageId) {
+        return Promise.reject(new Error("No source message for agent tool"))
+      }
+      return loadToolCallDetails(
+        conversationId,
+        activePanelAgentMessageId,
+        toolCallId
+      )
+    },
+    [
+      activePanelAgentMessageId,
+      conversationId,
+      loadToolCallDetails,
+    ]
+  )
+
   const hasArtifact =
     (artifactOpen && !!artifact) ||
     !!genArtifact ||
@@ -3583,6 +3618,11 @@ export function ChatView() {
                 childRuns={activeChildAgentRuns}
                 onClose={handleAgentClose}
                 onAttachmentClick={openPreview}
+                onLoadToolCallDetails={
+                  activePanelAgentMessageId
+                    ? handleLoadAgentToolCallDetails
+                    : undefined
+                }
               />
             ) : genArtifact ? (
               // Generated artifact panel takes priority — same right column,
@@ -3614,6 +3654,11 @@ export function ChatView() {
                 childRuns={activeChildAgentRuns}
                 onClose={handleAgentClose}
                 onAttachmentClick={openPreview}
+                onLoadToolCallDetails={
+                  activePanelAgentMessageId
+                    ? handleLoadAgentToolCallDetails
+                    : undefined
+                }
               />
             ) : genArtifact ? (
               <AntArtifactPanel
