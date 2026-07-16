@@ -1,26 +1,24 @@
 "use client"
 
 import * as React from "react"
-import { Loader2, Paperclip } from "lucide-react"
-import type { PendingFollowUpStatus } from "@/hooks/chat-store-reducer"
+import { Paperclip } from "lucide-react"
 
 export interface PendingFollowUpItem {
   id: string
   content: string
   attachmentCount: number
-  status: PendingFollowUpStatus
 }
 
 interface PendingFollowUpsProps {
   items: PendingFollowUpItem[]
 }
 
-function statusLabel(status: PendingFollowUpStatus): string {
-  if (status === "queued") return "Queued"
-  if (status === "claimed") return "Starting…"
-  return "Sending…"
-}
-
+/**
+ * Queued steering messages, rendered exactly like the user bubbles they will
+ * become. They sit above the input (outside the transcript) while the current
+ * turn streams, and move into the chat only when their own turn starts — so a
+ * message "appears in the chat" at the moment it actually reaches the model.
+ */
 export const PendingFollowUps = React.memo(function PendingFollowUps({
   items,
 }: PendingFollowUpsProps) {
@@ -28,35 +26,29 @@ export const PendingFollowUps = React.memo(function PendingFollowUps({
 
   return (
     <section
-      aria-label="Pending follow-up messages"
+      aria-label="Queued messages"
       aria-live="polite"
-      className="mb-2 max-h-44 space-y-1.5 overflow-y-auto rounded-xl"
+      className="mb-2 max-h-44 space-y-2 overflow-y-auto"
     >
       {items.map((item) => (
-        <div
-          key={item.id}
-          className="rounded-xl border border-border/60 bg-muted/80 px-3.5 py-2.5 text-foreground shadow-sm backdrop-blur-sm"
-        >
-          <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-            {item.status !== "queued" && (
-              <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+        <div key={item.id} className="flex flex-col items-end gap-1 pr-1">
+          <div className="max-w-[85%] rounded-[10px] bg-[#f0ede6] px-4 py-2.5 text-[16px] whitespace-pre-wrap break-words select-text dark:bg-muted">
+            {item.content}
+            {item.attachmentCount > 0 && (
+              <div
+                className={
+                  "flex items-center gap-1 text-xs text-muted-foreground" +
+                  (item.content ? " mt-1.5" : "")
+                }
+              >
+                <Paperclip className="size-3" aria-hidden="true" />
+                <span>
+                  {item.attachmentCount} attachment
+                  {item.attachmentCount === 1 ? "" : "s"}
+                </span>
+              </div>
             )}
-            <span>{statusLabel(item.status)}</span>
           </div>
-          {item.content && (
-            <p className="line-clamp-3 text-[14px] leading-5 break-words whitespace-pre-wrap">
-              {item.content}
-            </p>
-          )}
-          {item.attachmentCount > 0 && (
-            <div className="mt-1.5 flex items-center gap-1 text-xs text-muted-foreground">
-              <Paperclip className="size-3" aria-hidden="true" />
-              <span>
-                {item.attachmentCount} attachment
-                {item.attachmentCount === 1 ? "" : "s"}
-              </span>
-            </div>
-          )}
         </div>
       ))}
     </section>

@@ -300,7 +300,6 @@ export function ChatView() {
                 id: entry.followUpId,
                 content: message.content,
                 attachmentCount: message.attachments?.length ?? 0,
-                status: entry.status,
               },
             ]
           : []
