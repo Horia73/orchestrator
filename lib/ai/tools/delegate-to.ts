@@ -43,7 +43,7 @@ export const delegateToTool: ToolDef = {
     name: 'delegate_to',
     description: [
         'Delegate a task to a specialist sub-agent and wait for its final answer.',
-        'For genuinely independent work that should overlap with your own next steps, set run_async=true. The call then returns immediately with a batch_id and agent_thread_id while the child keeps running; use manage_delegations to collect, wait, detach for an automatic completion wake, or cancel it. Async mode does NOT suspend your parent turn.',
+        'Set run_async=true only when you have concrete useful parent work on a different independent slice that you will do immediately. The call then returns a batch_id and agent_thread_id while the child keeps running. When your independent work ends, detach any still-running batch for an automatic completion wake and end the turn; do not poll or chain short waits. Async mode does NOT suspend your parent turn.',
         'Use this when the task is outside your remit, when a specialist would do better, or when you want a fresh perspective on your own output.',
         'Returns the sub-agent\'s complete response, output length metadata, and agent_thread_id. The complete response is also persisted in the agent thread; if a UI preview is clipped, do not treat that as data loss. Pass thread_id to continue an existing parent↔agent thread; omit it to create a new one.',
         'To let the sub-agent see a file directly (image, PDF, document), pass attachment_ids — upload ids from the current user message or from find_past_uploads; the files are forwarded into its turn for providers that support them.',
@@ -97,11 +97,11 @@ export const delegateToTool: ToolDef = {
             },
             run_async: {
                 type: 'boolean',
-                description: 'When true, launch the child and return immediately so you can continue useful independent parent work. Default false waits synchronously for the complete result.',
+                description: 'When true, launch the child and return immediately for concrete useful independent parent work you will do now. Do not use merely because the child may be slow. Default false waits synchronously for the complete result.',
             },
             wake_on_complete: {
                 type: 'boolean',
-                description: 'Async mode only. When true, completion posts an automated follow-up and wakes this conversation. Default false; prefer launching false, then use manage_delegations action="detach" only if you intentionally end the turn before collecting.',
+                description: 'Async mode only. When true, completion posts an automated follow-up and wakes this conversation. Default false; when your independent parent slice ends and the batch still runs, use manage_delegations action="detach" to enable this and end the turn.',
             },
         },
         required: ['agent_id', 'prompt'],
@@ -114,7 +114,7 @@ export const delegateParallelTool: ToolDef = {
     name: 'delegate_parallel',
     description: [
         'Delegate multiple independent tasks to specialist sub-agents concurrently and wait for all final answers.',
-        'For independent jobs that should overlap with useful parent work, set run_async=true. The call returns immediately with one batch_id plus every job/thread id; manage the whole batch with manage_delegations. Async mode does NOT suspend the parent.',
+        'Set run_async=true only when the jobs overlap with concrete useful parent work on a different slice that you will do immediately. When that slice ends, detach a still-running batch for an automatic completion wake and end the turn; do not poll or chain short waits. Async mode does NOT suspend the parent.',
         'Use only for workstreams that do not depend on each other and do not mutate the same files or external systems.',
         'Each job returns its complete response, output length metadata, and agent_thread_id. The complete response is also persisted in the agent thread; if a UI preview is clipped, do not treat that as data loss. Each job may pass thread_id to continue an existing parent↔agent thread, or omit it to create a new one.',
         'Prefer researcher for open web discovery, availability checks, comparisons, rankings, and vendor/product lookup. Browser_agent jobs must be bounded execution/verification tasks on known pages/sites, not open-ended research/discovery/comparison; include a complete action contract and stop boundary. For loading/API diagnostics, request inspectDiagnostics and same-origin fetchUrl results. Reuse thread_id for the same browser flow; use separate threads only for independent flows. For browser_agent only, incognito is a parent-controlled launch mode: start a fresh thread with browser_session_mode="incognito" on the job when clean/private state is required. Never ask a persistent browser_agent job to switch modes from inside the browser. Do not parallelize browser jobs that can create duplicate orders/bookings/sends or mutate the same external account.',
@@ -179,11 +179,11 @@ export const delegateParallelTool: ToolDef = {
             },
             run_async: {
                 type: 'boolean',
-                description: 'When true, launch the batch and return immediately. Default false waits synchronously for all results.',
+                description: 'When true, launch the batch and return immediately for concrete useful independent parent work you will do now. Do not use merely because the jobs may be slow. Default false waits synchronously for all results.',
             },
             wake_on_complete: {
                 type: 'boolean',
-                description: 'Async mode only. When true, wake the conversation once the entire batch settles. Default false; action="detach" can enable this later.',
+                description: 'Async mode only. When true, wake the conversation once the entire batch settles. Default false; action="detach" enables this when the independent parent slice ends before the batch.',
             },
         },
         required: ['jobs'],
@@ -197,7 +197,7 @@ export const manageDelegationsTool: ToolDef = {
     description: [
         'Manage async specialist batches launched by delegate_to/delegate_parallel with run_async=true.',
         'list shows recent batches in this caller/thread scope. collect returns current state and persisted results without blocking. wait blocks efficiently for up to max_wait_ms and returns results if settled. detach enables one automatic completion follow-up/wake so you may end the turn safely. cancel stops queued/running children.',
-        'Lifecycle rule: before your final answer, either collect/wait for every async batch you still need, detach a still-running batch when the original task should resume automatically later, or cancel work that is no longer needed. Do not silently abandon a running batch.',
+        'Lifecycle rule: once your independent parent work ends, detach a still-running batch and end the turn so completion wakes the original task; do not poll, babysit with status checks, or chain short waits. Collect settled results, use one intentional bounded wait only for a concrete same-turn dependency, or cancel obsolete work. Do not silently abandon a running batch.',
     ].join(' '),
     input_schema: {
         type: 'object',

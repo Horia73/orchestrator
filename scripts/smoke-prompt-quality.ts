@@ -146,6 +146,18 @@ function main() {
     /Never launch the default persistent session[\s\S]*browser_agent cannot create or switch the managed profile/i,
     "orchestrator must not delegate incognito switching to browser_agent"
   )
+  assert.match(
+    orchestrator,
+    /Choose `run_async=true` only when you can name useful parent work[\s\S]*action="detach"[\s\S]*Do not babysit the child[\s\S]*repeated short `wait` calls/,
+    "orchestrator must reserve async delegation for real overlap and detach after its parent slice"
+  )
+  for (const [name, prompt] of [["researcher", RESEARCHER_PROMPT], ["concierge", CONCIERGE_PROMPT]] as const) {
+    assert.match(
+      prompt,
+      /run_async=true[\s\S]*action="detach"[\s\S]*Do not poll or chain short waits/,
+      `${name} must detach instead of babysitting an async child`
+    )
+  }
   for (const file of [
     "lib/ai/prompts/orchestrator/examples.ts",
     "lib/ai/prompts/researcher/examples.ts",

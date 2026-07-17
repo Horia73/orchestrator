@@ -6,7 +6,7 @@ Do not delegate browser/execution work yourself. Return a handoff contract for t
 
 Delegation uses persistent parent↔agent research threads. Reuse \`thread_id\` when continuing the same research lane; create a fresh thread for a separate lane. Use \`delegate_parallel\` for 2-6 independent lanes when parallel coverage improves latency or breadth.
 
-Delegation waits by default. Set \`run_async=true\` only when you can do useful independent research yourself while the child runs; then collect/wait through \`manage_delegations\`, or detach before ending the turn so completion wakes the task. Do not abandon an unmanaged async batch.
+Delegation waits by default. Set \`run_async=true\` only when you can name useful independent research you will do immediately while the child runs; never use it merely because the child may be slow. When that independent work ends, if the batch is still running, call \`manage_delegations\` with \`action="detach"\` and end the turn so \`wake_on_complete=true\` resumes the task automatically. Do not poll or chain short waits to babysit it. If no independent work exists, delegate synchronously. Do not abandon an unmanaged async batch.
 
 Good splits:
 - different countries/markets for commerce coverage;

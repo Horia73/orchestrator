@@ -147,7 +147,7 @@ const APP_SERVER_SESSION_PREFIX = 'appserver:'
 // sessions then start fresh and latestUserPromptWithPortableHistory carries the
 // Orchestrator conversation across. Promptless native Coder sessions keep the
 // generic prefix and remain resumable.
-const MANAGED_APP_SERVER_SESSION_PREFIX = 'appserver:managed-policy-v2:'
+const MANAGED_APP_SERVER_SESSION_PREFIX = 'appserver:managed-policy-v3:'
 const LEGACY_DIRECT_TOOL_SESSION_PREFIX = 'appserver:direct:'
 const JSON_RPC_REQUEST_TIMEOUT_MS = 60_000
 const CODEX_RECONNECTING_NOTICE_RE = /^Reconnecting(?:\.{3}|…)\s+\d+\/\d+$/i
@@ -163,8 +163,9 @@ const ORCHESTRATOR_MULTI_AGENT_MODE_HINT = [
     'agent work; do not require the user to repeat it in the current message.',
     'When delegate_to or delegate_parallel is exposed, follow the Orchestrator',
     '<delegation_policy>, <browser_agent_policy>, <agent_boundaries>, and runtime_context;',
-    'synchronous delegation suspends the parent, while run_async=true explicitly allows the parent',
-    'to continue and manage the batch with manage_delegations.',
+    'synchronous delegation suspends the parent. Use run_async=true only for concrete independent',
+    'parent work you will do immediately; when that work ends, detach a still-running batch for',
+    'wake_on_complete and end the turn instead of polling or chaining short waits.',
     'Do not invent or use Codex-native sub-agents.',
 ].join(' ')
 

@@ -374,7 +374,7 @@ export function buildAgentsSection(ctx: PromptContext): string {
         .join('\n')
     return [
         '<runtime_agents>',
-        'Sub-agents you may delegate to with `delegate_to`, or with `delegate_parallel` for independent jobs. Both wait synchronously by default. Set `run_async=true` only when child work is independent from useful parent work you can do now; then use `manage_delegations` to collect/wait/detach/cancel. The bracketed hint is the runtime truth about each agent — honor it:',
+        'Sub-agents you may delegate to with `delegate_to`, or with `delegate_parallel` for independent jobs. Both wait synchronously by default. Set `run_async=true` only when you have a concrete independent parent slice to do immediately. When that slice ends and the batch still runs, detach it for wake_on_complete and end the turn; do not poll or chain short waits. The bracketed hint is the runtime truth about each agent — honor it:',
         details,
         '</runtime_agents>',
     ].join('\n')
@@ -452,7 +452,7 @@ export function buildRuntimeContext(ctx: PromptContext): string {
         const ids = ctx.availableAgents.map(a => a.id)
         const canDelegate = ids.length > 0 && ctx.delegationDepth < cap
         if (canDelegate) {
-            lines.push(`delegation: you are at depth ${ctx.delegationDepth} of max ${cap}. You MAY delegate via delegate_to to [${ids.join(', ')}] — <runtime_agents> says what each does and whether it can sub-delegate. They run at depth ${ctx.delegationDepth + 1}; a chain past depth ${cap} is truncated. Hand a specialist the need and the context it can't see, not a step-by-step script — it owns its own method and depth. Synchronous delegation suspends you until the child returns. For truly independent overlap, set run_async=true; before your final answer, manage every launched batch by collect/wait, detach for one completion wake, or cancel.`)
+            lines.push(`delegation: you are at depth ${ctx.delegationDepth} of max ${cap}. You MAY delegate via delegate_to to [${ids.join(', ')}] — <runtime_agents> says what each does and whether it can sub-delegate. They run at depth ${ctx.delegationDepth + 1}; a chain past depth ${cap} is truncated. Hand a specialist the need and the context it can't see, not a step-by-step script — it owns its own method and depth. Synchronous delegation suspends you until the child returns. Use run_async=true only for a concrete independent parent slice you will do immediately; when it ends, detach any still-running batch for one completion wake and end the turn instead of polling or chaining short waits.`)
         } else {
             lines.push(`delegation: you are at depth ${ctx.delegationDepth} of max ${cap} and have no sub-agents available here — do this task yourself and return; do not claim you delegated.`)
         }

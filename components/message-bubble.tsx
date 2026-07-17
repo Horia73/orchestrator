@@ -41,10 +41,7 @@ function findDisclosureScrollContainer(element: HTMLElement): HTMLElement | null
     let parent = element.parentElement
     while (parent) {
         const overflowY = window.getComputedStyle(parent).overflowY
-        if (
-            (overflowY === "auto" || overflowY === "scroll") &&
-            parent.scrollHeight > parent.clientHeight
-        ) {
+        if (overflowY === "auto" || overflowY === "scroll") {
             return parent
         }
         parent = parent.parentElement
@@ -146,12 +143,52 @@ function renderedDisclosureShift(root: HTMLElement): number {
     return Number.isFinite(y) ? Math.max(0, -y) : 0
 }
 
+const DISCLOSURE_VIEWPORT_GAP = 12
+
+function disclosureVisibleBounds(scrollContainer: HTMLElement): {
+    top: number
+    bottom: number
+} {
+    const scrollRect = scrollContainer.getBoundingClientRect()
+    let top = scrollRect.top + DISCLOSURE_VIEWPORT_GAP
+    let bottom = scrollRect.bottom - DISCLOSURE_VIEWPORT_GAP
+
+    // The chat composer overlays the scrolling transcript. Treat its top edge
+    // as the usable viewport edge so a disclosure never chooses "down" merely
+    // because there is scroll-container space hidden behind the composer.
+    const inputContainer = scrollContainer.parentElement?.querySelector<HTMLElement>(
+        '[data-chat-input-container="true"]'
+    )
+    if (inputContainer) {
+        const inputRect = inputContainer.getBoundingClientRect()
+        if (inputRect.bottom > scrollRect.top && inputRect.top < scrollRect.bottom) {
+            bottom = Math.min(bottom, inputRect.top - DISCLOSURE_VIEWPORT_GAP)
+        }
+    }
+
+    const visualViewport = window.visualViewport
+    if (visualViewport) {
+        const viewportTop = visualViewport.offsetTop
+        top = Math.max(top, viewportTop + DISCLOSURE_VIEWPORT_GAP)
+        bottom = Math.min(
+            bottom,
+            viewportTop + visualViewport.height - DISCLOSURE_VIEWPORT_GAP
+        )
+    }
+
+    return { top, bottom: Math.max(top, bottom) }
+}
+
 /**
- * Keep a disclosure row visually fixed while content above it animates. The
- * surrounding layout yields upward with CSS translate; scrollTop is never
- * touched. A short hold also covers progressively mounted details/markdown.
+ * Let a disclosure grow downward while it fits in the visible transcript. If
+ * its bottom would cross the composer/viewport edge, move the whole transcript
+ * up by only that overflow. Because the disclosure header is part of that
+ * translated block, it travels upward together with its body instead of acting
+ * like a fixed bottom anchor. A short hold covers progressively mounted details
+ * and markdown; scrollTop is never mutated.
  */
-function useDisclosureAnchor(
+function useDisclosurePlacement(
+    disclosureRef: React.RefObject<HTMLDivElement | null>,
     buttonRef: React.RefObject<HTMLButtonElement | null>
 ): (durationMs?: number) => void {
     const contributionId = React.useId()
@@ -168,12 +205,15 @@ function useDisclosureAnchor(
     React.useEffect(() => () => {
         stop()
         const root = rootRef.current
-        if (root) setToolDisclosureShift(root, contributionId, 0)
+        if (root && toolDisclosureShiftStates.get(root)?.contributions.has(contributionId)) {
+            setToolDisclosureShift(root, contributionId, 0)
+        }
     }, [contributionId, stop])
 
     return React.useCallback((durationMs = 500) => {
         const button = buttonRef.current
-        if (!button || typeof window === "undefined") return
+        const disclosure = disclosureRef.current
+        if (!button || !disclosure || typeof window === "undefined") return
         const scrollContainer = findDisclosureScrollContainer(button)
         if (!scrollContainer) return
         const root = findToolDisclosureShiftRoot(button, scrollContainer)
@@ -184,43 +224,50 @@ function useDisclosureAnchor(
             setToolDisclosureShift(rootRef.current, contributionId, 0)
         }
         rootRef.current = root
-        const currentOwn = toolDisclosureShiftStates
-            .get(root)
-            ?.contributions.get(contributionId) ?? 0
-        const closedBaseTop =
-            button.getBoundingClientRect().top +
-            renderedDisclosureShift(root) -
-            currentOwn
         const holdUntil = window.performance.now() + durationMs
-        const preserve = () => {
+        const place = () => {
             const currentButton = buttonRef.current
-            if (!currentButton) {
+            const currentDisclosure = disclosureRef.current
+            if (!currentButton || !currentDisclosure) {
                 stop()
                 return
             }
-            const baseTop =
-                currentButton.getBoundingClientRect().top +
-                renderedDisclosureShift(root)
-            const desired = Math.max(0, baseTop - closedBaseTop)
-            const registered = toolDisclosureShiftStates
+
+            const currentOwn = toolDisclosureShiftStates
                 .get(root)
                 ?.contributions.get(contributionId) ?? 0
-            if (Math.abs(desired - registered) > 0.25) {
+            const renderedShift = renderedDisclosureShift(root)
+            const targetShift = disclosureShiftTotal(root)
+            const renderedOwn = targetShift > 0
+                ? renderedShift * (currentOwn / targetShift)
+                : 0
+            const disclosureRect = currentDisclosure.getBoundingClientRect()
+            const buttonRect = currentButton.getBoundingClientRect()
+            const bounds = disclosureVisibleBounds(scrollContainer)
+            const unshiftedBottom = disclosureRect.bottom + renderedOwn
+            const unshiftedButtonTop = buttonRect.top + renderedOwn
+            const requiredShift = Math.max(0, unshiftedBottom - bounds.bottom)
+            const maxShift = Math.max(0, unshiftedButtonTop - bounds.top)
+            const desired = Math.min(requiredShift, maxShift)
+
+            if (Math.abs(desired - currentOwn) > 0.25) {
                 // The disclosure body already owns the 440ms easing. Applying
                 // another transition to its compensating layout shift makes a
-                // long trace lag behind and visibly jump. Track the body's
-                // measured growth in the same frame instead.
+                // long trace lag behind and visibly jump. Track only the actual
+                // viewport overflow in the same frame instead.
                 setToolDisclosureShift(root, contributionId, desired, { instant: true })
             }
             if (window.performance.now() < holdUntil) {
-                frameRef.current = window.requestAnimationFrame(preserve)
+                frameRef.current = window.requestAnimationFrame(place)
             } else {
-                setToolDisclosureShift(root, contributionId, desired)
+                if (desired > 0.25 || currentOwn > 0.25) {
+                    setToolDisclosureShift(root, contributionId, desired)
+                }
                 stop()
             }
         }
-        frameRef.current = window.requestAnimationFrame(preserve)
-    }, [buttonRef, contributionId, stop])
+        frameRef.current = window.requestAnimationFrame(place)
+    }, [buttonRef, contributionId, disclosureRef, stop])
 }
 
 type SearchToolDisplay = "expanded" | "compact"
@@ -871,9 +918,9 @@ function ThoughtBlock({
 // is the committed-message counterpart to the live, per-phase ThoughtBlocks;
 // streaming keeps those expanded and this never renders mid-stream. Simpler than
 // ThoughtBlock by design (no live height/auto-scroll machinery): default closed,
-// open-state persisted, expanded body anchored above its disclosure row. A finished
-// turn renders straight into the collapsed state — it never pops open just to
-// animate shut, which used to flash on every remount and desync the tail spacer.
+// open-state persisted, expanded body following its disclosure row. A finished turn
+// renders straight into the collapsed state — it never pops open just to animate
+// shut, which used to flash on every remount and desync the tail spacer.
 // ---------------------------------------------------------------------------
 
 function WorkedForBlock({
@@ -905,8 +952,9 @@ function WorkedForBlock({
     onLoadToolCallDetails?: (toolCallId: string) => Promise<ToolCallReasoningEntry>
 }) {
     const openStorageKey = `worked:${messageId}:open`
+    const disclosureRef = React.useRef<HTMLDivElement | null>(null)
     const buttonRef = React.useRef<HTMLButtonElement | null>(null)
-    const beginAnchorHold = useDisclosureAnchor(buttonRef)
+    const reconcilePlacement = useDisclosurePlacement(disclosureRef, buttonRef)
     const [savedOpenState] = React.useState<boolean | null>(() => {
         const saved = localStorage.getItem(openStorageKey)
         return saved === null ? null : saved === "true"
@@ -917,14 +965,13 @@ function WorkedForBlock({
         return false
     })
     const toggleOpen = React.useCallback(() => {
-        beginAnchorHold(1200)
         setIsOpen((prev) => {
             const next = !prev
             localStorage.setItem(openStorageKey, String(next))
             if (next) window.dispatchEvent(new Event("stop-chat-autoscroll"))
             return next
         })
-    }, [beginAnchorHold, openStorageKey])
+    }, [openStorageKey])
 
     React.useEffect(() => {
         if (!openOnMount) return
@@ -990,6 +1037,15 @@ function WorkedForBlock({
     const [isMounted, setIsMounted] = React.useState(false)
     React.useEffect(() => { setIsMounted(true) }, [])
 
+    const placementInitializedRef = React.useRef(false)
+    useIsomorphicLayoutEffect(() => {
+        if (!placementInitializedRef.current) {
+            placementInitializedRef.current = true
+            if (!isOpen) return
+        }
+        reconcilePlacement(1200)
+    }, [isOpen, reconcilePlacement])
+
     // Duration is the source of truth; older rows (and providers that never
     // stamped it) fall back to the activity summary, then a bare "Worked".
     const statusLabel = status === "aborted"
@@ -1014,7 +1070,36 @@ function WorkedForBlock({
             : fallbackLabel || "Worked"
 
     return (
-        <div className="flex w-full min-w-0 flex-col">
+        <div ref={disclosureRef} className="flex w-full min-w-0 flex-col">
+            <button
+                ref={buttonRef}
+                type="button"
+                onClick={toggleOpen}
+                aria-expanded={isOpen}
+                className={cn(
+                    "group flex w-fit max-w-full min-w-0 items-center gap-1.5 text-[15px] transition-colors",
+                    status === "error"
+                        ? "text-destructive hover:text-destructive"
+                        : "text-muted-foreground hover:text-foreground"
+                )}
+            >
+                {status === "aborted" ? (
+                    <CircleStop className="size-4 shrink-0" />
+                ) : status === "error" ? (
+                    <CircleAlert className="size-4 shrink-0" />
+                ) : null}
+                <span className="min-w-0 truncate">{label}</span>
+                <ChevronDown
+                    className={cn(
+                        "size-4 shrink-0 transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+                        status === "error"
+                            ? "text-destructive/80 group-hover:text-destructive"
+                            : "text-muted-foreground/70 group-hover:text-foreground",
+                        isOpen ? "rotate-0" : "-rotate-90"
+                    )}
+                />
+            </button>
+
             <div
                 className={cn(
                     "grid will-change-[grid-template-rows,opacity]",
@@ -1029,7 +1114,7 @@ function WorkedForBlock({
                         isOpen ? "translate-y-0 opacity-100" : "-translate-y-1 opacity-0"
                     )}
                 >
-                    <div className="mb-2 pr-1">
+                    <div className="mt-2 pr-1">
                         {!bodyMounted ? (
                             <div className="flex items-center gap-2 py-2 pl-7 text-[13px] text-muted-foreground">
                                 <Loader2 className="size-3.5 animate-spin" />
@@ -1093,35 +1178,6 @@ function WorkedForBlock({
                     </div>
                 </div>
             </div>
-
-            <button
-                ref={buttonRef}
-                type="button"
-                onClick={toggleOpen}
-                aria-expanded={isOpen}
-                className={cn(
-                    "group flex w-fit max-w-full min-w-0 items-center gap-1.5 text-[15px] transition-colors",
-                    status === "error"
-                        ? "text-destructive hover:text-destructive"
-                        : "text-muted-foreground hover:text-foreground"
-                )}
-            >
-                {status === "aborted" ? (
-                    <CircleStop className="size-4 shrink-0" />
-                ) : status === "error" ? (
-                    <CircleAlert className="size-4 shrink-0" />
-                ) : null}
-                <span className="min-w-0 truncate">{label}</span>
-                <ChevronDown
-                    className={cn(
-                        "size-4 shrink-0 transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
-                        status === "error"
-                            ? "text-destructive/80 group-hover:text-destructive"
-                            : "text-muted-foreground/70 group-hover:text-foreground",
-                        isOpen ? "rotate-0" : "-rotate-90"
-                    )}
-                />
-            </button>
         </div>
     )
 }

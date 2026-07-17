@@ -121,6 +121,11 @@ assert.match(
   /Treat this standing request as the explicit user request for sub-agents, delegation, and parallel agent work/,
   "Codex must not suppress Orchestrator-managed delegation on non-Ultra runs"
 )
+assert.match(
+  managedThreadConfig.multi_agent_v2?.multi_agent_mode_hint_text ?? "",
+  /Use run_async=true only for concrete independent parent work[\s\S]*detach a still-running batch[\s\S]*instead of polling or chaining short waits/,
+  "Managed Codex runs must detach completed parent slices instead of babysitting async children"
+)
 const nativeCoderThreadParams = codexProviderTestHooks.buildThreadParams({
   model: "gpt-5.6-sol",
   tools: [],
@@ -145,7 +150,7 @@ assert.equal(
   "Managed sessions born before the standing delegation policy must refresh with portable history"
 )
 const managedSessionId = codexProviderTestHooks.encodeAppServerSessionId("managed-thread", false)
-assert.equal(managedSessionId, "appserver:managed-policy-v2:managed-thread")
+assert.equal(managedSessionId, "appserver:managed-policy-v3:managed-thread")
 assert.deepEqual(
   codexProviderTestHooks.decodeAppServerSessionId(managedSessionId, false),
   { threadId: "managed-thread" },
@@ -328,7 +333,7 @@ rl.on("line", line => {
   assert.deepEqual(errors, [], "A direct namespaced delegation must finish without provider errors")
   assert.equal(content.join(""), "DONE", "The parent may resume only after the delegation item completes")
   assert.deepEqual(toolCalls, ["delegate_to"], "The direct path must not create an exec/wait/shell wrapper")
-  assert.deepEqual(sessions, ["appserver:managed-policy-v2:legacy-thread"])
+  assert.deepEqual(sessions, ["appserver:managed-policy-v3:legacy-thread"])
   const capture = JSON.parse(readFileSync(capturePath, "utf8")) as {
     method: string
     params: {
