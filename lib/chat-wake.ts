@@ -6,6 +6,7 @@ import { runWithProfileContext } from '@/lib/profiles/context'
 import { getProfile, createProfileSession, deleteProfileSession } from '@/lib/profiles/store'
 import { PROFILE_SESSION_COOKIE } from '@/lib/profiles/constants'
 import { generateId } from '@/lib/utils-chat'
+import { canRunBackgroundLoop } from '@/lib/ai/background-leadership'
 
 /**
  * Server-initiated conversation turns ("wakes").
@@ -141,6 +142,7 @@ if (!globalForWake.__orchestratorWakeRunning) {
 export function startFollowUpSweep(): void {
     if (globalForWake.__orchestratorFollowUpSweep) return
     globalForWake.__orchestratorFollowUpSweep = setInterval(() => {
+        if (!canRunBackgroundLoop()) return
         void sweepOrphanedFollowUps().catch(err => {
             console.error('[chat-wake] follow-up sweep failed', err)
         })

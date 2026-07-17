@@ -1,11 +1,13 @@
 import { NextResponse } from 'next/server'
 import { guardSensitiveRequest } from '@/lib/api/request-guard'
 import { runWithRequestProfile } from "@/lib/profiles/server"
+import { proxyToDurableAiWorker, shouldProxyToDurableAiWorker } from '@/lib/ai/durable-worker'
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   return runWithRequestProfile(request, async () => {
         const guard = guardSensitiveRequest(request)
         if (guard) return guard
+        if (shouldProxyToDurableAiWorker()) return proxyToDurableAiWorker(request)
 
         try {
             const { id } = await params

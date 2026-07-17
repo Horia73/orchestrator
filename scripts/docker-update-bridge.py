@@ -31,6 +31,9 @@ APP_PORT = os.environ.get("ORCHESTRATOR_PORT", "3000")
 SERVICE_NAME = os.environ.get("ORCHESTRATOR_UPDATE_SERVICE", "orchestrator")
 AI_WORKER_SERVICE_NAME = os.environ.get("ORCHESTRATOR_AI_WORKER_SERVICE", "ai-worker")
 AI_WORKER_HOST_PORT = int(os.environ.get("ORCHESTRATOR_AI_WORKER_HOST_PORT", "3101"))
+AI_WORKER_GREEN_SERVICE_NAME = os.environ.get("ORCHESTRATOR_AI_WORKER_GREEN_SERVICE", "ai-worker-green")
+AI_WORKER_GREEN_HOST_PORT = int(os.environ.get("ORCHESTRATOR_AI_WORKER_GREEN_HOST_PORT", "3102"))
+AI_WORKER_HANDOFF_PROFILE = os.environ.get("ORCHESTRATOR_AI_WORKER_HANDOFF_PROFILE", "ai-handoff")
 IMAGE_NAME = os.environ.get("ORCHESTRATOR_UPDATE_IMAGE", "orchestrator:local")
 ROLLBACK_IMAGE_NAME = os.environ.get("ORCHESTRATOR_ROLLBACK_IMAGE", "orchestrator:rollback")
 PRUNE_AFTER_UPDATE = os.environ.get("ORCHESTRATOR_UPDATE_PRUNE_AFTER_BUILD", "1") != "0"
@@ -154,6 +157,31 @@ def image_supports_durable_ai_worker(image: str) -> bool:
         "--format", '{{index .Config.Labels "io.orchestrator.durable-ai-worker"}}',
     ])
     return value.strip() == "1"
+
+
+def image_supports_ai_worker_handoff(image: str) -> bool:
+    value = capture_optional([
+        docker_command(), "image", "inspect", image,
+        "--format", '{{index .Config.Labels "io.orchestrator.ai-worker-handoff"}}',
+    ])
+    try:
+        return int(value.strip() or "0") >= 2
+    except ValueError:
+        return False
+
+
+def running_service_supports_ai_worker_handoff() -> bool:
+    container_id = capture_optional([*compose_command(), "ps", "-q", SERVICE_NAME])
+    if not container_id:
+        return False
+    value = capture_optional([
+        docker_command(), "inspect", container_id,
+        "--format", '{{index .Config.Labels "io.orchestrator.ai-worker-handoff"}}',
+    ])
+    try:
+        return int(value.strip() or "0") >= 2
+    except ValueError:
+        return False
 
 
 def running_service_metadata() -> dict:
@@ -640,22 +668,165 @@ def notify_app(
         write_log(f"Could not notify app update result: {exc}")
 
 
-def ai_worker_container_exists() -> bool:
+WORKER_SLOTS = {
+    "blue": {
+        "id": "blue",
+        "service": AI_WORKER_SERVICE_NAME,
+        "url": f"http://{AI_WORKER_SERVICE_NAME}:3100",
+        "hostPort": AI_WORKER_HOST_PORT,
+    },
+    "green": {
+        "id": "green",
+        "service": AI_WORKER_GREEN_SERVICE_NAME,
+        "url": f"http://{AI_WORKER_GREEN_SERVICE_NAME}:3100",
+        "hostPort": AI_WORKER_GREEN_HOST_PORT,
+    },
+}
+_worker_registry_path_cache: Optional[Path] = None
+
+
+def worker_slot(worker_id: str) -> dict:
+    slot = WORKER_SLOTS.get(worker_id)
+    if not slot:
+        raise RuntimeError(f"Unknown AI worker generation: {worker_id}")
+    return dict(slot)
+
+
+def worker_compose_command(worker_id: str) -> list[str]:
+    command = compose_command()
+    if worker_id == "green":
+        command += ["--profile", AI_WORKER_HANDOFF_PROFILE]
+    return command
+
+
+def worker_registry_path() -> Path:
+    global _worker_registry_path_cache
+    configured = os.environ.get("ORCHESTRATOR_AI_WORKER_REGISTRY_PATH", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    if _worker_registry_path_cache is not None:
+        return _worker_registry_path_cache
+    try:
+        inspect = app_container_inspect()
+        for mount in (inspect or {}).get("Mounts") or []:
+            if mount.get("Destination") == "/app/.orchestrator" and mount.get("Source"):
+                _worker_registry_path_cache = (
+                    Path(str(mount["Source"])) / "ai-worker-generations.json"
+                )
+                return _worker_registry_path_cache
+    except Exception:
+        pass
+    return TOKEN_FILE.parent / "ai-worker-generations.json"
+
+
+def worker_target(worker_id: str, build_commit: Optional[str] = None) -> dict:
+    target = worker_slot(worker_id)
+    target["buildCommit"] = build_commit
+    return target
+
+
+def read_worker_registry() -> Optional[dict]:
+    try:
+        parsed = json.loads(worker_registry_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    current = parsed.get("current")
+    if not isinstance(current, dict) or current.get("id") not in WORKER_SLOTS:
+        return None
+    draining = parsed.get("draining")
+    if not isinstance(draining, list):
+        draining = []
+    return {
+        "protocolVersion": 1,
+        "current": worker_target(str(current["id"]), current.get("buildCommit")),
+        "draining": [
+            worker_target(str(item.get("id")), item.get("buildCommit"))
+            for item in draining
+            if isinstance(item, dict)
+            and item.get("id") in WORKER_SLOTS
+            and item.get("id") != current.get("id")
+        ],
+        "backgroundOwner": parsed.get("backgroundOwner")
+        if parsed.get("backgroundOwner") in WORKER_SLOTS else None,
+        "updatedAt": int(parsed.get("updatedAt") or 0),
+    }
+
+
+def write_worker_registry(
+    current_id: str,
+    draining_ids: list[str],
+    background_owner: Optional[str],
+    commits: Optional[dict[str, Optional[str]]] = None,
+) -> dict:
+    commits = commits or {}
+    current = worker_target(current_id, commits.get(current_id))
+    draining = [
+        worker_target(worker_id, commits.get(worker_id))
+        for worker_id in draining_ids
+        if worker_id in WORKER_SLOTS and worker_id != current_id
+    ]
+    payload = {
+        "protocolVersion": 1,
+        "current": current,
+        "draining": draining,
+        "backgroundOwner": background_owner if background_owner in WORKER_SLOTS else None,
+        "updatedAt": int(time.time() * 1000),
+    }
+    path = worker_registry_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+    return payload
+
+
+def ensure_worker_registry() -> dict:
+    existing = read_worker_registry()
+    if existing:
+        return existing
+    blue_status = ai_worker_control_for("blue")
+    commit = blue_status.get("buildCommit") if blue_status else None
+    registry = write_worker_registry("blue", [], "blue", {"blue": commit})
+    write_log("Initialized durable AI worker generation registry with blue current.")
+    return registry
+
+
+def ai_worker_container_exists_for(worker_id: str) -> bool:
+    slot = worker_slot(worker_id)
     container_id = capture_optional([
-        *compose_command(), "ps", "-a", "-q", AI_WORKER_SERVICE_NAME,
+        *worker_compose_command(worker_id), "ps", "-a", "-q", slot["service"],
     ])
     return bool(container_id.strip())
 
 
-def ai_worker_control(action: Optional[str] = None, timeout: float = 10) -> Optional[dict]:
+def ai_worker_container_running_for(worker_id: str) -> bool:
+    slot = worker_slot(worker_id)
+    container_id = capture_optional([
+        *worker_compose_command(worker_id), "ps", "-q", slot["service"],
+    ])
+    return bool(container_id.strip())
+
+
+def ai_worker_container_exists() -> bool:
+    return ai_worker_container_exists_for("blue")
+
+
+def ai_worker_control_for(
+    worker_id: str,
+    action: Optional[str] = None,
+    timeout: float = 10,
+) -> Optional[dict]:
     """Read or change the durable worker lifecycle through its loopback-only
     control route. None means the service/route is not available (including a
     pre-durable-worker installation); callers must never interpret that as an
     idle worker when a container is known to exist."""
     try:
         payload = json.dumps({"action": action}).encode("utf-8") if action else None
+        slot = worker_slot(worker_id)
         req = urllib.request.Request(
-            f"http://127.0.0.1:{AI_WORKER_HOST_PORT}/api/internal/ai-worker/control",
+            f"http://127.0.0.1:{slot['hostPort']}/api/internal/ai-worker/control",
             data=payload,
             method="POST" if action else "GET",
             headers={
@@ -668,6 +839,10 @@ def ai_worker_control(action: Optional[str] = None, timeout: float = 10) -> Opti
         return parsed if isinstance(parsed, dict) else None
     except (OSError, ValueError, urllib.error.URLError, urllib.error.HTTPError):
         return None
+
+
+def ai_worker_control(action: Optional[str] = None, timeout: float = 10) -> Optional[dict]:
+    return ai_worker_control_for("blue", action, timeout)
 
 
 def resume_ai_worker() -> None:
@@ -702,6 +877,174 @@ def wait_for_ai_worker_control(timeout_seconds: float = 180) -> dict:
             return result
         time.sleep(2)
     raise RuntimeError("Durable AI worker did not become healthy in time.")
+
+
+def wait_for_ai_worker_control_for(worker_id: str, timeout_seconds: float = 180) -> dict:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        result = ai_worker_control_for(worker_id)
+        if result and result.get("ok"):
+            return result
+        time.sleep(2)
+    raise RuntimeError(f"Durable AI worker {worker_id} did not become healthy in time.")
+
+
+def wait_for_ai_worker_idle_for(worker_id: str) -> None:
+    last_reported: Optional[int] = None
+    while True:
+        result = ai_worker_control_for(worker_id)
+        if result and result.get("ok"):
+            active = int(result.get("activeRunCount") or 0)
+            if active != last_reported:
+                set_state(
+                    phase="restarting",
+                    waitReason=f"Waiting for {active} active AI run(s) on {worker_id}.",
+                    activeRunCount=active,
+                )
+                write_log(f"Waiting for durable AI worker {worker_id}: {active} active run(s).")
+                last_reported = active
+            if active == 0:
+                return
+        elif not ai_worker_container_running_for(worker_id):
+            return
+        time.sleep(2)
+
+
+def wait_for_ai_worker_web_requests_for(worker_id: str) -> None:
+    last_reported: Optional[int] = None
+    while True:
+        result = ai_worker_control_for(worker_id)
+        if result and result.get("ok"):
+            app_runs = [
+                run
+                for run in (result.get("agentRuns") or [])
+                if isinstance(run, dict) and run.get("kind") == "app"
+            ]
+            active = len(app_runs)
+            if active != last_reported:
+                set_state(
+                    phase="restarting",
+                    waitReason=f"Waiting for {active} response-bound app AI request(s) on {worker_id}.",
+                    responseBoundRunCount=active,
+                )
+                write_log(f"Waiting before web rotation on {worker_id}: {active} response-bound app AI request(s).")
+                last_reported = active
+            if active == 0:
+                return
+        elif not ai_worker_container_exists_for(worker_id):
+            return
+        time.sleep(2)
+
+
+def start_worker_slot(worker_id: str, compose_env: Optional[dict[str, str]] = None) -> dict:
+    slot = worker_slot(worker_id)
+    run([
+        *worker_compose_command(worker_id), "up", "-d", "--no-deps",
+        "--force-recreate", slot["service"],
+    ], env=compose_env)
+    status = wait_for_ai_worker_control_for(worker_id)
+    if int(status.get("protocolVersion") or 0) < 2:
+        raise RuntimeError(f"AI worker {worker_id} does not support generation handoff protocol v2.")
+    if status.get("workerId") != worker_id:
+        raise RuntimeError(
+            f"AI worker slot mismatch: expected {worker_id}, got {status.get('workerId') or 'unknown'}."
+        )
+    return status
+
+
+def stop_drained_worker_slot(worker_id: str) -> None:
+    if worker_id == "blue":
+        # Blue owns the stable :6080 VNC router even while green is current.
+        result = ai_worker_control_for("blue", "standby", timeout=30)
+        if not result or not result.get("ok"):
+            raise RuntimeError("Blue AI worker did not enter router-only standby cleanly.")
+        write_log("Blue AI worker drained and remains online as the stable VNC router.")
+        return
+    slot = worker_slot(worker_id)
+    run([*worker_compose_command(worker_id), "stop", slot["service"]])
+    write_log(f"Stopped drained AI worker generation {worker_id}.")
+
+
+def wait_for_background_owner_ready(worker_id: str, timeout_seconds: float = 180) -> None:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        status = ai_worker_control_for(worker_id)
+        if status and status.get("ok") and status.get("backgroundReady") is True:
+            return
+        time.sleep(1)
+    raise RuntimeError(f"AI worker {worker_id} did not assume background leadership in time.")
+
+
+def recover_incomplete_worker_handoff(phase: str = "restarting") -> bool:
+    """Finish a cutover that survived a bridge/web/process interruption.
+
+    Once the registry exposes a new current generation it is unsafe to point
+    admission back at the old one: the new worker may already own accepted
+    runs. Recovery therefore always moves forward, re-drains the retired slot,
+    waits for it to become idle, then transfers background leadership.
+    """
+    registry = read_worker_registry()
+    if not registry or not registry.get("draining"):
+        return False
+
+    current_id = str(registry["current"]["id"])
+    current_status = ai_worker_control_for(current_id)
+    if (
+        not current_status
+        or not current_status.get("ok")
+        or int(current_status.get("protocolVersion") or 0) < 2
+    ):
+        raise RuntimeError(
+            f"Cannot recover AI worker handoff: current generation {current_id} is unavailable."
+        )
+
+    commits = {
+        current_id: current_status.get("buildCommit")
+        or registry["current"].get("buildCommit")
+    }
+    draining_ids = [str(target["id"]) for target in registry["draining"]]
+    write_log(
+        f"Recovering interrupted AI worker handoff: current={current_id}, "
+        f"draining={','.join(draining_ids)}."
+    )
+    set_state(
+        phase=phase,
+        waitReason="Finishing an interrupted AI worker generation handoff.",
+    )
+
+    for old_id in draining_ids:
+        old_status = ai_worker_control_for(old_id)
+        if old_status and old_status.get("ok"):
+            commits[old_id] = old_status.get("buildCommit") or next(
+                (
+                    target.get("buildCommit")
+                    for target in registry["draining"]
+                    if target.get("id") == old_id
+                ),
+                None,
+            )
+            drained = ai_worker_control_for(old_id, "drain")
+            if not drained or not drained.get("ok"):
+                raise RuntimeError(
+                    f"Cannot recover AI worker handoff: generation {old_id} could not be drained."
+                )
+        elif ai_worker_container_running_for(old_id):
+            raise RuntimeError(
+                f"Cannot recover AI worker handoff: draining generation {old_id} is running "
+                "but its control route is unavailable."
+            )
+
+        wait_for_ai_worker_idle_for(old_id)
+        if ai_worker_container_running_for(old_id):
+            stop_drained_worker_slot(old_id)
+
+    write_worker_registry(current_id, [], current_id, commits)
+    wait_for_background_owner_ready(current_id)
+    set_state(activeRunCount=0, responseBoundRunCount=0)
+    write_log(
+        f"Recovered AI worker handoff; {current_id} is now the sole generation and background owner."
+    )
+    return True
 
 
 def wait_for_ai_worker_idle() -> None:
@@ -786,6 +1129,111 @@ def refresh_ai_worker_after_update(worker_was_running: bool) -> None:
     write_log("Rotated durable AI worker onto the current image after all active runs drained.")
 
 
+def perform_blue_green_handoff(
+    target_commit: Optional[str],
+    compose_env: Optional[dict[str, str]] = None,
+) -> None:
+    """Cut new admissions to the freshly-built slot while old accepted trees
+    keep running on their pinned image. Background schedulers are deliberately
+    paused between cutover and old-worker retirement; this avoids duplicate
+    recovery/monitor execution against shared profile DBs."""
+    registry = ensure_worker_registry()
+    if registry.get("draining"):
+        raise RuntimeError(
+            "A previous AI worker handoff is still draining; finish or recover it before starting another update."
+        )
+    old_id = str(registry["current"]["id"])
+    new_id = "green" if old_id == "blue" else "blue"
+    old_commit = registry["current"].get("buildCommit")
+    commits = {old_id: old_commit, new_id: target_commit}
+    cutover = False
+
+    set_state(
+        phase="restarting",
+        waitReason=f"Starting AI worker generation {new_id} on the new image.",
+    )
+    write_log(f"Starting standby AI worker generation {new_id} on the new image.")
+    try:
+        new_status = start_worker_slot(new_id, compose_env)
+        running_commit = str(new_status.get("buildCommit") or "")
+        if target_commit and running_commit and not running_commit.startswith(target_commit):
+            raise RuntimeError(
+                f"AI worker {new_id} booted commit {running_commit}, expected {target_commit}."
+            )
+        commits[new_id] = running_commit or target_commit
+
+        # A fresh standby has an open in-process admission gate, but the web
+        # registry still points at old. Close it explicitly until the atomic
+        # switch so no direct/internal caller can start work early.
+        standby = ai_worker_control_for(new_id, "drain")
+        if not standby or not standby.get("ok"):
+            raise RuntimeError(f"Could not hold AI worker {new_id} in standby before cutover.")
+
+        drained = ai_worker_control_for(old_id, "drain")
+        if not drained or not drained.get("ok"):
+            raise RuntimeError(f"Could not close admission on AI worker {old_id}.")
+        active = int(drained.get("activeRunCount") or 0)
+        write_log(
+            f"AI worker {old_id} admission closed with {active} active run(s); "
+            f"new work will move to {new_id}."
+        )
+        wait_for_ai_worker_web_requests_for(old_id)
+
+        resumed = ai_worker_control_for(new_id, "resume")
+        if not resumed or not resumed.get("ok"):
+            raise RuntimeError(f"Could not open admission on AI worker {new_id}.")
+
+        write_worker_registry(new_id, [old_id], None, commits)
+        cutover = True
+        set_state(
+            phase="restarting",
+            waitReason=(
+                f"New AI work is live on {new_id}; waiting for {active} old run(s) on {old_id}."
+            ),
+            activeRunCount=active,
+        )
+        write_log(
+            f"Atomic AI cutover complete: current={new_id}, draining={old_id}; "
+            "background schedulers paused until the old generation retires."
+        )
+
+        # The existing web already understands the shared registry, so new AI
+        # admission is available before this short request-proxy recreation.
+        run([
+            *compose_command(), "up", "-d", "--no-build", "--no-deps",
+            "--force-recreate", SERVICE_NAME,
+        ], env=compose_env)
+
+        wait_for_ai_worker_idle_for(old_id)
+        stop_drained_worker_slot(old_id)
+        write_worker_registry(new_id, [], new_id, commits)
+        wait_for_background_owner_ready(new_id)
+        set_state(activeRunCount=0, responseBoundRunCount=0)
+        write_log(
+            f"Promoted AI worker {new_id} to sole generation and transferred background leadership."
+        )
+    except Exception:
+        if not cutover:
+            ai_worker_control_for(old_id, "resume")
+            ai_worker_control_for(new_id, "standby")
+            if new_id == "green":
+                try:
+                    slot = worker_slot("green")
+                    run([*worker_compose_command("green"), "stop", slot["service"]])
+                except Exception:
+                    pass
+            write_worker_registry(old_id, [], old_id, commits)
+        else:
+            # Never roll the registry backward after the new generation was
+            # exposed: it may already own accepted runs. Leave an explicit,
+            # recoverable fleet state instead of interrupting either side.
+            write_log(
+                f"AI cutover to {new_id} succeeded but retirement of {old_id} did not finish; "
+                "leaving both generations registered for safe recovery."
+            )
+        raise
+
+
 def allowed_peer(host: str) -> bool:
     if host in {"127.0.0.1", "::1", "localhost"}:
         return True
@@ -839,9 +1287,13 @@ def update_stack(payload: dict) -> None:
     write_log(f"Starting Docker update job={job_id} target={target_ref}")
 
     worker_was_running = False
+    current_supports_handoff = running_service_supports_ai_worker_handoff()
     try:
         if not (APP_DIR / ".git").exists():
             raise RuntimeError(f"{APP_DIR} is not a git checkout.")
+
+        if current_supports_handoff:
+            recover_incomplete_worker_handoff("updating")
 
         save_current_image_for_rollback(job_id, target_ref)
         prune_docker_build_artifacts("before rebuild")
@@ -861,7 +1313,7 @@ def update_stack(payload: dict) -> None:
         notify_app(
             job_id,
             "restarting",
-            "Host updater is rebuilding the image; AI remains available until final rotation.",
+            "Host updater is rebuilding the image; AI remains available through generation handoff.",
             target_commit=target_commit,
         )
         compose_env = os.environ.copy()
@@ -882,24 +1334,33 @@ def update_stack(payload: dict) -> None:
             *compose_command(), "build", SERVICE_NAME,
         ], env=compose_env)
 
-        set_state(
-            phase="restarting",
-            waitReason="Closing new AI admissions for final container rotation.",
-        )
-        write_log("Docker image build complete; entering final AI drain and container rotation.")
-        worker_was_running = drain_ai_worker_before_update()
-        if worker_was_running:
-            wait_for_ai_worker_web_requests()
-
-        # Recreate ONLY the request-serving web container from the image that
-        # was just built. The durable worker stays on its old image until every
-        # already-accepted run finishes; refresh_ai_worker_after_update rotates
-        # it later. New chat turns wait/retry during this short final window.
-        run([
-            *compose_command(), "up", "-d", "--no-build", "--no-deps",
-            "--force-recreate", SERVICE_NAME,
-        ], env=compose_env)
-        refresh_ai_worker_after_update(worker_was_running)
+        if current_supports_handoff and image_supports_ai_worker_handoff(IMAGE_NAME):
+            write_log("Docker image build complete; starting blue/green AI worker handoff.")
+            perform_blue_green_handoff(target_commit, compose_env)
+        else:
+            # One compatibility rotation is required when upgrading from the
+            # original single-worker image. The canonical blue service and VNC
+            # binding remain backward-compatible, so even an already-running
+            # old bridge can perform this migration safely. Every later update
+            # takes the zero-admission-downtime path above.
+            set_state(
+                phase="restarting",
+                waitReason="Closing new AI admissions for compatibility rotation.",
+            )
+            write_log("Docker image build complete; entering compatibility AI drain and container rotation.")
+            worker_was_running = drain_ai_worker_before_update()
+            if worker_was_running:
+                wait_for_ai_worker_web_requests()
+            run([
+                *compose_command(), "up", "-d", "--no-build", "--no-deps",
+                "--force-recreate", SERVICE_NAME,
+            ], env=compose_env)
+            refresh_ai_worker_after_update(worker_was_running)
+            if image_supports_ai_worker_handoff(IMAGE_NAME):
+                blue_status = wait_for_ai_worker_control_for("blue")
+                write_worker_registry(
+                    "blue", [], "blue", {"blue": blue_status.get("buildCommit") or target_commit}
+                )
         prune_docker_build_artifacts("after rebuild")
         notify_app(
             job_id,
@@ -1347,7 +1808,46 @@ def restart_container_async(delay: float = 0.4) -> None:
     def _do() -> None:
         time.sleep(delay)
         worker_was_running = False
+        worker_to_resume = "blue"
+        web_was_stopped = False
         try:
+            if running_service_supports_ai_worker_handoff():
+                recover_incomplete_worker_handoff()
+                registry = ensure_worker_registry()
+                worker_to_resume = str(registry["current"]["id"])
+                drained = ai_worker_control_for(worker_to_resume, "drain")
+                if not drained or not drained.get("ok"):
+                    raise RuntimeError(
+                        f"Could not close admission on AI worker {worker_to_resume} for restart."
+                    )
+                worker_was_running = True
+                wait_for_ai_worker_idle_for(worker_to_resume)
+
+                # A staged restore requires every process that may hold a DB
+                # handle to be down at the same time. With no accepted work
+                # left, canonicalize the restarted fleet back to blue; this
+                # also guarantees that the stable VNC router is online.
+                run([*compose_command(), "stop", SERVICE_NAME])
+                web_was_stopped = True
+                for worker_id in ("green", "blue"):
+                    if ai_worker_container_exists_for(worker_id):
+                        slot = worker_slot(worker_id)
+                        run([*worker_compose_command(worker_id), "stop", slot["service"]])
+                previous_commit = registry["current"].get("buildCommit")
+                write_worker_registry("blue", [], "blue", {"blue": previous_commit})
+                blue_status = start_worker_slot("blue")
+                write_worker_registry(
+                    "blue", [], "blue", {"blue": blue_status.get("buildCommit") or previous_commit}
+                )
+                wait_for_background_owner_ready("blue")
+                run([*compose_command(), "up", "-d", "--no-deps", SERVICE_NAME])
+                web_was_stopped = False
+                write_log(
+                    f"Coordinated generation-aware restart completed for '{AI_WORKER_SERVICE_NAME}' "
+                    f"and '{SERVICE_NAME}'."
+                )
+                return
+
             worker_was_running = drain_ai_worker_before_update()
             if worker_was_running:
                 wait_for_ai_worker_idle()
@@ -1367,7 +1867,12 @@ def restart_container_async(delay: float = 0.4) -> None:
                 write_log(f"Restarted container service '{SERVICE_NAME}'.")
         except Exception as exc:  # noqa: BLE001 — log and move on
             if worker_was_running:
-                resume_ai_worker()
+                ai_worker_control_for(worker_to_resume, "resume")
+            if web_was_stopped:
+                try:
+                    run([*compose_command(), "up", "-d", "--no-deps", SERVICE_NAME])
+                except Exception:
+                    pass
             write_log(f"Container restart failed: {exc}")
         finally:
             if update_lock.locked():
@@ -1386,13 +1891,90 @@ def rollback_container_async(delay: float = 0.4) -> None:
         time.sleep(delay)
         set_state(phase="rolling_back", error=None, rollback=rollback_status())
         worker_was_running = False
+        worker_to_resume = "blue"
+        web_was_stopped = False
         try:
             image_id = docker_image_id(ROLLBACK_IMAGE_NAME)
             if not image_id:
                 raise RuntimeError(f"No rollback image is available at {ROLLBACK_IMAGE_NAME}.")
 
-            worker_was_running = drain_ai_worker_before_update()
             target_supports_worker = image_supports_durable_ai_worker(ROLLBACK_IMAGE_NAME)
+            target_supports_handoff = image_supports_ai_worker_handoff(ROLLBACK_IMAGE_NAME)
+            current_supports_handoff = running_service_supports_ai_worker_handoff()
+
+            if current_supports_handoff:
+                recover_incomplete_worker_handoff("rolling_back")
+                registry = ensure_worker_registry()
+                worker_to_resume = str(registry["current"]["id"])
+
+                # Tag first: running containers remain pinned to their image
+                # digest, while any replacement slot now boots the cached
+                # rollback image.
+                run([docker_command(), "tag", ROLLBACK_IMAGE_NAME, IMAGE_NAME])
+                if target_supports_handoff:
+                    perform_blue_green_handoff(None)
+                else:
+                    drained = ai_worker_control_for(worker_to_resume, "drain")
+                    if not drained or not drained.get("ok"):
+                        raise RuntimeError(
+                            f"Could not close admission on AI worker {worker_to_resume} for rollback."
+                        )
+                    worker_was_running = True
+                    if target_supports_worker:
+                        wait_for_ai_worker_web_requests_for(worker_to_resume)
+                    wait_for_ai_worker_idle_for(worker_to_resume)
+
+                    run([*compose_command(), "stop", SERVICE_NAME])
+                    web_was_stopped = True
+                    for worker_id in ("green", "blue"):
+                        if ai_worker_container_exists_for(worker_id):
+                            slot = worker_slot(worker_id)
+                            run([*worker_compose_command(worker_id), "rm", "-f", "-s", slot["service"]])
+
+                    if target_supports_worker:
+                        # Rollbacks to the original durable-worker generation
+                        # use its canonical blue endpoint. The old image ignores
+                        # the generation registry; keeping it canonical makes a
+                        # later forward upgrade deterministic.
+                        write_worker_registry("blue", [], "blue")
+                        run([
+                            *compose_command(), "up", "-d", "--no-build", "--no-deps",
+                            "--force-recreate", AI_WORKER_SERVICE_NAME,
+                        ])
+                        blue_status = wait_for_ai_worker_control()
+                        write_worker_registry(
+                            "blue", [], "blue", {"blue": blue_status.get("buildCommit")}
+                        )
+                    else:
+                        try:
+                            worker_registry_path().unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                        write_log(
+                            "Rollback target predates the durable worker; returned to single-process mode."
+                        )
+
+                    run([
+                        *compose_command(), "up", "-d", "--no-build", "--no-deps",
+                        "--force-recreate", SERVICE_NAME,
+                    ])
+                    web_was_stopped = False
+
+                set_state(
+                    phase="completed",
+                    error=None,
+                    rollback=rollback_status(),
+                    waitReason=None,
+                    activeRunCount=0,
+                    responseBoundRunCount=0,
+                )
+                write_log(
+                    f"Rolled back generation-aware container service '{SERVICE_NAME}' "
+                    f"to {ROLLBACK_IMAGE_NAME}."
+                )
+                return
+
+            worker_was_running = drain_ai_worker_before_update()
             if worker_was_running and target_supports_worker:
                 wait_for_ai_worker_web_requests()
             elif worker_was_running:
@@ -1428,7 +2010,12 @@ def rollback_container_async(delay: float = 0.4) -> None:
             write_log(f"Rolled back container service '{SERVICE_NAME}' to {ROLLBACK_IMAGE_NAME}.")
         except Exception as exc:  # noqa: BLE001 — log and surface through /status
             if worker_was_running:
-                resume_ai_worker()
+                ai_worker_control_for(worker_to_resume, "resume")
+            if web_was_stopped:
+                try:
+                    run([*compose_command(), "up", "-d", "--no-deps", SERVICE_NAME])
+                except Exception:
+                    pass
             message = str(exc)
             set_state(phase="failed", error=message, rollback=rollback_status())
             write_log(f"Container rollback failed: {message}")
@@ -1854,6 +2441,28 @@ def main() -> None:
     set_state(rollback=rollback_status())
     write_log(f"Listening on {BIND_HOST}:{PORT} for app dir {APP_DIR}")
     server = ThreadingHTTPServer((BIND_HOST, PORT), Handler)
+
+    def _recover_handoff() -> None:
+        if not update_lock.acquire(blocking=False):
+            return
+        try:
+            if running_service_supports_ai_worker_handoff():
+                recovered = recover_incomplete_worker_handoff()
+                if recovered:
+                    set_state(
+                        phase="idle",
+                        error=None,
+                        waitReason=None,
+                        activeRunCount=0,
+                        responseBoundRunCount=0,
+                    )
+        except Exception as exc:  # noqa: BLE001 — keep serving; next update retries recovery
+            set_state(phase="failed", error=str(exc))
+            write_log(f"Automatic AI worker handoff recovery failed: {exc}")
+        finally:
+            update_lock.release()
+
+    threading.Thread(target=_recover_handoff, daemon=True).start()
     server.serve_forever()
 
 

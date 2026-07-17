@@ -5,6 +5,7 @@ import {
 } from '@/lib/microscripts/store'
 import { runMicroscript, type MicroscriptWebhookContext } from '@/lib/microscripts/runner'
 import { getActiveProfileId, runWithProfileContext } from '@/lib/profiles/context'
+import { canRunBackgroundLoop } from '@/lib/ai/background-leadership'
 
 import {
     claimNextQueuedWebhookDispatch,
@@ -83,6 +84,12 @@ export async function dispatchWebhookEvent(eventId: string): Promise<WebhookDisp
     }
 
     reconcileWebhookEventDispatchStatus(event.id)
+    if (!canRunBackgroundLoop()) {
+        return {
+            event: getWebhookEvent(event.id) ?? event,
+            dispatches: listWebhookDispatches(event.id),
+        }
+    }
     await waitForDispatches(dispatchIds, [...targets.values()])
 
     return {
@@ -105,6 +112,7 @@ async function waitForDispatches(ids: string[], targets: DispatchTarget[]): Prom
 }
 
 export function kickWebhookDispatchTarget(target: DispatchTarget): Promise<void> {
+    if (!canRunBackgroundLoop()) return Promise.resolve()
     const profileId = getActiveProfileId()
     const key = targetKey(profileId, target)
     const existing = targetWorkers.get(key)
@@ -296,6 +304,7 @@ export async function wireWebhookDispatchQueue(): Promise<void> {
 }
 
 async function recoverAllProfiles(recoverRunning = true): Promise<void> {
+    if (!canRunBackgroundLoop()) return
     const { listProfiles } = await import('@/lib/profiles/store')
     for (const profile of listProfiles()) {
         await runWithProfileContext({ profileId: profile.id, role: profile.role }, async () => {

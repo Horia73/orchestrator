@@ -1,6 +1,6 @@
 import { chatEventEmitter, ChatEvent } from '@/lib/events'
 import {
-    relayDurableAiWorkerEventStream,
+    relayDurableAiWorkerFleetEventStreams,
     shouldProxyToDurableAiWorker,
 } from '@/lib/ai/durable-worker'
 import { runWithRequestProfile } from "@/lib/profiles/server"
@@ -61,17 +61,11 @@ export async function GET(req: Request) {
                     // conversations unread. Retry here because EventSource is
                     // connected successfully to web and therefore cannot know
                     // that only the internal worker leg was rotated.
-                    void (async () => {
-                        while (!closed) {
-                            await relayDurableAiWorkerEventStream(
-                                req,
-                                send,
-                                workerRelayController.signal,
-                            )
-                            if (closed) return
-                            await new Promise(resolve => setTimeout(resolve, 1000))
-                        }
-                    })()
+                    void relayDurableAiWorkerFleetEventStreams(
+                        req,
+                        send,
+                        workerRelayController.signal,
+                    )
                 }
 
                 // Handle client disconnect gracefully by checking req.signal

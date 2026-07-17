@@ -44,6 +44,8 @@ const server = http.createServer((req, res) => {
   })
 })
 
+const vncRouterServer = createWorkerVncRouterServer()
+
 server.on('upgrade', (req, socket, head) => {
   // The voice gateway lives inside the Next bundle (lib/voice/gateway.ts)
   // and registers its upgrade handler on globalThis at boot — same process,
@@ -77,8 +79,16 @@ server.listen(port, host, () => {
   console.log(`✓ Ready`)
 })
 
+if (vncRouterServer) {
+  const routerPort = positivePort(process.env.ORCHESTRATOR_AI_VNC_ROUTER_PORT, 6080)
+  vncRouterServer.listen(routerPort, host, () => {
+    console.log(`- AI VNC router: ws://${originHost}:${routerPort}`)
+  })
+}
+
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
+    vncRouterServer?.close()
     server.close(() => {
       app.close().finally(() => process.exit(0))
     })
@@ -144,7 +154,7 @@ function proxyUpgradeToPreview({ req, socket, head, upstreamPath, previewPort })
 
   upstream.once('connect', () => {
     bridged = true
-    upstream.write(buildUpgradeRequest(req, upstreamPath, previewPort))
+    upstream.write(buildUpgradeRequest(req, upstreamPath, previewPort, '127.0.0.1'))
     if (head?.length) upstream.write(head)
     upstream.pipe(socket)
     socket.pipe(upstream)
@@ -170,16 +180,16 @@ function proxyUpgradeToPreview({ req, socket, head, upstreamPath, previewPort })
   })
 }
 
-function buildUpgradeRequest(req, upstreamPath, previewPort) {
+function buildUpgradeRequest(req, upstreamPath, previewPort, upstreamHost) {
   const upstreamUrl = parseRequestUrl(upstreamPath)
   upstreamUrl?.searchParams.delete('preview_token')
   const sanitizedPath = upstreamUrl ? `${upstreamUrl.pathname}${upstreamUrl.search}` : upstreamPath
   const lines = [
     `${req.method || 'GET'} ${sanitizedPath} HTTP/${req.httpVersion}`,
-    `Host: 127.0.0.1:${previewPort}`,
+    `Host: ${upstreamHost}:${previewPort}`,
     'Connection: Upgrade',
     'Upgrade: websocket',
-    `Origin: http://127.0.0.1:${previewPort}`,
+    `Origin: http://${upstreamHost}:${previewPort}`,
   ]
 
   for (const [name, value] of Object.entries(req.headers)) {
@@ -213,6 +223,71 @@ function buildUpgradeRequest(req, upstreamPath, previewPort) {
   }
 
   return `${lines.join('\r\n')}\r\n\r\n`
+}
+
+function createWorkerVncRouterServer() {
+  if (process.env.ORCHESTRATOR_AI_VNC_ROUTER !== '1') return null
+  const server = http.createServer((_req, res) => {
+    res.writeHead(426, { 'Content-Type': 'text/plain; charset=utf-8' })
+    res.end('WebSocket upgrade required.\n')
+  })
+  server.on('upgrade', (req, socket, head) => {
+    const url = parseRequestUrl(req.url)
+    const parts = (url?.pathname ?? '').split('/').filter(Boolean)
+    if (parts[0] === 'vnc') parts.shift()
+    const generation = parts.shift()
+    const targetHost = generation === 'blue'
+      ? (process.env.ORCHESTRATOR_AI_WORKER_BLUE_HOST || 'ai-worker')
+      : generation === 'green'
+        ? (process.env.ORCHESTRATOR_AI_WORKER_GREEN_HOST || 'ai-worker-green')
+        : null
+    if (!targetHost || parts.length === 0) {
+      writeSocketResponse(socket, 404, 'Unknown AI worker generation.')
+      return
+    }
+    const targetPort = positivePort(process.env.ORCHESTRATOR_AI_WORKER_VNC_PORT, 6082)
+    const upstreamPath = `/${parts.map(segment => encodeURIComponent(decodePathSegment(segment))).join('/')}${url?.search ?? ''}`
+    proxyUpgradeToWorkerVnc({ req, socket, head, upstreamPath, targetHost, targetPort })
+  })
+  server.on('error', err => {
+    console.error('[start] AI VNC router failed', err)
+  })
+  return server
+}
+
+function proxyUpgradeToWorkerVnc({ req, socket, head, upstreamPath, targetHost, targetPort }) {
+  socket.pause()
+  const upstream = net.connect({ host: targetHost, port: targetPort })
+  let bridged = false
+  const fail = (status, message) => {
+    if (!bridged && !socket.destroyed) writeSocketResponse(socket, status, message)
+    upstream.destroy()
+  }
+  upstream.once('connect', () => {
+    bridged = true
+    upstream.write(buildUpgradeRequest(req, upstreamPath, targetPort, targetHost))
+    if (head?.length) upstream.write(head)
+    upstream.pipe(socket)
+    socket.pipe(upstream)
+    socket.resume()
+  })
+  upstream.once('error', err => {
+    if (bridged) {
+      if (!socket.destroyed) socket.destroy(err)
+      return
+    }
+    fail(502, `AI worker live-view upstream failed: ${err.message}`)
+  })
+  upstream.once('close', () => {
+    if (!socket.destroyed && !socket.writableEnded) socket.end()
+  })
+  socket.once('error', () => upstream.destroy())
+  socket.once('close', () => upstream.destroy())
+}
+
+function positivePort(value, fallback) {
+  const parsed = Number.parseInt(value || '', 10)
+  return Number.isInteger(parsed) && parsed > 0 && parsed <= 65535 ? parsed : fallback
 }
 
 function readRunState(runId) {

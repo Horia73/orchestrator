@@ -739,9 +739,9 @@ function serviceManager(): string | null {
     return null
 }
 
-/** Split Docker installs can keep serving AI from the old worker image while
- * the replacement image is fetched and built. The host bridge closes worker
- * admission only for the final web/worker rotation. */
+/** Split Docker installs keep serving AI while the replacement image builds.
+ * Generation-aware bridges then switch new admission to a second worker; the
+ * first compatibility upgrade may still use the bounded late drain. */
 export function usesLateDockerAiDrain(): boolean {
     return serviceManager() === 'docker'
         && (shouldProxyToDurableAiWorker() || isDurableAiWorkerProcess())
@@ -978,7 +978,7 @@ async function startDockerHostUpdateRunner(job: UpdateJob) {
 
         patchJob({
             phase: 'restarting',
-            waitReason: 'Host updater is rebuilding the image; AI remains available until final rotation.',
+            waitReason: 'Host updater is rebuilding the image; AI remains available through generation handoff.',
             activeRunCount: listAllActiveRuns().length,
         })
     } catch (err) {
@@ -1018,7 +1018,7 @@ async function startUpdateRunner() {
         phase: 'updating',
         startedAt: Date.now(),
         waitReason: lateDockerDrain
-            ? 'Building the Docker image; AI remains available until final rotation.'
+            ? 'Building the Docker image; AI remains available through generation handoff.'
             : 'Installing update.',
         activeRunCount: lateDockerDrain ? listAllActiveRuns().length : 0,
     })
@@ -1107,9 +1107,9 @@ function scheduleQueuedJob(jobId: string) {
         const job = memory.job
         if (!job || job.id !== jobId || job.phase !== 'queued') return
 
-        // The durable worker continues serving from its current image while
-        // Docker fetches/builds the replacement. The host bridge owns the
-        // short admission drain at the final rotation boundary.
+        // The current generation stays available during the Docker build. The
+        // host bridge owns either the blue/green switch or the one-time
+        // compatibility drain at the final boundary.
         if (usesLateDockerAiDrain()) {
             void startUpdateRunner()
             return
@@ -1220,7 +1220,7 @@ export async function queueUpdate(opts?: {
         updatedAt: now,
         activeRunCount: status.activeRuns.length,
         waitReason: lateDockerDrain
-            ? 'Preparing Docker rebuild; AI remains available until final rotation.'
+            ? 'Preparing Docker rebuild; AI remains available through generation handoff.'
             : status.activeRuns.length > 0
                 ? `Waiting for ${status.activeRuns.length} active AI run${status.activeRuns.length === 1 ? '' : 's'}.`
                 : 'Waiting for a quiet window.',
@@ -1297,10 +1297,9 @@ export function isUpdateMaintenanceActive(): boolean {
     return Date.now() - job.updatedAt < MAINTENANCE_STALE_MS
 }
 
-/** Whether this process should reject a new AI turn right now. In the split
- * Docker topology, an update lifecycle may be active for many minutes while
- * the old worker remains safe and usable; only its final-rotation admission
- * barrier pauses new work. */
+/** Whether this process should reject a new AI turn right now. In split Docker
+ * topology, a long build or blue/green overlap does not pause new work; only a
+ * compatibility/restart admission barrier does. */
 export function shouldPauseAiForUpdate(): boolean {
     if (usesLateDockerAiDrain()) return Boolean(getAiRunAdmissionBlock())
     return isUpdateMaintenanceActive()

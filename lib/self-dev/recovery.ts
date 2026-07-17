@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { execFile, execFileSync } from 'child_process'
 import { promisify } from 'util'
+import { canRunBackgroundLoop } from '@/lib/ai/background-leadership'
 
 const execFileAsync = promisify(execFile)
 const RECENT_RUN_MS = 72 * 60 * 60 * 1000
@@ -65,6 +66,7 @@ export function startSelfDevRecovery(): void {
     if (globalForRecovery.__orchestratorSelfDevRecoveryTimer) return
     const timer = setTimeout(() => {
         globalForRecovery.__orchestratorSelfDevRecoveryTimer = undefined
+        if (!canRunBackgroundLoop()) return
         void recoverInterruptedSelfDevRun().catch(error => {
             console.error('[self-dev] interrupted-run recovery failed', error)
         })

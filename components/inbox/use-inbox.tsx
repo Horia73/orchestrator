@@ -268,6 +268,7 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
         }),
       })
       if (!res.ok) {
+        const failure = await res.json().catch(() => null) as { error?: unknown; code?: unknown } | null
         setDetail((current) =>
           current?.id === id
             ? {
@@ -276,7 +277,10 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
               }
             : current
         )
-        setError(`Failed to send reply (${res.status})`)
+        const message = typeof failure?.error === "string" && failure.error.trim()
+          ? failure.error.trim()
+          : `Failed to send reply (${res.status})`
+        setError(message)
         return false
       }
       const data = await res.json()

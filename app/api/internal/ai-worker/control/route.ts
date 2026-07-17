@@ -9,6 +9,12 @@ import {
 } from '@/lib/ai/run-admission'
 import { isDurableAiWorkerProcess } from '@/lib/ai/durable-worker'
 import { listAllActiveChatStreams } from '@/lib/chat-streams'
+import { getAgentGateStats } from '@/lib/ai/concurrency-gate'
+import { isBackgroundRuntimeReady } from '@/lib/ai/background-leadership'
+import {
+    durableAiWorkerId,
+    readDurableAiWorkerRegistry,
+} from '@/lib/ai/worker-generations'
 
 const ROTATION_OWNER = 'durable-ai-worker-rotation'
 
@@ -46,6 +52,17 @@ export async function POST(request: Request) {
             headers: { 'Cache-Control': 'no-store' },
         })
     }
+    if (body.action === 'standby') {
+        blockAiRunAdmission(
+            ROTATION_OWNER,
+            'This durable AI worker generation is in standby after a handoff.',
+        )
+        const { shutdownBrowserSessionManager } = await import('@/lib/ai/providers/browser-session-manager')
+        await shutdownBrowserSessionManager()
+        return NextResponse.json(workerStatus(), {
+            headers: { 'Cache-Control': 'no-store' },
+        })
+    }
 
     return NextResponse.json({ error: 'Unsupported worker control action.' }, { status: 400 })
 }
@@ -56,12 +73,16 @@ function workerStatus() {
     return {
         ok: true,
         role: 'ai-worker',
-        protocolVersion: 1,
+        protocolVersion: 2,
+        workerId: durableAiWorkerId(),
         draining: Boolean(getAiRunAdmissionBlock()),
         admissionBlock: getAiRunAdmissionBlock(),
         activeRunCount: chatStreams.length + agentRuns.length,
         chatStreams,
         agentRuns,
+        backgroundOwner: readDurableAiWorkerRegistry()?.backgroundOwner ?? durableAiWorkerId(),
+        backgroundReady: isBackgroundRuntimeReady(),
+        concurrency: getAgentGateStats(),
         buildCommit: process.env.ORCHESTRATOR_BUILD_COMMIT || null,
         checkedAt: Date.now(),
     }

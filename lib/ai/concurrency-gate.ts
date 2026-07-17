@@ -38,6 +38,7 @@
 
 import os from 'os'
 import { monitorEventLoopDelay, type IntervalHistogram } from 'perf_hooks'
+import { acquireFleetRun, getFleetConcurrencyStats } from '@/lib/ai/fleet-concurrency'
 
 /** Parse a positive integer env var; fall back when unset/invalid. */
 function envInt(name: string, fallback: number): number {
@@ -341,8 +342,28 @@ export async function acquireRun(opts: AcquireOpts): Promise<RunPermit> {
     await state.total.acquire(prio)
     let holdsTotal = true
 
+    let fleetPermit
+    try {
+        fleetPermit = await acquireFleetRun({
+            topLevel: opts.topLevel,
+            provider: opts.provider,
+            limits: {
+                total: state.total.capacity,
+                main: state.main.capacity,
+                provider: opts.provider ? providerCap(opts.provider) : state.total.capacity,
+            },
+            onQueued: opts.onQueued,
+        })
+    } catch (error) {
+        state.total.release()
+        if (holdsMain) state.main.release()
+        if (holdsProvider && providerSem) providerSem.release()
+        throw error
+    }
+
     return {
         releaseForChildren() {
+            fleetPermit.releaseForChildren()
             if (holdsTotal) {
                 holdsTotal = false
                 state.total.release()
@@ -362,8 +383,10 @@ export async function acquireRun(opts: AcquireOpts): Promise<RunPermit> {
                 await state.total.acquire(PRIORITY.resume)
                 holdsTotal = true
             }
+            await fleetPermit.reacquireForResume()
         },
         dispose() {
+            fleetPermit.dispose()
             if (holdsTotal) {
                 holdsTotal = false
                 state.total.release()
@@ -451,6 +474,7 @@ export function getAgentGateStats() {
         liveTrees: state.treeSpawns.size,
         loopLagMs: Math.round(loopLagMs() * 10) / 10,
         providers,
+        fleet: getFleetConcurrencyStats(),
         limits: {
             main: state.main.capacity,
             total: state.total.capacity,

@@ -6,11 +6,12 @@ export async function registerRuntime(): Promise<void> {
         isDurableAiWorkerProcess,
         ownsDurableAiBackgroundWork,
     } = await import('@/lib/ai/durable-worker')
+    const { mayOwnDurableAiBackgroundWork } = await import('@/lib/ai/worker-generations')
     // Apply a staged backup restore BEFORE anything opens the database. The
     // connection in '@/lib/db' is created at import time, so a restored data.db
     // can only be swapped in here, on the next boot after a restore. The boot
     // module intentionally imports nothing that touches '@/lib/db'.
-    if (ownsDurableAiBackgroundWork()) {
+    if (ownsDurableAiBackgroundWork() && mayOwnDurableAiBackgroundWork()) {
         try {
             const { applyPendingDbRestore } = await import('@/lib/settings/backup-boot')
             applyPendingDbRestore()
@@ -56,20 +57,6 @@ export async function registerRuntime(): Promise<void> {
             console.error('[skills] failed to promote legacy profile skills', err)
         }
     }
-    // A request-log row can only be considered interrupted by the process that
-    // owns AI execution. In split-process installs the web container must not
-    // seal rows that are still alive inside the durable worker. Sweep every
-    // profile explicitly; module-level one-shot recovery used to touch only
-    // whichever profile happened to import the store first.
-    if (ownsDurableAiBackgroundWork() && process.env.ORCHESTRATOR_PREVIEW !== '1') {
-        try {
-            const { sealInterruptedStreamingRequestLogs } = await import('@/lib/observability/store')
-            await forEachProfile(() => sealInterruptedStreamingRequestLogs())
-        } catch (err) {
-            console.error('[observability] failed to seal interrupted profile streams', err)
-        }
-    }
-
     // Both the request-serving web process and the worker need their own OOM
     // backstop. Keep this before the background-owner return below.
     if (!backgroundWorkDisabled()) {
@@ -82,6 +69,21 @@ export async function registerRuntime(): Promise<void> {
     }
 
     if (backgroundWorkDisabled() || !ownsDurableAiBackgroundWork()) return
+    const { startBackgroundRuntimeWhenLeader } = await import('@/lib/ai/background-leadership')
+    startBackgroundRuntimeWhenLeader(initializeBackgroundRuntime)
+}
+
+async function initializeBackgroundRuntime(): Promise<void> {
+    // Recovery must wait until the previous generation is fully drained. A
+    // standby worker shares the same profile DBs and must never seal request
+    // logs or detached jobs that are still alive in the old process.
+    try {
+        const { sealInterruptedStreamingRequestLogs } = await import('@/lib/observability/store')
+        await forEachProfile(() => sealInterruptedStreamingRequestLogs())
+    } catch (err) {
+        console.error('[observability] failed to seal interrupted profile streams', err)
+    }
+
     const { startScheduler } = await import('@/lib/scheduling/scheduler')
     startScheduler()
     // Steering resilience: if a queued follow-up isn't drained by the client

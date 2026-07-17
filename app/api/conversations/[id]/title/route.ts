@@ -1,8 +1,11 @@
 import { NextResponse } from 'next/server'
+import { randomUUID } from 'crypto'
 
 import { getConversation, setConversationTitle } from '@/lib/db'
 import { runWithRequestProfile } from "@/lib/profiles/server"
 import { generateConversationTitleFromSeed } from '@/lib/ai/conversation-auto-title'
+import { proxyToDurableAiWorker, shouldProxyToDurableAiWorker } from '@/lib/ai/durable-worker'
+import { clearAgentRun, registerAgentRun } from '@/lib/agent-runs'
 
 export const runtime = 'nodejs'
 
@@ -19,6 +22,7 @@ export async function POST(
     { params }: { params: Promise<{ id: string }> }
 ) {
   return runWithRequestProfile(request, async () => {
+        if (shouldProxyToDurableAiWorker()) return proxyToDurableAiWorker(request)
         try {
             const { id } = await params
             const body = (await request.json().catch(() => ({}))) as Record<string, unknown>
@@ -43,6 +47,19 @@ export async function POST(
             }
 
             try {
+                const runId = `title_run_${randomUUID()}`
+                if (!registerAgentRun({
+                    id: runId,
+                    kind: 'app',
+                    conversationId: id,
+                    startedAt: Date.now(),
+                })) {
+                    return NextResponse.json(
+                        { error: 'AI worker generation is changing; retry after reconnect.' },
+                        { status: 503, headers: { 'Retry-After': '3' } },
+                    )
+                }
+                try {
                 const title = await generateConversationTitleFromSeed({
                     conversationId: id,
                     seed: { userText, assistantText, attachmentNames },
@@ -53,6 +70,9 @@ export async function POST(
 
                 const stored = setConversationTitle(id, title, currentTitle)
                 return NextResponse.json({ title: stored ?? title, changed: stored === title })
+                } finally {
+                    clearAgentRun(runId)
+                }
             } catch (error) {
                 return NextResponse.json(
                     { error: 'Naming failed', detail: error instanceof Error ? error.message : 'unknown error' },

@@ -1,11 +1,11 @@
 import { getActiveChatStream, listActiveChatStreams } from '@/lib/chat-streams'
 import { peekFollowUpSnapshots } from '@/lib/chat-followups'
 import { runWithRequestProfile } from "@/lib/profiles/server"
-import { proxyToDurableAiWorker, shouldProxyToDurableAiWorker } from '@/lib/ai/durable-worker'
+import { durableAiFleetActiveChatResponse, shouldProxyToDurableAiWorker } from '@/lib/ai/durable-worker'
 
 export async function GET(request: Request) {
   return runWithRequestProfile(request, async () => {
-        if (shouldProxyToDurableAiWorker()) return proxyToDurableAiWorker(request)
+        if (shouldProxyToDurableAiWorker()) return durableAiFleetActiveChatResponse(request)
         const { searchParams } = new URL(request.url)
         const conversationId = searchParams.get('conversationId')
 

@@ -5,13 +5,15 @@ import { getBrowserSessionManager } from '@/lib/ai/providers/browser-session-man
 import type { BrowserLiveViewClientState } from '@/lib/ai/providers/browser-session-manager'
 import { getEnvValue } from '@/lib/config'
 import { runWithRequestProfile } from "@/lib/profiles/server"
-import { proxyToDurableAiWorker, shouldProxyToDurableAiWorker } from '@/lib/ai/durable-worker'
+import { durableAiWorkerId, proxyToBrowserSessionOwner, shouldProxyToDurableAiWorker } from '@/lib/ai/durable-worker'
 
 export async function GET(request: Request) {
   return runWithRequestProfile(request, async () => {
         const guard = guardSensitiveRequest(request)
         if (guard) return guard
-        if (shouldProxyToDurableAiWorker()) return proxyToDurableAiWorker(request)
+        if (shouldProxyToDurableAiWorker()) {
+            return proxyToBrowserSessionOwner(request, sessionIdFromRequest(request))
+        }
 
         const sessionId = sessionIdFromRequest(request)
         const state = await getBrowserSessionManager().getLiveViewState(sessionId)
@@ -25,7 +27,15 @@ export async function POST(request: Request) {
   return runWithRequestProfile(request, async () => {
         const guard = guardSensitiveRequest(request)
         if (guard) return guard
-        if (shouldProxyToDurableAiWorker()) return proxyToDurableAiWorker(request)
+        if (shouldProxyToDurableAiWorker()) {
+            let body: unknown
+            try {
+                body = await request.clone().json()
+            } catch {
+                return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+            }
+            return proxyToBrowserSessionOwner(request, sessionIdFromBody(body))
+        }
 
         let body: unknown
         try {
@@ -145,10 +155,16 @@ function buildWsUrl(request: Request, state: BrowserLiveViewClientState): string
     if (!state.ready || !state.wsToken || !state.wsPort) return null
 
     const publicUrl = getEnvValue('BROWSER_AGENT_VNC_WS_PUBLIC_URL')?.trim()
+    const generation = durableAiWorkerId()
     if (publicUrl) {
-        return publicUrl.includes('{token}')
-            ? publicUrl.replaceAll('{token}', encodeURIComponent(state.wsToken))
-            : `${publicUrl.replace(/\/$/, '')}/${encodeURIComponent(state.wsToken)}`
+        if (publicUrl.includes('{token}')) {
+            const tokenPath = generation
+                ? `${generation}/${encodeURIComponent(state.wsToken)}`
+                : encodeURIComponent(state.wsToken)
+            return publicUrl.replaceAll('{token}', tokenPath)
+        }
+        const base = generation ? `${publicUrl.replace(/\/$/, '')}/${generation}` : publicUrl
+        return `${base.replace(/\/$/, '')}/${encodeURIComponent(state.wsToken)}`
     }
 
     let requestUrl: URL
@@ -163,5 +179,9 @@ function buildWsUrl(request: Request, state: BrowserLiveViewClientState): string
     const wsProtocol = protocol === 'https' ? 'wss' : 'ws'
     const hostHeader = request.headers.get('host') || requestUrl.host
     const hostname = hostHeader.split(':')[0]
-    return `${wsProtocol}://${hostname}:${state.wsPort}/${encodeURIComponent(state.wsToken)}`
+    const generationPath = generation ? `/${generation}` : ''
+    const publicPort = generation
+        ? Number.parseInt(process.env.ORCHESTRATOR_AI_VNC_ROUTER_PORT || '6080', 10)
+        : state.wsPort
+    return `${wsProtocol}://${hostname}:${publicPort}${generationPath}/${encodeURIComponent(state.wsToken)}`
 }

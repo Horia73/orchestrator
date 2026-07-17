@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server'
 import { guardSensitiveRequest } from '@/lib/api/request-guard'
 import { getBrowserSessionManager } from '@/lib/ai/providers/browser-session-manager'
 import { runWithRequestProfile } from "@/lib/profiles/server"
-import { proxyToDurableAiWorker, shouldProxyToDurableAiWorker } from '@/lib/ai/durable-worker'
+import { proxyToBrowserSessionOwner, shouldProxyToDurableAiWorker } from '@/lib/ai/durable-worker'
 
 /**
  * Read-only console/network diagnostics for a browser-agent session,
@@ -13,7 +13,9 @@ export async function GET(request: Request) {
   return runWithRequestProfile(request, async () => {
         const guard = guardSensitiveRequest(request)
         if (guard) return guard
-        if (shouldProxyToDurableAiWorker()) return proxyToDurableAiWorker(request)
+        if (shouldProxyToDurableAiWorker()) {
+            return proxyToBrowserSessionOwner(request, sessionIdFromRequest(request))
+        }
 
         const sessionId = sessionIdFromRequest(request)
         const result = await getBrowserSessionManager().getSessionDiagnostics(sessionId)

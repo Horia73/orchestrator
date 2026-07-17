@@ -19,6 +19,7 @@ import {
 import { DEFAULT_VIEWPORT } from '@/lib/browser-agent-runtime/viewport'
 import { getActiveProfileId } from '@/lib/profiles/context'
 import { runtimePathsForProfile, type RuntimePathSet } from '@/lib/runtime-paths'
+import { durableAiFleetHasOverlap } from '@/lib/ai/worker-generations'
 
 const AWAITING_USER_TTL_MS = 60 * 60 * 1000
 const COMPLETED_TTL_MS = 60 * 60 * 1000
@@ -182,6 +183,12 @@ class BrowserSessionManager {
     }
 
     async acquire(options: AcquireBrowserSessionOptions): Promise<BrowserSessionLease> {
+        if (durableAiFleetHasOverlap()) {
+            options.onStatus('⏳ A previous app generation is still finishing browser work. This browser task will start automatically after the safe handoff completes.')
+            while (durableAiFleetHasOverlap()) {
+                await new Promise(resolve => setTimeout(resolve, 500))
+            }
+        }
         const maxConcurrent = getEffectiveMaxConcurrent()
         if (this.runSlots.isSaturated(maxConcurrent)) {
             options.onStatus('⏳ The browser is busy with another conversation. Your task is queued and will start automatically as soon as it is free.')

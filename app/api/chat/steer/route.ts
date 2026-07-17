@@ -7,7 +7,7 @@ import { enqueueFollowUp, peekFollowUps } from "@/lib/chat-followups"
 import { getTurnSteering } from "@/lib/chat-steering"
 import { isSteeredMessageContent } from "@/lib/steered-message"
 import { runWithRequestProfile } from "@/lib/profiles/server"
-import { proxyToDurableAiWorker, shouldProxyToDurableAiWorker } from '@/lib/ai/durable-worker'
+import { proxyToConversationOwner, shouldProxyToDurableAiWorker } from '@/lib/ai/durable-worker'
 
 /**
  * Steering: accept a user message while a turn is still streaming.
@@ -32,7 +32,17 @@ import { proxyToDurableAiWorker, shouldProxyToDurableAiWorker } from '@/lib/ai/d
  */
 export async function POST(request: Request) {
   return runWithRequestProfile(request, async () => {
-    if (shouldProxyToDurableAiWorker()) return proxyToDurableAiWorker(request)
+    if (shouldProxyToDurableAiWorker()) {
+      let body: { conversationId?: unknown }
+      try {
+        body = await request.clone().json()
+      } catch {
+        return NextResponse.json({ error: "Invalid request body" }, { status: 400 })
+      }
+      const conversationId = typeof body.conversationId === 'string' ? body.conversationId : ''
+      if (!conversationId) return NextResponse.json({ error: "Invalid request body" }, { status: 400 })
+      return proxyToConversationOwner(request, conversationId)
+    }
     let body: { conversationId?: unknown; message?: unknown }
     try {
       body = await request.json()

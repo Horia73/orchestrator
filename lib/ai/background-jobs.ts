@@ -16,6 +16,7 @@ import {
     redactSecretText,
     type EnvVarInjection,
 } from '@/lib/ai/tools/env-vars'
+import { canRunBackgroundLoop } from '@/lib/ai/background-leadership'
 
 /**
  * Tracked background jobs.
@@ -815,6 +816,7 @@ export function pruneExpiredBackgroundJobs(): void {
 export function startBackgroundJobWatcher(): void {
     if (globalForJobs.__orchestratorBgJobWatcher) return
     const sweep = async () => {
+        if (!canRunBackgroundLoop()) return
         const { listProfiles } = await import('@/lib/profiles/store')
         for (const profile of listProfiles()) {
             try {

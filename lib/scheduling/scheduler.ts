@@ -19,6 +19,7 @@ import {
 } from '@/lib/storage/retention'
 import { runFilesystemRetentionProcess } from '@/lib/storage/filesystem-retention-runner'
 import { getAiRunAdmissionBlock } from '@/lib/ai/run-admission'
+import { canRunBackgroundLoop } from '@/lib/ai/background-leadership'
 
 // ---------------------------------------------------------------------------
 // The scheduler tick. This is the ONLY long-lived background loop in the app.
@@ -125,6 +126,7 @@ async function executeAndFinish(profileId: string, task: ScheduledTask, isOnce: 
 }
 
 async function tick(): Promise<void> {
+    if (!canRunBackgroundLoop()) return
     if (state.ticking) return
     state.ticking = true
     try {

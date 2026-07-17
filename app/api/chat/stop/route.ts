@@ -1,11 +1,29 @@
 import { stopChatStream } from '@/lib/chat-streams'
 import { clearFollowUps } from '@/lib/chat-followups'
 import { runWithRequestProfile } from "@/lib/profiles/server"
-import { proxyToDurableAiWorker, shouldProxyToDurableAiWorker } from '@/lib/ai/durable-worker'
+import { proxyToConversationOwner, shouldProxyToDurableAiWorker } from '@/lib/ai/durable-worker'
 
 export async function POST(request: Request) {
   return runWithRequestProfile(request, async () => {
-        if (shouldProxyToDurableAiWorker()) return proxyToDurableAiWorker(request)
+        if (shouldProxyToDurableAiWorker()) {
+            let body: { conversationId?: unknown }
+            try {
+                body = await request.clone().json()
+            } catch {
+                return new Response(JSON.stringify({ error: 'Invalid request body' }), {
+                    status: 400,
+                    headers: { 'Content-Type': 'application/json' },
+                })
+            }
+            const conversationId = typeof body.conversationId === 'string' ? body.conversationId : ''
+            if (!conversationId) {
+                return new Response(JSON.stringify({ error: 'Missing conversationId' }), {
+                    status: 400,
+                    headers: { 'Content-Type': 'application/json' },
+                })
+            }
+            return proxyToConversationOwner(request, conversationId)
+        }
         let body: { conversationId?: string; messageId?: string }
         try {
             body = await request.json()

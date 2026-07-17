@@ -4,6 +4,12 @@ import path from 'path'
 
 import { modelMetadataResearcher } from '@/lib/ai/agents/model-metadata-researcher'
 import { runTextSubAgent } from '@/lib/ai/agents/runner'
+import { clearAgentRun, registerAgentRun } from '@/lib/agent-runs'
+import {
+    proxyToAgentRunOwner,
+    proxyToDurableAiWorker,
+    shouldProxyToDurableAiWorker,
+} from '@/lib/ai/durable-worker'
 import type { AgentRunEvent, ToolExecutionContext } from '@/lib/ai/agents/types'
 import {
     buildProviderMetadataResearchPrompt,
@@ -189,6 +195,7 @@ function latestResearchJob(): ActiveResearchJob | undefined {
 
 export async function POST(request: Request) {
   return runWithRequestProfile(request, async () => {
+        if (shouldProxyToDurableAiWorker()) return proxyToDurableAiWorker(request)
         const registry = getEffectiveRegistry()
         const readiness = await getResearchRuntimeReadiness(registry)
         if (!readiness.available) {
@@ -244,8 +251,9 @@ async function parseResearchTarget(
     return { providerId, modelId }
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   return runWithAdminCookieProfile(async () => {
+        if (shouldProxyToDurableAiWorker()) return proxyToAgentRunOwner(request, 'model-research')
         const registry = getEffectiveRegistry()
         const availableProviders = await availableModelProviderIds(registry)
         if (availableProviders.size === 0) {
@@ -292,8 +300,9 @@ export async function GET() {
   })
 }
 
-export async function DELETE() {
+export async function DELETE(request: Request) {
   return runWithAdminCookieProfile(async () => {
+        if (shouldProxyToDurableAiWorker()) return proxyToAgentRunOwner(request, 'model-research')
         const job = activeResearchJob()
         if (!job) {
             researchGlobals().__orchestratorModelResearchLastJob = undefined
@@ -320,9 +329,18 @@ function getOrStartResearchJob(target?: SingleModelTarget): ActiveResearchJob {
         promise: Promise.resolve(),
         target,
     }
+    if (!registerAgentRun({
+        id: job.id,
+        kind: 'research',
+        conversationId: 'model-research',
+        startedAt: job.startedAt,
+    })) {
+        throw new Error('AI worker admission is closed during a generation handoff.')
+    }
     researchGlobals().__orchestratorModelResearchJob = job
     researchGlobals().__orchestratorModelResearchLastJob = job
     job.promise = runResearchJob(job).finally(() => {
+        clearAgentRun(job.id)
         if (researchGlobals().__orchestratorModelResearchJob?.id === job.id) {
             researchGlobals().__orchestratorModelResearchJob = undefined
         }
