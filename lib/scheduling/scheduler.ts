@@ -20,6 +20,7 @@ import {
 import { runFilesystemRetentionProcess } from '@/lib/storage/filesystem-retention-runner'
 import { getAiRunAdmissionBlock } from '@/lib/ai/run-admission'
 import { canRunBackgroundLoop } from '@/lib/ai/background-leadership'
+import { isTransientSqliteContentionError } from './sqlite-errors'
 
 // ---------------------------------------------------------------------------
 // The scheduler tick. This is the ONLY long-lived background loop in the app.
@@ -262,7 +263,17 @@ async function tickProfile(profileId: string): Promise<void> {
         try {
             claimed = claimForRun(task.id, now)
         } catch (err) {
-            markTaskError(task.id, err instanceof Error ? err.message : 'Schedule compute failed', now)
+            const message = err instanceof Error ? err.message : String(err)
+            if (isTransientSqliteContentionError(err)) {
+                // Keep status/nextRunAt intact. The still-due task will be
+                // retried by the next scheduler tick instead of being parked
+                // permanently because another process briefly owned SQLite's
+                // single WAL writer slot.
+                log(`deferred claim for "${task.title}" (${task.id}, ${profileId}) after SQLite contention: ${message}`)
+                continue
+            }
+            log(`claim failed for "${task.title}" (${task.id}, ${profileId}): ${message}`)
+            markTaskError(task.id, message || 'Schedule compute failed', now)
             continue
         }
         if (!claimed) continue

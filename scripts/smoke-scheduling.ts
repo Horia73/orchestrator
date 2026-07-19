@@ -6,6 +6,7 @@
 import fs from "fs"
 import os from "os"
 import path from "path"
+import Database from "better-sqlite3"
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "scheduling-smoke-"))
 const originalStateDir = process.env.ORCHESTRATOR_STATE_DIR
@@ -34,11 +35,17 @@ async function main(): Promise<void> {
     const {
       createScheduledTask,
       getScheduledTask,
+      getTaskState,
       claimForRun,
       deferClaimedRun,
+      markTaskError,
       setTaskState,
     } =
       await import("@/lib/scheduling/store")
+    const schedulingDb = (await import("@/lib/db")).default
+    const { isTransientSqliteContentionError } = await import(
+      "@/lib/scheduling/sqlite-errors"
+    )
     const { executeRescheduleTask } = await import("@/lib/ai/tools/schedule")
     const { updateConfig } = await import("@/lib/config")
     const { buildSmartMonitorAgentPrompt } = await import(
@@ -73,6 +80,49 @@ async function main(): Promise<void> {
       "update deferral restores the claimed schedule without consuming it",
       deferred?.status === "scheduled" && deferred.nextRunAt === base + hourMs,
       { status: deferred?.status, nextRunAt: deferred?.nextRunAt }
+    )
+
+    // A competing WAL writer must leave the due task untouched so the
+    // scheduler can retry it on its next tick.
+    const contentionTask = createScheduledTask({
+      title: "SQLite contention smoke",
+      action: { kind: "tool", toolId: "noop", args: {}, summary: "noop" },
+      schedule: { kind: "every", everyMs: hourMs },
+      enabled: true,
+      createdBy: "system",
+    })
+    const contentionNextRunAt = contentionTask.nextRunAt
+    const blocker = new Database(path.join(tmpRoot, "data.db"))
+    blocker.pragma("journal_mode = WAL")
+    blocker.exec("BEGIN IMMEDIATE")
+    schedulingDb.pragma("busy_timeout = 25")
+    let contentionError: unknown = null
+    try {
+      claimForRun(contentionTask.id, base + hourMs)
+    } catch (error) {
+      contentionError = error
+    } finally {
+      blocker.exec("ROLLBACK")
+      blocker.close()
+      schedulingDb.pragma("busy_timeout = 10000")
+    }
+    const afterContention = getScheduledTask(contentionTask.id)
+    check(
+      "SQLite writer contention is classified as transient",
+      isTransientSqliteContentionError(contentionError),
+      contentionError instanceof Error
+        ? { message: contentionError.message, code: (contentionError as Error & { code?: string }).code }
+        : contentionError
+    )
+    check(
+      "failed claim leaves recurring task armed for retry",
+      afterContention?.status === "scheduled" &&
+        afterContention.nextRunAt === contentionNextRunAt,
+      afterContention
+    )
+    check(
+      "non-SQLite scheduling errors are not classified as contention",
+      !isTransientSqliteContentionError(new Error("invalid cron expression"))
     )
 
     Date.now = () => base + 60_000
@@ -131,6 +181,45 @@ async function main(): Promise<void> {
       prompt.includes("Use delegate_to with the Researcher") &&
         prompt.includes("search-only subtask"),
       prompt.match(/current public-web research.*/)?.[0]
+    )
+
+    // Reconcile the fixed cadence, then reproduce the production incident:
+    // enabled + error + no nextRunAt must self-heal without losing task_state.
+    const { ensureSmartMonitorHeartbeat } = await import(
+      "@/lib/monitoring/smart-monitor-adapter"
+    )
+    await ensureSmartMonitorHeartbeat({ enabled: true })
+    const cadenceRepaired = getScheduledTask(smart.id)
+    check(
+      "smart monitor reconciliation restores the fixed cheap-poll cadence",
+      cadenceRepaired?.schedule.kind === "every" &&
+        cadenceRepaired.schedule.everyMs === 5 * 60_000 &&
+        cadenceRepaired.status === "scheduled" &&
+        cadenceRepaired.nextRunAt != null,
+      cadenceRepaired
+    )
+    const preservedState = { digestQueue: [{ id: "buffered-digest-item" }] }
+    setTaskState(smart.id, preservedState)
+    markTaskError(smart.id, "database is locked", base + 2 * 60_000)
+    const stranded = getScheduledTask(smart.id)
+    check(
+      "incident fixture parks the enabled heartbeat without a next run",
+      stranded?.enabled === true &&
+        stranded.status === "error" &&
+        stranded.nextRunAt === null,
+      stranded
+    )
+    await ensureSmartMonitorHeartbeat({ enabled: true })
+    const selfHealed = getScheduledTask(smart.id)
+    check(
+      "smart monitor reconciliation re-arms a stranded heartbeat",
+      selfHealed?.status === "scheduled" && selfHealed.nextRunAt != null,
+      selfHealed
+    )
+    check(
+      "smart monitor self-heal preserves buffered task state",
+      JSON.stringify(getTaskState(smart.id)) === JSON.stringify(preservedState),
+      getTaskState(smart.id)
     )
 
     // ---- Product price task_state -> Watchlist backstop ----------------------

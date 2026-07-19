@@ -74,6 +74,12 @@ export async function ensureSmartMonitorHeartbeat(options: {
             if (existing.enabled !== options.enabled) patch.enabled = options.enabled
             const repairedSchedule = repairedSmartMonitorSchedule(existing)
             if (repairedSchedule) patch.schedule = repairedSchedule
+            else if (options.enabled && existing.nextRunAt == null) {
+                // Self-heal a heartbeat stranded by an older scheduler claim
+                // failure. Supplying the known-good fixed schedule makes the
+                // generic task updater recompute nextRunAt and status.
+                patch.schedule = desiredSmartMonitorSchedule()
+            }
             if (Object.keys(patch).length > 0) {
                 updateScheduledTask(existing.id, patch)
             }

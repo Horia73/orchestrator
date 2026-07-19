@@ -1,6 +1,10 @@
 import { randomUUID } from "crypto"
 
-import db, { createConversation, deleteConversation } from "@/lib/db"
+import db, {
+  createConversation,
+  deleteConversation,
+  getDatabaseForProfile,
+} from "@/lib/db"
 import { emitAppEvent } from "@/lib/events"
 import { recordWatchEvent } from "@/lib/monitor/store"
 import { appendRuntimeRunIndex } from "@/lib/runtime-index"
@@ -326,8 +330,9 @@ export interface ClaimedTask {
  * the race.
  */
 export function claimForRun(id: string, nowMs: number): ClaimedTask | null {
-  const tx = db.transaction((): ClaimedTask | null => {
-    const row = db
+  const connection = getDatabaseForProfile()
+  const tx = connection.transaction((): ClaimedTask | null => {
+    const row = connection
       .prepare("SELECT * FROM scheduled_tasks WHERE id = ?")
       .get(id) as ScheduledTaskRow | undefined
     if (!row) return null
@@ -348,7 +353,7 @@ export function claimForRun(id: string, nowMs: number): ClaimedTask | null {
         : task.schedule
     const advancedNext = isOnce ? null : computeNextRunAt(runSchedule, nowMs)
 
-    db.prepare(
+    connection.prepare(
       `
             UPDATE scheduled_tasks
             SET status = 'running', schedule = @schedule, nextRunAt = @nextRunAt, updatedAt = @now
@@ -369,7 +374,11 @@ export function claimForRun(id: string, nowMs: number): ClaimedTask | null {
       isOnce,
     }
   })
-  const claimed = tx()
+  // Take the WAL writer reservation before reading the task row. A deferred
+  // transaction can otherwise establish a read snapshot, lose a writer race,
+  // and fail immediately while upgrading at UPDATE (SQLITE_BUSY_SNAPSHOT).
+  // BEGIN IMMEDIATE also lets busy_timeout wait for an ordinary writer lock.
+  const claimed = tx.immediate()
   if (claimed) emitScheduledTaskChanged(id, "running")
   return claimed
 }

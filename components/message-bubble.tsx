@@ -1495,6 +1495,7 @@ function ToolCallBlock({
     onLoadDetails?: (toolCallId: string) => Promise<ToolCallReasoningEntry>
 }) {
     const buttonRef = React.useRef<HTMLButtonElement | null>(null)
+    const detailsPanelRef = React.useRef<HTMLDivElement | null>(null)
     const shiftContributionId = React.useId()
     const shiftUpRef = React.useRef(false)
     const preparedShiftRootRef = React.useRef<HTMLElement | null>(null)
@@ -1502,7 +1503,7 @@ function ToolCallBlock({
     const [loadedEntry, setLoadedEntry] = React.useState<ToolCallReasoningEntry | null>(null)
     const [loading, setLoading] = React.useState(false)
     const [loadError, setLoadError] = React.useState<string | null>(null)
-    const [detailsVisible, setDetailsVisible] = React.useState(false)
+    const [hasRevealedDeferredDetails, setHasRevealedDeferredDetails] = React.useState(false)
     const detailsRequestIdRef = React.useRef(0)
     const resolvedEntry = loadedEntry ?? entry
     const status = resolvedEntry.status ?? (
@@ -1511,6 +1512,9 @@ function ToolCallBlock({
     const hasLoadedDetails = loadedEntry !== null
     const bodyReady = !entry.detailsDeferred || hasLoadedDetails
     const canOpen = bodyReady || Boolean(onLoadDetails)
+    const detailsVisible = open && bodyReady && (
+        !entry.detailsDeferred || hasRevealedDeferredDetails
+    )
 
     const prepareLayoutShift = React.useCallback(() => {
         const button = buttonRef.current
@@ -1572,13 +1576,21 @@ function ToolCallBlock({
     }, [shiftContributionId])
 
     useIsomorphicLayoutEffect(() => {
-        if (!open || !bodyReady) {
-            setDetailsVisible(false)
-            return
+        const panel = detailsPanelRef.current
+        if (!bodyReady || !panel) return
+
+        if (!detailsVisible) {
+            // A new live row first mounts closed under the previous two-tool
+            // window. Commit that closed layout before the parent swaps the
+            // window in its layout effect, so the entering expansion and the
+            // retiring collapse share one CSS-transition frame.
+            void panel.getBoundingClientRect()
         }
-        const frame = window.requestAnimationFrame(() => setDetailsVisible(true))
+
+        if (!entry.detailsDeferred || !open || hasRevealedDeferredDetails) return
+        const frame = window.requestAnimationFrame(() => setHasRevealedDeferredDetails(true))
         return () => window.cancelAnimationFrame(frame)
-    }, [bodyReady, open])
+    }, [bodyReady, detailsVisible, entry.detailsDeferred, hasRevealedDeferredDetails, open])
 
     React.useEffect(() => {
         if (!open || !entry.detailsDeferred || hasLoadedDetails || !onLoadDetails) return
@@ -1661,6 +1673,7 @@ function ToolCallBlock({
     const title = getToolCallDisplayTitle(resolvedEntry)
     const detailsPanel = bodyReady ? (
         <div
+            ref={detailsPanelRef}
             aria-hidden={!detailsVisible}
             className={cn(
                 "grid min-w-0 will-change-[grid-template-rows,opacity] transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
