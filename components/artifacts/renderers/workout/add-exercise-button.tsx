@@ -1,13 +1,13 @@
 "use client"
 
 import * as React from "react"
-import { Check, Dumbbell, Plus, User, X } from "lucide-react"
+import { Check, Dumbbell, Gauge, Plus, User, X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import type { Exercise, MuscleGroup, WorkoutEquipment, WorkoutUnits } from "@/lib/workout/schema"
 import type { WorkoutSessionApi } from "@/lib/workout/use-workout-session"
 
-type ExerciseKindChoice = 'weighted' | 'bodyweight'
+type ExerciseKindChoice = 'weighted' | 'resistance' | 'bodyweight'
 
 const MAX_MUSCLES = 8
 
@@ -119,6 +119,7 @@ function AddExerciseDialog({
     const [sets, setSets] = React.useState(3)
     const [reps, setReps] = React.useState(10)
     const [weightKg, setWeightKg] = React.useState(20)
+    const [load, setLoad] = React.useState(1)
     const [restSec, setRestSec] = React.useState(90)
     const [muscles, setMuscles] = React.useState<MuscleGroup[]>(['full_body'])
     const [equipment, setEquipment] = React.useState<WorkoutEquipment[]>(['dumbbell'])
@@ -131,6 +132,7 @@ function AddExerciseDialog({
     React.useEffect(() => {
         setEquipment((prev) => {
             if (kind === 'bodyweight') return ['bodyweight']
+            if (kind === 'resistance') return ['machine']
             return prev.filter((item) => item !== 'bodyweight').length > 0
                 ? prev.filter((item) => item !== 'bodyweight')
                 : ['dumbbell']
@@ -147,6 +149,7 @@ function AddExerciseDialog({
             sets,
             reps,
             weightKg,
+            load,
             restSec,
             muscles,
             equipment,
@@ -193,7 +196,13 @@ function AddExerciseDialog({
                     />
                 </label>
 
-                <div className="mt-3 grid grid-cols-2 gap-2">
+                <div className="mt-3 grid grid-cols-3 gap-2">
+                    <KindButton
+                        active={kind === 'resistance'}
+                        icon={<Gauge className="size-3.5" strokeWidth={2} />}
+                        label="Machine level"
+                        onClick={() => setKind('resistance')}
+                    />
                     <KindButton
                         active={kind === 'weighted'}
                         icon={<Dumbbell className="size-3.5" strokeWidth={2} />}
@@ -213,12 +222,14 @@ function AddExerciseDialog({
                     <NumberInput label="Reps" value={reps} step={1} min={0} max={100} onChange={setReps} />
                     {kind === 'weighted' ? (
                         <NumberInput label={units} value={weightKg} step={0.5} min={0} max={500} onChange={setWeightKg} />
+                    ) : kind === 'resistance' ? (
+                        <NumberInput label="Level" value={load} step={1} min={0} max={1000} onChange={setLoad} />
                     ) : (
                         <NumberInput label="Rest s" value={restSec} step={15} min={0} max={600} onChange={setRestSec} />
                     )}
                 </div>
 
-                {kind === 'weighted' ? (
+                {kind === 'weighted' || kind === 'resistance' ? (
                     <div className="mt-2">
                         <NumberInput label="Rest s" value={restSec} step={15} min={0} max={600} onChange={setRestSec} />
                     </div>
@@ -292,6 +303,7 @@ function buildExercise(input: {
     sets: number
     reps: number
     weightKg: number
+    load: number
     restSec: number
     muscles: MuscleGroup[]
     equipment: WorkoutEquipment[]
@@ -300,13 +312,27 @@ function buildExercise(input: {
     const planned = Array.from({ length: input.sets }, () => (
         input.kind === 'weighted'
             ? { kind: 'working' as const, weightKg: input.weightKg, reps: input.reps }
-            : { kind: 'working' as const, reps: input.reps }
+            : input.kind === 'resistance'
+                ? { kind: 'working' as const, load: input.load, reps: input.reps }
+                : { kind: 'working' as const, reps: input.reps }
     ))
     if (input.kind === 'bodyweight') {
         return {
             id: slugifyExerciseName(name),
             name,
             kind: 'bodyweight',
+            equipment: input.equipment.slice(0, 6),
+            muscleGroups: input.muscles.slice(0, MAX_MUSCLES),
+            defaultRestSec: input.restSec,
+            planned,
+        }
+    }
+    if (input.kind === 'resistance') {
+        return {
+            id: slugifyExerciseName(name),
+            name,
+            kind: 'resistance',
+            loadUnit: 'level',
             equipment: input.equipment.slice(0, 6),
             muscleGroups: input.muscles.slice(0, MAX_MUSCLES),
             defaultRestSec: input.restSec,

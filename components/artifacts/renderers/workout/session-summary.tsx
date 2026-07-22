@@ -257,6 +257,7 @@ function PrKindBadge({ kind }: { kind: PrEvent['kind'] }) {
     const label = (() => {
         switch (kind) {
             case 'weight': return 'Weight PR'
+            case 'load': return 'Load PR'
             case 'reps': return 'Rep PR'
             case 'estimated_1rm': return '1RM PR'
             case 'duration': return 'Hold PR'

@@ -82,7 +82,13 @@ const managedThreadParams = codexProviderTestHooks.buildThreadParams({
   cwd: "/tmp/orchestrator-codex-provider-smoke",
 })
 type CodexThreadConfig = {
-  features?: { code_mode?: { direct_only_tool_namespaces?: string[] } }
+  features?: {
+    code_mode?: { direct_only_tool_namespaces?: string[] }
+    multi_agent_v2?: {
+      enabled?: boolean
+      multi_agent_mode_hint_text?: string
+    }
+  }
   multi_agent_v2?: { multi_agent_mode_hint_text?: string }
 }
 const managedThreadConfig = managedThreadParams.config as CodexThreadConfig
@@ -90,6 +96,16 @@ assert.deepEqual(
   managedThreadConfig.features?.code_mode?.direct_only_tool_namespaces,
   ["orchestrator"],
   "Managed thread configuration must keep Orchestrator tools direct even when the model forces code_mode_only"
+)
+assert.equal(
+  managedThreadConfig.features?.multi_agent_v2?.enabled,
+  false,
+  "Managed threads must keep Codex-native multi-agent tools disabled"
+)
+assert.equal(
+  managedThreadConfig.multi_agent_v2,
+  undefined,
+  "Codex ignores a top-level multi_agent_v2 policy; the override must live under features"
 )
 assert.deepEqual(
   managedThreadParams.dynamicTools,
@@ -107,22 +123,22 @@ assert.deepEqual(
   "Managed dynamic tools must use the official namespaced app-server schema"
 )
 assert.match(
-  managedThreadConfig.multi_agent_v2?.multi_agent_mode_hint_text ?? "",
+  managedThreadConfig.features?.multi_agent_v2?.multi_agent_mode_hint_text ?? "",
   /delegate_to or delegate_parallel/,
   "Managed Codex runs must receive the Orchestrator delegation policy override"
 )
 assert.match(
-  managedThreadConfig.multi_agent_v2?.multi_agent_mode_hint_text ?? "",
+  managedThreadConfig.features?.multi_agent_v2?.multi_agent_mode_hint_text ?? "",
   /user has explicitly made a standing request and authorization/,
   "Managed Codex runs must carry the user's standing delegation authorization"
 )
 assert.match(
-  managedThreadConfig.multi_agent_v2?.multi_agent_mode_hint_text ?? "",
+  managedThreadConfig.features?.multi_agent_v2?.multi_agent_mode_hint_text ?? "",
   /Treat this standing request as the explicit user request for sub-agents, delegation, and parallel agent work/,
   "Codex must not suppress Orchestrator-managed delegation on non-Ultra runs"
 )
 assert.match(
-  managedThreadConfig.multi_agent_v2?.multi_agent_mode_hint_text ?? "",
+  managedThreadConfig.features?.multi_agent_v2?.multi_agent_mode_hint_text ?? "",
   /Use run_async=true only for concrete independent parent work[\s\S]*detach a still-running batch[\s\S]*instead of polling or chaining short waits/,
   "Managed Codex runs must detach completed parent slices instead of babysitting async children"
 )
@@ -150,7 +166,7 @@ assert.equal(
   "Managed sessions born before the standing delegation policy must refresh with portable history"
 )
 const managedSessionId = codexProviderTestHooks.encodeAppServerSessionId("managed-thread", false)
-assert.equal(managedSessionId, "appserver:managed-policy-v3:managed-thread")
+assert.equal(managedSessionId, "appserver:managed-policy-v5:managed-thread")
 assert.deepEqual(
   codexProviderTestHooks.decodeAppServerSessionId(managedSessionId, false),
   { threadId: "managed-thread" },
@@ -315,6 +331,7 @@ rl.on("line", line => {
       builtins: [],
       prevSession: { threadId: "legacy-thread" },
       nativeCoderRun: false,
+      spawnEnv: { FAKE_CAPTURE_PATH: capturePath },
       callbacks: {
         onThinking() {},
         onThinkingDone() {},
@@ -333,7 +350,7 @@ rl.on("line", line => {
   assert.deepEqual(errors, [], "A direct namespaced delegation must finish without provider errors")
   assert.equal(content.join(""), "DONE", "The parent may resume only after the delegation item completes")
   assert.deepEqual(toolCalls, ["delegate_to"], "The direct path must not create an exec/wait/shell wrapper")
-  assert.deepEqual(sessions, ["appserver:managed-policy-v3:legacy-thread"])
+  assert.deepEqual(sessions, ["appserver:managed-policy-v5:legacy-thread"])
   const capture = JSON.parse(readFileSync(capturePath, "utf8")) as {
     method: string
     params: {
@@ -369,6 +386,7 @@ rl.on("line", line => {
       builtins: [],
       prevSession: { threadId: "legacy-thread" },
       nativeCoderRun: false,
+      spawnEnv: { FAKE_CODE_MODE_WAIT: "1" },
       callbacks: {
         onThinking(text) { codeModeWaitThinking.push(text) },
         onThinkingDone() {},
@@ -402,6 +420,7 @@ rl.on("line", line => {
       tools: [delegateToTool],
       builtins: [],
       nativeCoderRun: false,
+      spawnEnv: { FAKE_PARENT_VIOLATION: "1" },
       callbacks: {
         onThinking() {},
         onThinkingDone() {},
@@ -435,6 +454,7 @@ rl.on("line", line => {
       tools: [delegateToTool],
       builtins: [],
       nativeCoderRun: false,
+      spawnEnv: { FAKE_ASYNC_DELEGATION: "1" },
       callbacks: {
         onThinking() {},
         onThinkingDone() {},

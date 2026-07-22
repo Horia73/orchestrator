@@ -423,6 +423,25 @@ export function isConversationUnread(conversation: Conversation): boolean {
   )
 }
 
+/**
+ * Decide whether a terminal assistant row should create an unread marker.
+ *
+ * Chat completion frames can arrive from the durable worker after a read-state
+ * frame emitted by the web process. A readAt at or beyond the terminal row is
+ * therefore authoritative: the conversation was already opened on this or
+ * another device and the late completion frame must not make it unread again.
+ */
+export function isAssistantCompletionUnread(
+  conversation: Conversation | undefined,
+  message: Message
+): boolean {
+  const completionAt = validTimestamp(message.timestamp)
+  const readAt = validTimestamp(conversation?.readAt)
+
+  if (completionAt === null || readAt === null) return true
+  return readAt < completionAt
+}
+
 export function unreadSetsEqual(a: Set<string>, b: Set<string>): boolean {
   if (a.size !== b.size) return false
   for (const value of a) {

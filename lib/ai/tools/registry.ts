@@ -8,7 +8,10 @@ import {
   BUILTIN_TOOL_IDS,
   NATIVE_BUILTIN_DUPLICATE_TOOL_IDS,
 } from "./tool-catalog"
-import { isToolAllowedForActiveProfile } from "@/lib/profiles/permissions"
+import {
+  getActiveProfilePermissions,
+  isToolAllowedForActiveProfile,
+} from "@/lib/profiles/permissions"
 
 // ---------------------------------------------------------------------------
 // Tool Registry
@@ -41,6 +44,29 @@ export function getToolsForBuiltins(
       .filter((t): t is ToolDef => t !== undefined)
       .filter(isToolAllowedForActiveProfile)
   )
+}
+
+export function getAllowedProviderBuiltins(
+  builtins: ProviderBuiltin[] | undefined
+): ProviderBuiltin[] {
+  if (!builtins?.length) return []
+  const permissions = getActiveProfilePermissions()
+  if (!permissions) return [...builtins]
+  return builtins.filter((builtin) => {
+    if (builtin === "read" || builtin === "glob" || builtin === "grep" || builtin === "file_search") {
+      return permissions.tools.read_files
+    }
+    if (builtin === "write" || builtin === "edit") {
+      return permissions.tools.write_files
+    }
+    if (builtin === "bash" || builtin === "code_execution") {
+      return permissions.tools.shell
+    }
+    if (builtin === "web_fetch" || builtin === "web_search" || builtin === "url_context") {
+      return permissions.tools.web_access
+    }
+    return true
+  })
 }
 
 export function resolveProviderToolSurface(

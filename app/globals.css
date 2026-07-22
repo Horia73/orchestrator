@@ -228,6 +228,13 @@
   }
 }
 
+/* Keep the iOS status-bar canvas and the app surface identical. In standalone
+   mode a transparent html canvas can expose the manifest/theme color above the
+   body; even a one-channel mismatch reads as a horizontal separator. */
+html {
+  background-color: var(--background);
+}
+
 /* Tailwind v4 preflight drops the browser default `cursor: pointer` on
    buttons. Restore it so every interactive button shows the hand cursor
    on hover without us having to thread `cursor-pointer` through hundreds
@@ -817,6 +824,29 @@ html[data-orch-home-page="true"] body {
    the next fix attempt. */
 :root {
   --orch-sheet-viewport-height: 100svh;
+}
+
+/* Workout inputs are intentionally scoped here: chat composers own their own
+   keyboard positioning and must never trigger a document/global smooth scroll.
+   The workout surface instead yields local scroll room, and fixed workout
+   dialogs shrink into the visible area above the software keyboard. */
+@media (max-width: 767px) {
+  [data-workout-scroll] {
+    scroll-padding-bottom: calc(var(--orch-mobile-keyboard-inset, 0px) + 1rem);
+  }
+
+  [data-workout-content] {
+    padding-bottom: calc(
+      1rem + env(safe-area-inset-bottom) + var(--orch-mobile-keyboard-inset, 0px)
+    );
+  }
+
+  [data-workout-surface] [role="dialog"].fixed {
+    bottom: var(--orch-mobile-keyboard-inset, 0px);
+    max-height: calc(100dvh - var(--orch-mobile-keyboard-inset, 0px));
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+  }
 }
 
 /* Map chrome on touch devices: the map (especially photorealistic 3D)

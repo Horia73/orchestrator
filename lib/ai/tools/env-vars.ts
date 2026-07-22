@@ -10,8 +10,12 @@ import {
 import { parseEnvAssignment, parseEnvStoredValue } from '@/lib/settings/workspace-files-env'
 import { displayPath } from './sandbox'
 import { booleanArg, numberArg, stringArg } from './helpers'
+import {
+    getCapturedSecretValue,
+    listCapturedSecretKeys,
+} from '@/lib/secrets/store'
 
-type EnvVarSource = 'workspace' | 'process'
+type EnvVarSource = 'secret_store' | 'workspace' | 'process'
 
 interface EnvVarListing {
     key: string
@@ -79,6 +83,10 @@ export function executeListEnvVars(args: Record<string, unknown> = {}): ToolResu
     const limit = Math.floor(Math.min(MAX_LIST_LIMIT, Math.max(1, numberArg(args, ['limit'], DEFAULT_LIST_LIMIT))))
     const rows = new Map<string, EnvVarListing>()
 
+    for (const key of listCapturedSecretKeys()) {
+        upsertListing(rows, key, 'secret_store', true)
+    }
+
     for (const entry of readWorkspaceEnvEntries().values()) {
         upsertListing(rows, entry.key, 'workspace', entry.hasValue, entry.occurrences)
     }
@@ -104,6 +112,7 @@ export function executeListEnvVars(args: Record<string, unknown> = {}): ToolResu
             total_matches: filtered.length,
             truncated: filtered.length > entries.length,
             sources: {
+                secret_store: 'profile-private chat secret vault',
                 workspace: activeProfileUsesAdminEnvironment()
                     ? effectiveWorkspaceEnvSourceLabel()
                     : displayPath(effectiveWorkspaceEnvPath()),
@@ -152,6 +161,14 @@ export function resolveEnvVarInjection(keys: string[]): { ok: true; injection: E
     const redactions: SecretRedaction[] = []
 
     for (const key of uniqueKeys) {
+        const capturedValue = getCapturedSecretValue(key)
+        if (capturedValue !== null && hasEnvValue(capturedValue)) {
+            env[key] = capturedValue
+            sources[key] = 'secret_store'
+            redactions.push({ key, value: capturedValue, marker: `[redacted:${key}]` })
+            continue
+        }
+
         const workspaceEntry = workspace.get(key)
         if (workspaceEntry?.hasValue) {
             env[key] = workspaceEntry.value

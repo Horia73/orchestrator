@@ -37,6 +37,7 @@ function slimRequestMessage(message: Message): Message {
     id: message.id,
     role: message.role,
     content: message.content,
+    secretRefs: Array.isArray(message.secretRefs) ? message.secretRefs : undefined,
     attachments: Array.isArray(message.attachments)
       ? message.attachments
       : undefined,

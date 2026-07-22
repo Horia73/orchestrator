@@ -2,11 +2,11 @@ import path from 'path'
 
 import type { ToolExecutionContext, ToolResult } from '@/lib/ai/agents/types'
 import { MAX_TOOL_DELTA_TEXT_CHARS } from '@/lib/ai/reasoning-limits'
-import { augmentedEnv, resolveCommandShell } from '@/lib/cli/resolve-bin'
+import { agentCommandEnv, resolveCommandShell } from '@/lib/cli/resolve-bin'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { getActiveProfileId } from '@/lib/profiles/context'
 import { startTrackedBackgroundJob } from '@/lib/ai/background-jobs'
-import { displayPath } from './sandbox'
+import { commandMentionsProtectedAgentPath, displayPath } from './sandbox'
 import {
     collectEnvKeys,
     createSecretStreamRedactor,
@@ -23,6 +23,12 @@ const MAX_STREAM_CHARS = 120_000
 export async function executeBash(args: Record<string, unknown>, ctx?: ToolExecutionContext): Promise<ToolResult> {
     const command = stringArg(args, ['command'])
     if (!command.trim()) return { success: false, error: 'Missing required parameter: command' }
+    if (commandMentionsProtectedAgentPath(command)) {
+        return {
+            success: false,
+            error: 'Direct .env file access is blocked. Use ListEnvVars to discover names, pass only the needed names in Bash env_keys, or use SetEnv to store a value.',
+        }
+    }
 
     const cwdResult = resolveCwd(stringArg(args, ['cwd']))
     if (!cwdResult.ok) return { success: false, error: cwdResult.error }
@@ -184,7 +190,7 @@ async function runForegroundCommand(command: string, cwd: string, timeoutMs: num
                 cols: 120,
                 rows: 32,
                 cwd,
-                env: augmentedEnv({
+                env: agentCommandEnv({
                     ...runtimeCommandEnv(ctx),
                     ...injection.env,
                     FORCE_COLOR: process.env.FORCE_COLOR ?? '1',

@@ -51,21 +51,9 @@ export function InlineToolCallView({ entry, searchDisplay = "expanded", ownerLab
 
     if (entry.toolName === "Bash" || entry.toolName === "shell") {
         return (
-            <div
-                ref={terminalWrapRef}
-                className={cn(
-                    "tool-call-scroll relative z-10 flex flex-col overflow-x-auto overflow-y-hidden rounded-md border border-[#24242a] bg-[#0c0c0e] text-left shadow-sm [touch-action:pan-x_pan-y]",
-                    TOOL_CALL_INSET_CLASS
-                )}
-                style={TOOL_CALL_PANEL_STYLE}
-            >
-                {ownerLabel && (
-                    <div className="flex shrink-0 items-center justify-end border-b border-[#24242a] px-2 py-1.5">
-                        <ToolOwnerPill label={ownerLabel} />
-                    </div>
-                )}
+            <TerminalFrame ownerLabel={ownerLabel} terminalWrapRef={terminalWrapRef}>
                 <LiveTerminal entry={entry} data={data} className={TERMINAL_MIN_WIDTH_CLASS} />
-            </div>
+            </TerminalFrame>
         )
     }
 
@@ -84,6 +72,59 @@ export function InlineToolCallView({ entry, searchDisplay = "expanded", ownerLab
         <ToolFrame ownerLabel={ownerLabel}>
             <ToolPreview entry={entry} data={data} />
         </ToolFrame>
+    )
+}
+
+export function InlineToolCallPlaceholder({
+    entry,
+    ownerLabel,
+}: {
+    entry: ToolCallReasoningEntry
+    ownerLabel?: string
+}) {
+    const terminalWrapRef = useTrapWheel<HTMLDivElement>()
+    if (entry.toolName === "Bash" || entry.toolName === "shell") {
+        return (
+            <TerminalFrame ownerLabel={ownerLabel} terminalWrapRef={terminalWrapRef}>
+                <pre className={cn("min-h-0 flex-1 px-3 py-3 font-mono text-[12px] leading-relaxed text-zinc-400", TERMINAL_MIN_WIDTH_CLASS)}>
+                    No output yet.
+                </pre>
+            </TerminalFrame>
+        )
+    }
+
+    return (
+        <ToolFrame ownerLabel={ownerLabel}>
+            <TextPreview text="No output yet." />
+        </ToolFrame>
+    )
+}
+
+function TerminalFrame({
+    children,
+    ownerLabel,
+    terminalWrapRef,
+}: {
+    children: React.ReactNode
+    ownerLabel?: string
+    terminalWrapRef: React.RefObject<HTMLDivElement | null>
+}) {
+    return (
+        <div
+            ref={terminalWrapRef}
+            className={cn(
+                "tool-call-scroll relative z-10 flex flex-col overflow-x-auto overflow-y-hidden rounded-md border border-[#24242a] bg-[#0c0c0e] text-left shadow-sm [touch-action:pan-x_pan-y]",
+                TOOL_CALL_INSET_CLASS
+            )}
+            style={TOOL_CALL_PANEL_STYLE}
+        >
+            {ownerLabel && (
+                <div className="flex shrink-0 items-center justify-end border-b border-[#24242a] px-2 py-1.5">
+                    <ToolOwnerPill label={ownerLabel} />
+                </div>
+            )}
+            {children}
+        </div>
     )
 }
 
@@ -130,7 +171,13 @@ export function InlineWebSearchGroup({ entries, ownerLabel }: { entries: ToolCal
         hasError ||= entry.success === false || entry.status === "error"
     }
 
-    if (!requests.length && !websites.length) return null
+    if (!requests.length && !websites.length) {
+        return (
+            <ToolFrame ownerLabel={ownerLabel}>
+                <TextPreview text="No output yet." />
+            </ToolFrame>
+        )
+    }
 
     return (
         <div className={cn("relative z-10 text-left", TOOL_CALL_INSET_CLASS)}>

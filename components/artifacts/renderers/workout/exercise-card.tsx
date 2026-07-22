@@ -128,6 +128,8 @@ function reconstructPlannedFromLogged(
             case 'weighted':
             case 'weighted_bw':
                 return { ...base, weightKg: 0, reps: 0 }
+            case 'resistance':
+                return { ...base, load: 0, reps: 0 }
             case 'bodyweight':
                 return { ...base, reps: 0 }
             case 'hold':
@@ -144,6 +146,8 @@ function reconstructPlannedFromLogged(
         case 'weighted':
         case 'weighted_bw':
             return { ...base, weightKg: logged.actualWeightKg ?? 0, reps: logged.actualReps ?? 0 }
+        case 'resistance':
+            return { ...base, load: logged.actualLoad ?? 0, reps: logged.actualReps ?? 0 }
         case 'bodyweight':
             return { ...base, reps: logged.actualReps ?? 0 }
         case 'hold':

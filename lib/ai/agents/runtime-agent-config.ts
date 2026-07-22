@@ -1,8 +1,11 @@
-import type { AgentConfig } from './types'
+import type { AgentConfig, ProviderBuiltin } from './types'
 import { CLI_WORKSPACE_BUILTINS, SKILL_TOOL_IDS, WORKSPACE_TOOL_IDS } from './builtins'
 import { buildCoderPrompt } from '@/lib/ai/prompts/coder'
 
 const CLI_CODE_PROVIDERS = new Set(['claude-code', 'codex'])
+const MANAGED_CLI_NATIVE_BUILTINS = new Set<ProviderBuiltin>([
+    'web_search',
+])
 
 export const API_CODER_TOOL_IDS: string[] = [
     ...WORKSPACE_TOOL_IDS,
@@ -11,6 +14,20 @@ export const API_CODER_TOOL_IDS: string[] = [
 
 export function isCliCodeProvider(providerId: string): boolean {
     return CLI_CODE_PROVIDERS.has(providerId)
+}
+
+/**
+ * Managed orchestrator/worker runs keep Orchestrator's permissioned workspace
+ * tools, including Bash(env_keys). Only the promptless Coder receives native
+ * CLI filesystem/shell built-ins.
+ */
+export function runtimeBuiltinsForProvider(
+    target: AgentConfig,
+    providerId: string,
+): ProviderBuiltin[] {
+    const requested = target.builtins ?? []
+    if (!isCliCodeProvider(providerId) || target.id === 'coder') return requested
+    return requested.filter(builtin => MANAGED_CLI_NATIVE_BUILTINS.has(builtin))
 }
 
 export function resolveRuntimeAgentConfig(target: AgentConfig, providerId: string): AgentConfig {

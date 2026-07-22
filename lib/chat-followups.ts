@@ -1,6 +1,7 @@
 import { emitChatEvent } from '@/lib/events'
 import { getActiveProfileId } from '@/lib/profiles/context'
 import type { ChatFollowUpSnapshot, ChatFollowUpSource } from '@/lib/chat-followup-types'
+import type { MessageSecretRef } from '@/lib/types'
 
 /**
  * Follow-up queue — the server half of chat steering.
@@ -35,6 +36,8 @@ export interface ChatFollowUp {
     userMessageId: string
     /** Raw text to run the turn with (already persisted as the message body). */
     content: string
+    /** Safe markers for credentials captured from this message. */
+    secretRefs?: MessageSecretRef[]
     /** Attachments persisted on the user message, forwarded to the turn. */
     attachments?: unknown[]
     /**

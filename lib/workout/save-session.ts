@@ -78,6 +78,8 @@ export interface SessionLog {
         id: string
         name: string
         kind: Exercise['kind']
+        /** Present for proprietary/non-kg machine resistance. */
+        loadUnit?: string
         muscleGroups: string[]
         plannedSetCount: number
         loggedSets: LoggedSet[]
@@ -98,7 +100,7 @@ export interface SessionLog {
 export interface PrEvent {
     exerciseId: string
     exerciseName: string
-    kind: 'weight' | 'reps' | 'estimated_1rm' | 'duration' | 'distance'
+    kind: 'weight' | 'load' | 'reps' | 'estimated_1rm' | 'duration' | 'distance'
     /** Human-readable "60 kg × 8" or "1:23" etc. */
     label: string
     /** Optional prior best for diff display. */
@@ -106,6 +108,24 @@ export interface PrEvent {
 }
 
 // === per-exercise history rollup ===========================================
+
+/** Canonical, reusable part of an exercise. Session-specific targets and
+ * history snapshots are intentionally excluded: future workouts copy this
+ * template and only provide new `planned` sets/progression. */
+export interface ExerciseTemplate {
+    id: string
+    name: string
+    kind: Exercise['kind']
+    loadUnit?: string
+    equipment?: Exercise['equipment']
+    muscleGroups: Exercise['muscleGroups']
+    description?: string
+    imageUrl?: string
+    imageQuery?: string
+    alternatives?: string[]
+    videoUrl?: string
+    defaultRestSec?: number
+}
 
 /**
  * What we keep per exercise across all time. The AI tool reads this directly
@@ -120,6 +140,9 @@ export interface ExerciseHistory {
     name: string
     kind: Exercise['kind']
     muscleGroups: string[]
+    /** Reusable definition captured from the most recently completed workout.
+     * Optional so existing history files remain forward-compatible. */
+    definition?: ExerciseTemplate
     personalBest: PersonalBest | null
     /** Newest first. */
     sessions: Array<{
@@ -215,6 +238,7 @@ export function buildSessionLog(
                 id: ex.id,
                 name: ex.name,
                 kind: ex.kind,
+                loadUnit: ex.kind === 'resistance' ? ex.loadUnit : undefined,
                 muscleGroups: ex.muscleGroups as unknown as string[],
                 plannedSetCount: ex.planned.length,
                 loggedSets,
@@ -253,6 +277,7 @@ export function buildSessionLog(
 /**
  * Pick the "best" set for an exercise.
  *   - weighted / weighted_bw: highest weight × reps product
+ *   - resistance: highest proprietary load, then most reps at that load
  *   - bodyweight: most reps
  *   - hold: longest duration
  *   - cardio_dist: longest distance
@@ -271,6 +296,14 @@ function pickBestSet(sets: LoggedSet[], kind: Exercise['kind']): LoggedSet | nul
                 const score = (s.actualWeightKg ?? 0) * (s.actualReps ?? 0)
                 const bestScore = (best.actualWeightKg ?? 0) * (best.actualReps ?? 0)
                 return score > bestScore ? s : best
+            })
+        }
+        case 'resistance': {
+            return completed.reduce((best, s) => {
+                const load = s.actualLoad ?? 0
+                const bestLoad = best.actualLoad ?? 0
+                if (load !== bestLoad) return load > bestLoad ? s : best
+                return (s.actualReps ?? 0) > (best.actualReps ?? 0) ? s : best
             })
         }
         case 'bodyweight':
@@ -365,6 +398,47 @@ export function detectExercisePrs(exercise: Exercise, loggedSets: LoggedSet[]): 
             }
             break
         }
+        case 'resistance': {
+            const strongest = completed.reduce((best, s) => {
+                const load = s.actualLoad ?? 0
+                const bestLoad = best.actualLoad ?? 0
+                if (load !== bestLoad) return load > bestLoad ? s : best
+                return (s.actualReps ?? 0) > (best.actualReps ?? 0) ? s : best
+            })
+            const unit = exercise.loadUnit
+            if (
+                strongest.actualLoad !== undefined
+                && strongest.actualReps !== undefined
+                && pb.load !== undefined
+                && strongest.actualLoad > pb.load
+            ) {
+                events.push({
+                    exerciseId: exercise.id,
+                    exerciseName: exercise.name,
+                    kind: 'load',
+                    label: `${formatWeightNumber(strongest.actualLoad)} ${unit} × ${strongest.actualReps}`,
+                    previousLabel: pb.reps !== undefined
+                        ? `${formatWeightNumber(pb.load)} ${unit} × ${pb.reps}`
+                        : undefined,
+                })
+            } else if (
+                strongest.actualLoad !== undefined
+                && strongest.actualReps !== undefined
+                && pb.load !== undefined
+                && pb.reps !== undefined
+                && strongest.actualLoad === pb.load
+                && strongest.actualReps > pb.reps
+            ) {
+                events.push({
+                    exerciseId: exercise.id,
+                    exerciseName: exercise.name,
+                    kind: 'reps',
+                    label: `${strongest.actualReps} reps @ ${formatWeightNumber(strongest.actualLoad)} ${unit}`,
+                    previousLabel: `${pb.reps} @ ${formatWeightNumber(pb.load)} ${unit}`,
+                })
+            }
+            break
+        }
         case 'bodyweight': {
             const mostReps = completed.reduce((best, s) =>
                 (s.actualReps ?? 0) > (best.actualReps ?? 0) ? s : best,
@@ -440,6 +514,12 @@ function firstTimePb(exercise: Exercise, best: LoggedSet): PrEvent[] {
                 kind = 'weight'
             }
             break
+        case 'resistance':
+            if (best.actualLoad !== undefined && best.actualReps !== undefined) {
+                label = `${formatWeightNumber(best.actualLoad)} ${exercise.loadUnit} × ${best.actualReps}`
+                kind = 'load'
+            }
+            break
         case 'bodyweight':
             if (best.actualReps !== undefined) {
                 label = `${best.actualReps} reps`
@@ -510,17 +590,38 @@ export function mergeExerciseHistory(
         startDate,
     )
 
+    const sourceExercise = workout.groups
+        .flatMap((group) => group.exercises)
+        .find((exercise) => exercise.id === exerciseLog.id)
+
     return {
         v: 1,
         id: exerciseLog.id,
         name: exerciseLog.name,
         kind: exerciseLog.kind,
         muscleGroups: exerciseLog.muscleGroups,
+        definition: sourceExercise ? buildExerciseTemplate(sourceExercise) : existing?.definition,
         personalBest: newPB,
         sessions,
         updatedAt: new Date().toISOString(),
     }
-    void workout // reserved for future use (program tagging, etc.)
+}
+
+export function buildExerciseTemplate(exercise: Exercise): ExerciseTemplate {
+    return {
+        id: exercise.id,
+        name: exercise.name,
+        kind: exercise.kind,
+        loadUnit: exercise.kind === 'resistance' ? exercise.loadUnit : undefined,
+        equipment: exercise.equipment,
+        muscleGroups: exercise.muscleGroups,
+        description: exercise.description,
+        imageUrl: exercise.imageUrl,
+        imageQuery: exercise.imageQuery,
+        alternatives: exercise.alternatives,
+        videoUrl: exercise.videoUrl,
+        defaultRestSec: exercise.defaultRestSec,
+    }
 }
 
 function averageRpe(sets: LoggedSet[]): number | undefined {
@@ -612,6 +713,16 @@ function computePersonalBest(
             }
             return existing
         }
+        case 'resistance':
+            if (best.actualLoad === undefined || best.actualReps === undefined) return existing
+            if (
+                !existing
+                || (existing.load ?? 0) < best.actualLoad
+                || (existing.load === best.actualLoad && (existing.reps ?? 0) < best.actualReps)
+            ) {
+                return { load: best.actualLoad, reps: best.actualReps, achievedAt: date }
+            }
+            return existing
         case 'bodyweight':
             if (best.actualReps === undefined) return existing
             if (!existing || (existing.reps ?? 0) < best.actualReps) {
@@ -659,11 +770,17 @@ export function formatHistoryEntryLine(log: SessionLog): string {
 
 /**
  * Kind-aware metric string for a single logged set:
- *   weighted/weighted_bw → "60 kg × 8"   bodyweight → "12 reps"
+ *   weighted/weighted_bw → "60 kg × 8"   resistance → "6 level × 10"
+ *   bodyweight → "12 reps"
  *   hold/cardio_dur/interval → "1:23"     cardio_dist → "400 m"
  * Returns "" when the set carries no usable value for its kind.
  */
-function formatSetMetric(set: LoggedSet, kind: Exercise['kind'], units: SessionLog['units']): string {
+function formatSetMetric(
+    set: LoggedSet,
+    kind: Exercise['kind'],
+    units: SessionLog['units'],
+    loadUnit?: string,
+): string {
     switch (kind) {
         case 'weighted':
         case 'weighted_bw': {
@@ -672,6 +789,14 @@ function formatSetMetric(set: LoggedSet, kind: Exercise['kind'], units: SessionL
             }
             if (set.actualReps !== undefined) return `${set.actualReps} reps`
             if (set.actualWeightKg !== undefined) return `${formatWeightNumber(set.actualWeightKg)} ${units}`
+            return ''
+        }
+        case 'resistance': {
+            if (set.actualLoad !== undefined && set.actualReps !== undefined) {
+                return `${formatWeightNumber(set.actualLoad)} ${loadUnit || 'level'} × ${set.actualReps}`
+            }
+            if (set.actualReps !== undefined) return `${set.actualReps} reps`
+            if (set.actualLoad !== undefined) return `${formatWeightNumber(set.actualLoad)} ${loadUnit || 'level'}`
             return ''
         }
         case 'bodyweight':
@@ -698,12 +823,13 @@ function formatLoggedSetLine(
     index: number,
     kind: Exercise['kind'],
     units: SessionLog['units'],
+    loadUnit?: string,
 ): string | null {
     const n = index + 1
     if (set.skipped) {
         return `${n}. _skipped_${set.skipReason ? ` — ${set.skipReason}` : ''}`
     }
-    const metric = formatSetMetric(set, kind, units)
+    const metric = formatSetMetric(set, kind, units, loadUnit)
     // Drop sets that were never logged and carry no annotation.
     if (!metric && !set.completed && !set.failed && !set.notes && set.actualRpe === undefined && set.actualRir === undefined) {
         return null
@@ -790,7 +916,7 @@ export function formatSessionMarkdown(log: SessionLog): string {
         // including RPE/RIR, failed/partial markers, skip reasons, and notes.
         // This is what the detail view renders, so it must mirror the JSON log.
         const setLines = ex.loggedSets
-            .map((s, i) => formatLoggedSetLine(s, i, ex.kind, log.units))
+            .map((s, i) => formatLoggedSetLine(s, i, ex.kind, log.units, ex.loadUnit))
             .filter((line): line is string => line !== null)
         if (setLines.length > 0) {
             lines.push(...setLines)
@@ -837,6 +963,7 @@ export function buildPreviousFromHistory(history: ExerciseHistory): PreviousSess
         date: latest.date,
         bestSet: {
             weightKg: latest.bestSet.actualWeightKg,
+            load: latest.bestSet.actualLoad,
             reps: latest.bestSet.actualReps,
             durationSec: latest.bestSet.actualDurationSec,
             distanceM: latest.bestSet.actualDistanceM,
@@ -844,6 +971,7 @@ export function buildPreviousFromHistory(history: ExerciseHistory): PreviousSess
         },
         allSets: latest.allSets.map((s) => ({
             weightKg: s.actualWeightKg,
+            load: s.actualLoad,
             reps: s.actualReps,
             durationSec: s.actualDurationSec,
             distanceM: s.actualDistanceM,

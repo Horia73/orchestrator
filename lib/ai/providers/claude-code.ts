@@ -14,13 +14,14 @@ import type {
 } from '@/lib/ai/agents/types'
 import type { ContextUsageSnapshot } from '@/lib/types'
 import { CLI_SPECS } from '@/lib/cli/specs'
-import { resolveBin, augmentedEnv } from '@/lib/cli/resolve-bin'
+import { agentCommandEnv, resolveBin } from '@/lib/cli/resolve-bin'
 import { createBinding, clearBinding } from '@/lib/cli/mcp-bindings'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { normalizeUsage } from '@/lib/observability/usage-mapper'
 import { attachBillingMetadata } from '@/lib/observability/billing-metadata'
 import type { BillingUsageEntry } from '@/lib/observability/schema'
 import { latestUserPromptWithPortableHistory } from './history'
+import { removeNativeBuiltinToolDuplicates } from '@/lib/ai/tools/registry'
 
 // Our custom tools reach Claude Code through one stdio MCP server. Claude Code
 // surfaces MCP tools to the model as `mcp__<server>__<tool>`, never the bare
@@ -135,7 +136,10 @@ export class ClaudeCodeProvider implements AIProvider {
         // token we issue here. Token resolves to (ToolDef[], ExecutionCtx),
         // so tool execution runs in the orchestrator's process with full
         // access to the registry, db, and delegation runner.
-        const tools = customToolsForClaudeCode(options.tools ?? [])
+        const tools = customToolsForClaudeCode(
+            options.tools ?? [],
+            options.builtins ?? [],
+        )
         const nativeToolNames = claudeCodeToolNames(options.builtins ?? [])
         const hasMcpTools = tools.length > 0 && Boolean(options.toolContext)
         // Claude Code 2.x DEFERS MCP (custom) tool schemas: they are not placed
@@ -267,22 +271,12 @@ export class ClaudeCodeProvider implements AIProvider {
     }
 }
 
-function customToolsForClaudeCode(tools: ToolDef[]): ToolDef[] {
-    return tools.filter(tool => !CLAUDE_CODE_NATIVE_DUPLICATE_TOOL_IDS.has(tool.id))
+function customToolsForClaudeCode(
+    tools: ToolDef[],
+    builtins: ProviderBuiltin[],
+): ToolDef[] {
+    return removeNativeBuiltinToolDuplicates(tools, builtins)
 }
-
-const CLAUDE_CODE_NATIVE_DUPLICATE_TOOL_IDS = new Set([
-    'list_dir',
-    'read_file',
-    'Read',
-    'Write',
-    'Edit',
-    'Bash',
-    'Glob',
-    'Grep',
-    'WebFetch',
-    'TodoWrite',
-])
 
 function claudeCodeToolNames(builtins: ProviderBuiltin[]): string[] {
     const names = new Set<string>()
@@ -351,7 +345,7 @@ async function runClaudeStreamJson({ bin, args, model, cwd, signal, callbacks, i
         try {
             proc = spawn(resolved, args, {
                 stdio: ['ignore', 'pipe', 'pipe'],
-                env: augmentedEnv(),
+                env: claudeCodeCliEnv(),
                 cwd: cwd ?? activeRuntimePaths().agentWorkspaceDir,
             })
         } catch (err) {
@@ -622,6 +616,14 @@ async function runClaudeStreamJson({ bin, args, model, cwd, signal, callbacks, i
             })
             finish()
         })
+    })
+}
+
+function claudeCodeCliEnv(): NodeJS.ProcessEnv {
+    return agentCommandEnv({
+        CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+        ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
     })
 }
 

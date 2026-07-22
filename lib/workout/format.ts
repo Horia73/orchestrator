@@ -145,10 +145,11 @@ export function totalVolume(
  * Returns "" when sets is empty or all sets lack data.
  */
 export function formatSetSequence(
-    sets: Array<{ weightKg?: number; reps?: number; durationSec?: number }>,
+    sets: Array<{ weightKg?: number; load?: number; reps?: number; durationSec?: number }>,
 ): string {
     if (sets.length === 0) return ''
     const weights = sets.map((s) => s.weightKg)
+    const loads = sets.map((s) => s.load)
     const reps = sets.map((s) => s.reps)
     const durations = sets.map((s) => s.durationSec)
 
@@ -158,11 +159,17 @@ export function formatSetSequence(
     }
 
     const hasWeights = weights.some((w) => typeof w === 'number')
+    const hasLoads = loads.some((load) => typeof load === 'number')
     const hasReps = reps.some((r) => typeof r === 'number')
     if (hasWeights && hasReps) {
         const wStr = weights.map((w) => (typeof w === 'number' ? formatWeightNumber(w) : '–')).join('/')
         const rStr = reps.map((r) => (typeof r === 'number' ? r.toString() : '–')).join('/')
         return `${wStr} × ${rStr}`
+    }
+    if (hasLoads && hasReps) {
+        const loadStr = loads.map((load) => (typeof load === 'number' ? formatWeightNumber(load) : '–')).join('/')
+        const repStr = reps.map((rep) => (typeof rep === 'number' ? rep.toString() : '–')).join('/')
+        return `${loadStr} × ${repStr}`
     }
     if (hasReps) {
         return reps.map((r) => (typeof r === 'number' ? r.toString() : '–')).join(' / ')

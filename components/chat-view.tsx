@@ -3467,6 +3467,7 @@ export function ChatView() {
                           >
                             <MessageBubble
                               message={message}
+                              conversationId={conversationId ?? undefined}
                               isLatestAssistantMessage={
                                 message.id === latestAssistantMessageId
                               }

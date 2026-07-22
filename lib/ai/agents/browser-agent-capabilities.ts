@@ -1,5 +1,12 @@
+import {
+    BROWSER_AGENT_EXECUTION_ACTIONS,
+    formatBrowserAgentCapabilityGroups,
+} from '@/lib/browser-agent-runtime/capabilities'
+
 export const BROWSER_AGENT_CAPABILITY_HINT = [
     'active browser executor; prompt must be self-contained',
+    `exact executable action surface: ${BROWSER_AGENT_EXECUTION_ACTIONS.join(', ')}`,
+    `capability map: ${formatBrowserAgentCapabilityGroups()}`,
     'drives a real persistent browser session with visual screenshots, clicks, typing, scrolling, navigation, tab management, current/address-bar URL reads, downloads, screenshots/videos, and same-origin browser-context GET checks via fetchUrl',
     'not a general web research, discovery, comparison, ranking, availability, or vendor/product lookup agent; prefer researcher for those tasks before using browser_agent',
     'use it for bounded browser execution and verification on known pages/sites, especially when visual state, clicks, forms, login/session state, screenshots, downloads, or interactive navigation matter',

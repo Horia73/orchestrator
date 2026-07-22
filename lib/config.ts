@@ -40,6 +40,7 @@ import {
   runtimePathsForProfile,
 } from "@/lib/runtime-paths"
 import { normalizeTimezone, systemTimezone } from "@/lib/timezone"
+import { getCapturedSecretValue } from "@/lib/secrets/store"
 
 export {
   AGENT_WORKSPACE_DIR,
@@ -1190,11 +1191,10 @@ function getFirstEnvValue(
   names: string[]
 ): { envName: string; value: string } | null {
   const readsAdminEnvironment = activeProfileCanReadAdminEnvironment()
-  if (readsAdminEnvironment) {
-    for (const name of names) {
-      const value = process.env[name]
-      if (hasEnvValue(value)) return { envName: name, value }
-    }
+
+  for (const name of names) {
+    const value = getCapturedSecretValue(name)
+    if (value !== null && hasEnvValue(value)) return { envName: name, value }
   }
 
   const filePaths = readsAdminEnvironment
@@ -1204,6 +1204,13 @@ function getFirstEnvValue(
     const values = readEnvFileValues(filePath, names)
     for (const name of names) {
       const value = values[name]
+      if (hasEnvValue(value)) return { envName: name, value }
+    }
+  }
+
+  if (readsAdminEnvironment) {
+    for (const name of names) {
+      const value = process.env[name]
       if (hasEnvValue(value)) return { envName: name, value }
     }
   }

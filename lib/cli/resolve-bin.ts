@@ -124,6 +124,64 @@ export function augmentedEnv(extra?: Record<string, string | undefined>): NodeJS
 }
 
 /**
+ * Minimal environment for model-controlled commands. Credentials are injected
+ * explicitly by env_keys; unrelated Docker/provider/admin secrets never ride
+ * into a child process by accident.
+ */
+export function agentCommandEnv(
+    extra?: Record<string, string | undefined>,
+): NodeJS.ProcessEnv {
+    const home = homedir()
+    const npmPrefix = npmGlobalPrefix(home)
+    const npmBin = join(/* turbopackIgnore: true */ npmPrefix, 'bin')
+    try {
+        mkdirSync(npmBin, { recursive: true })
+    } catch {
+        // Let the command surface filesystem errors when it needs this path.
+    }
+    const currentPath = process.env.PATH ?? ''
+    const dirs = [
+        npmBin,
+        join(/* turbopackIgnore: true */ home, '.local/bin'),
+        ...FALLBACK_GLOBALS,
+    ]
+    const merged = [
+        ...dirs.filter(dir => !pathHasDir(currentPath, dir)),
+        currentPath,
+    ].filter(Boolean).join(':')
+
+    const safeKeys = [
+        'USER',
+        'LOGNAME',
+        'LANG',
+        'LC_ALL',
+        'LC_CTYPE',
+        'TZ',
+        'TMPDIR',
+        'TMP',
+        'TEMP',
+        'SHELL',
+        'COLORTERM',
+        // Socket path only (not key material); required for normal git/ssh
+        // authentication in explicitly shell-enabled agent/coder runs.
+        'SSH_AUTH_SOCK',
+    ] as const
+    const env: NodeJS.ProcessEnv = {
+        NODE_ENV: process.env.NODE_ENV ?? 'production',
+        HOME: home,
+        PATH: merged,
+        NPM_CONFIG_PREFIX: npmPrefix,
+    }
+    for (const key of safeKeys) {
+        if (process.env[key] !== undefined) env[key] = process.env[key]
+    }
+    for (const [key, value] of Object.entries(extra ?? {})) {
+        if (value !== undefined) env[key] = value
+    }
+    return env
+}
+
+/**
  * Resolve the shell that runs agent commands (foreground Bash tool and
  * tracked background jobs). $SHELL is honored when it points at a real
  * executable (interactive installs); container images often have no SHELL

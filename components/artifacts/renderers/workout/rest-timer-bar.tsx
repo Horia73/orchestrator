@@ -21,8 +21,8 @@ import type { RestState } from "@/lib/workout/use-workout-session"
  * On completion:
  *   - Plays the recipe chime (D-major triad).
  *   - Single vibration pulse on devices that support it.
- *   - Bar stays visible for ~10s showing "Rest done!" then auto-fades
- *     (auto-clear lives in the session hook).
+ *   - Bar stays visible showing "Rest done!" until the user starts the next
+ *     set or closes it, including after app backgrounding/reload.
  *
  * On 5s-remaining (configurable):
  *   - Soft chime to warn the user the timer is about to ring.
@@ -60,9 +60,36 @@ export function RestTimerBar({
     // when the user has plenty of time and doesn't need sub-second precision.
     React.useEffect(() => {
         const remaining = rest.endsAt - Date.now()
+        if (remaining <= 0) {
+            setNow(Date.now())
+            return
+        }
         const interval = remaining > 30_000 ? 1000 : 200
-        const id = window.setInterval(() => setNow(Date.now()), interval)
+        const id = window.setInterval(() => {
+            const current = Date.now()
+            setNow(current)
+            if (current >= rest.endsAt) window.clearInterval(id)
+        }, interval)
         return () => window.clearInterval(id)
+    }, [rest.endsAt, rest.key])
+
+    // Mobile browsers can freeze intervals while backgrounded. Recompute from
+    // the absolute end timestamp immediately on every resume signal instead of
+    // briefly rendering a stale value (or waiting for the next throttled tick).
+    React.useEffect(() => {
+        const refresh = () => setNow(Date.now())
+        const onVisibilityChange = () => {
+            if (document.visibilityState === 'visible') refresh()
+        }
+        refresh()
+        window.addEventListener('focus', refresh)
+        window.addEventListener('pageshow', refresh)
+        document.addEventListener('visibilitychange', onVisibilityChange)
+        return () => {
+            window.removeEventListener('focus', refresh)
+            window.removeEventListener('pageshow', refresh)
+            document.removeEventListener('visibilitychange', onVisibilityChange)
+        }
     }, [rest.endsAt, rest.key])
 
     // Fire chimes at the right moments. Refs ensure each rest fires its
@@ -95,9 +122,10 @@ export function RestTimerBar({
 
     const remainingMs = Math.max(0, rest.endsAt - now)
     const remainingSec = Math.ceil(remainingMs / 1000)
+    const durationMs = Math.max(1000, rest.endsAt - rest.startedAt, rest.durationSec * 1000)
     const progressPct = Math.max(
         0,
-        Math.min(100, ((rest.durationSec * 1000 - remainingMs) / (rest.durationSec * 1000)) * 100),
+        Math.min(100, ((durationMs - remainingMs) / durationMs) * 100),
     )
     const isDone = remainingMs <= 0
 

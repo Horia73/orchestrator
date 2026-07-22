@@ -30,8 +30,11 @@ export function cloneFrame(frame: BrowserFrameSnapshot): BrowserFrameSnapshot {
             height: frame.viewport.height,
         },
         page: {
+            measurement: frame.page.measurement,
             width: frame.page.width,
             height: frame.page.height,
+            viewportWidth: frame.page.viewportWidth,
+            viewportHeight: frame.page.viewportHeight,
             scrollX: frame.page.scrollX,
             scrollY: frame.page.scrollY,
         },

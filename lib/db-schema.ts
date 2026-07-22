@@ -29,6 +29,7 @@ export function initializeDatabaseSchema(db: SqliteExecutor): void {
           conversationId TEXT NOT NULL,
           role TEXT NOT NULL,
           content TEXT NOT NULL,
+          secretRefs TEXT,
           status TEXT,
           contentSegments TEXT,
           reasoning TEXT,
@@ -508,6 +509,11 @@ export function initializeDatabaseSchema(db: SqliteExecutor): void {
   }
   try {
     db.exec(`ALTER TABLE scheduled_task_runs ADD COLUMN attachments TEXT`)
+  } catch {
+    /* column already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE messages ADD COLUMN secretRefs TEXT`)
   } catch {
     /* column already exists */
   }

@@ -6,6 +6,7 @@ import {
 } from "@/lib/db"
 import type { Message } from "@/lib/types"
 import { runWithRequestProfile } from "@/lib/profiles/server"
+import { protectUserMessage } from "@/lib/secrets/store"
 
 const DEFAULT_MESSAGE_PAGE_SIZE = 80
 const MAX_MESSAGE_PAGE_SIZE = 200
@@ -102,8 +103,9 @@ export async function POST(
           )
         }
 
-        addMessage(id, message)
-        return NextResponse.json({ success: true, message })
+        const protectedMessage = protectUserMessage(message).message
+        addMessage(id, protectedMessage)
+        return NextResponse.json({ success: true, message: protectedMessage })
       } catch (error) {
         console.error("Failed to add message", error)
         return NextResponse.json(

@@ -290,6 +290,7 @@ export function WorkoutChatPanel({
   return (
     <ConversationArtifactsProvider conversationId={conversationId}>
       <section
+        data-workout-chat-panel
         aria-label="Workout chat"
         className={cn(
           "relative flex min-h-0 flex-col overflow-hidden border border-border/70 bg-background shadow-xl",
@@ -347,6 +348,7 @@ export function WorkoutChatPanel({
                   <MessageBubble
                     key={message.id}
                     message={message}
+                    conversationId={activeConversation.id}
                     compact
                     suppressArtifactTypes={SUPPRESS}
                     isLatestAssistantMessage={message.id === latestAssistantMessageId}

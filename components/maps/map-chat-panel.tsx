@@ -253,6 +253,7 @@ export function MapChatPanel({
                   <MessageBubble
                     key={message.id}
                     message={message}
+                    conversationId={activeConversation.id}
                     compact
                     suppressArtifactTypes={["application/vnd.ant.map"]}
                     isLatestAssistantMessage={

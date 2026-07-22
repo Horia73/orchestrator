@@ -45,26 +45,73 @@ async function deletePushSubscription(subscription) {
   }).catch(() => undefined)
 }
 
-async function hasFocusedWindowClient() {
+const CHAT_PRESENCE_PROBE_TIMEOUT_MS = 300
+
+function probeClientForActiveChat(client, chatId) {
+  // Keep the previous focus-only behavior as a compatibility fallback while
+  // an older already-open page is still running a bundle without the probe
+  // responder. A refreshed page returns the exact active conversation state.
+  const fallback = client.focused === true
+  if (typeof MessageChannel !== "function") return Promise.resolve(fallback)
+
+  return new Promise((resolve) => {
+    const channel = new MessageChannel()
+    let settled = false
+    const finish = (value) => {
+      if (settled) return
+      settled = true
+      self.clearTimeout(timer)
+      channel.port1.close()
+      resolve(value)
+    }
+    const timer = self.setTimeout(
+      () => finish(fallback),
+      CHAT_PRESENCE_PROBE_TIMEOUT_MS
+    )
+
+    channel.port1.onmessage = (event) => {
+      const state = event.data || {}
+      finish(
+        state.type === "orchestrator:chat-presence-state" &&
+          state.chatId === chatId &&
+          state.active === true &&
+          state.visible === true &&
+          (state.focused === true || client.focused === true)
+      )
+    }
+
+    try {
+      client.postMessage(
+        {
+          type: "orchestrator:chat-presence-probe",
+          chatId,
+          requestId: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        },
+        [channel.port2]
+      )
+    } catch {
+      finish(fallback)
+    }
+  })
+}
+
+async function hasFocusedActiveChatClient(chatId) {
+  if (typeof chatId !== "string" || !chatId) return false
   const windowClients = await self.clients.matchAll({
     type: "window",
     includeUncontrolled: true,
   })
-  return windowClients.some((client) => {
+  const sameOriginClients = windowClients.filter((client) => {
     try {
-      const clientUrl = new URL(client.url)
-      // Only treat a client as "actively watched" when it holds OS focus.
-      // A desktop tab reports visibilityState "visible" while it is the active
-      // tab of its window even when the browser sits behind another app, so the
-      // old `visibilityState` check suppressed every chat notification on Mac.
-      // `focused` is the signal that the user is really looking at Orchestrator.
-      return (
-        clientUrl.origin === self.location.origin && client.focused === true
-      )
+      return new URL(client.url).origin === self.location.origin
     } catch {
       return false
     }
   })
+  const presence = await Promise.all(
+    sameOriginClients.map((client) => probeClientForActiveChat(client, chatId))
+  )
+  return presence.some(Boolean)
 }
 
 async function postMessageToWindowClients(message) {
@@ -129,7 +176,14 @@ self.addEventListener("push", (event) => {
 
   event.waitUntil(
     (async () => {
-      if (isChat && (await hasFocusedWindowClient())) return
+      if (
+        isChat &&
+        (await hasFocusedActiveChatClient(
+          typeof data.chatId === "string" ? data.chatId : ""
+        ))
+      ) {
+        return
+      }
 
       if (isInbox) {
         await postMessageToWindowClients({

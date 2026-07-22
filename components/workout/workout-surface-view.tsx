@@ -7,6 +7,7 @@ import { WorkoutCanvas } from "@/components/artifacts/renderers/workout-renderer
 import { WorkoutErrorCard } from "@/components/artifacts/renderers/workout/workout-error-card"
 import { useAppEvent } from "@/hooks/use-app-events"
 import { useDocumentViewportLock } from "@/hooks/use-document-viewport-lock"
+import { useMobileKeyboardInset } from "@/hooks/use-keyboard-inset"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { useRevealOnScroll } from "@/hooks/use-reveal-on-scroll"
 import { useScreenWakeLock } from "@/hooks/use-screen-wake-lock"
@@ -137,13 +138,64 @@ function WorkoutSurfaceInner({
 }) {
   const isMobile = useIsMobile()
   const [chatOpen, setChatOpen] = React.useState(false)
-  const scrollbarVisible = useRevealOnScroll()
+  const { active: scrollbarActive, reveal: revealScrollbar } = useRevealOnScroll()
+  const scrollRef = React.useRef<HTMLDivElement | null>(null)
+  const scrollRestoredRef = React.useRef(false)
+  const scrollSaveFrameRef = React.useRef<number | null>(null)
   useScreenWakeLock()
 
   const sessionApi = useWorkoutSession(workout.sessionId, workout, {
     artifactId: artifact.id,
   })
   const hasWorkoutTimer = Boolean(sessionApi.session.activeSet || sessionApi.session.rest)
+  const workoutScrollKey = `scroll:workout:${workout.sessionId}`
+
+  React.useLayoutEffect(() => {
+    if (!sessionApi.isRestored) return
+    const element = scrollRef.current
+    if (!element) return
+    scrollRestoredRef.current = false
+    const saved = readWorkoutScroll(workoutScrollKey)
+    let innerFrame = 0
+    const outerFrame = window.requestAnimationFrame(() => {
+      innerFrame = window.requestAnimationFrame(() => {
+        if (saved > 0) {
+          element.scrollTop = Math.min(
+            saved,
+            Math.max(0, element.scrollHeight - element.clientHeight)
+          )
+        }
+        scrollRestoredRef.current = true
+      })
+    })
+    return () => {
+      window.cancelAnimationFrame(outerFrame)
+      if (innerFrame) window.cancelAnimationFrame(innerFrame)
+    }
+  }, [sessionApi.isRestored, workoutScrollKey])
+
+  const persistWorkoutScroll = React.useCallback(() => {
+    const element = scrollRef.current
+    if (!scrollRestoredRef.current || !element) return
+    writeWorkoutScroll(workoutScrollKey, element.scrollTop)
+  }, [workoutScrollKey])
+
+  const handleWorkoutScroll = React.useCallback(() => {
+    revealScrollbar()
+    if (scrollSaveFrameRef.current !== null) return
+    scrollSaveFrameRef.current = window.requestAnimationFrame(() => {
+      scrollSaveFrameRef.current = null
+      persistWorkoutScroll()
+    })
+  }, [persistWorkoutScroll, revealScrollbar])
+
+  React.useEffect(() => () => {
+    if (scrollSaveFrameRef.current !== null) {
+      window.cancelAnimationFrame(scrollSaveFrameRef.current)
+      scrollSaveFrameRef.current = null
+    }
+    persistWorkoutScroll()
+  }, [persistWorkoutScroll])
 
   const buildPromptContext = React.useCallback(
     () =>
@@ -157,14 +209,19 @@ function WorkoutSurfaceInner({
 
   return (
     <SurfaceShell>
+      <SurfaceControls onBack={onBack} onClose={onClose} />
       <div className="relative flex min-h-0 flex-1">
         <div
+          ref={scrollRef}
+          data-workout-scroll
           className="transient-scrollbar min-w-0 flex-1 overflow-y-auto overscroll-contain"
-          data-scrollbar-visible={scrollbarVisible.active ? "true" : "false"}
-          onScroll={scrollbarVisible.reveal}
+          data-scrollbar-visible={scrollbarActive ? "true" : "false"}
+          onScroll={handleWorkoutScroll}
         >
-          <div className="mx-auto w-full max-w-3xl px-3 pt-[calc(0.75rem+env(safe-area-inset-top))] pb-[calc(1rem+env(safe-area-inset-bottom))] sm:px-4 sm:pt-4">
-            <SurfaceControls onBack={onBack} onClose={onClose} />
+          <div
+            data-workout-content
+            className="mx-auto w-full max-w-3xl px-3 pt-[calc(4rem+env(safe-area-inset-top))] pb-[calc(1rem+env(safe-area-inset-bottom))] sm:px-4"
+          >
             <WorkoutCanvas
               sessionApi={sessionApi}
               title={artifact.title}
@@ -224,11 +281,123 @@ function WorkoutSurfaceInner({
 }
 
 function SurfaceShell({ children }: { children: React.ReactNode }) {
+  const rootRef = React.useRef<HTMLElement>(null)
+  const focusedFieldRef = React.useRef<HTMLElement | null>(null)
+  const keyboardInset = useMobileKeyboardInset()
+
+  const revealFocusedField = React.useCallback(() => {
+    if (keyboardInset <= 0) return
+    const root = rootRef.current
+    const field = focusedFieldRef.current
+    if (!root || !field || !root.contains(field)) return
+    if (field.closest("[data-workout-chat-panel]")) return
+
+    const workoutScroller = root.querySelector<HTMLElement>(
+      "[data-workout-scroll]"
+    )
+    if (!workoutScroller) return
+
+    let scroller: HTMLElement = workoutScroller
+    let ancestor = field.parentElement
+    while (ancestor && ancestor !== root) {
+      const overflowY = window.getComputedStyle(ancestor).overflowY
+      if (
+        (overflowY === "auto" || overflowY === "scroll") &&
+        ancestor.scrollHeight > ancestor.clientHeight + 1
+      ) {
+        scroller = ancestor
+        break
+      }
+      ancestor = ancestor.parentElement
+    }
+
+    const scrollerRect = scroller.getBoundingClientRect()
+    const fieldRect = field.getBoundingClientRect()
+    const rootRect = root.getBoundingClientRect()
+    const visibleTop = Math.max(scrollerRect.top, rootRect.top) + 16
+    const visibleBottom =
+      Math.min(scrollerRect.bottom, rootRect.bottom - keyboardInset) - 16
+    let delta = 0
+
+    if (fieldRect.bottom > visibleBottom) {
+      delta = fieldRect.bottom - visibleBottom
+    } else if (fieldRect.top < visibleTop) {
+      delta = fieldRect.top - visibleTop
+    }
+    if (Math.abs(delta) <= 1) return
+
+    const reducedMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)"
+    ).matches
+    scroller.scrollTo({
+      top: Math.max(0, scroller.scrollTop + delta),
+      behavior: reducedMotion ? "auto" : "smooth",
+    })
+  }, [keyboardInset])
+
+  React.useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+
+    const onFocusIn = (event: FocusEvent) => {
+      const target = event.target
+      if (!isWorkoutTypingField(target)) return
+      if (target.closest("[data-workout-chat-panel]")) return
+      focusedFieldRef.current = target
+      window.requestAnimationFrame(revealFocusedField)
+    }
+    const onFocusOut = () => {
+      window.requestAnimationFrame(() => {
+        const active = document.activeElement
+        focusedFieldRef.current =
+          isWorkoutTypingField(active) && root.contains(active) ? active : null
+      })
+    }
+
+    root.addEventListener("focusin", onFocusIn)
+    root.addEventListener("focusout", onFocusOut)
+    return () => {
+      root.removeEventListener("focusin", onFocusIn)
+      root.removeEventListener("focusout", onFocusOut)
+    }
+  }, [revealFocusedField])
+
+  React.useLayoutEffect(() => {
+    if (keyboardInset <= 0) return
+    const frame = window.requestAnimationFrame(revealFocusedField)
+    return () => window.cancelAnimationFrame(frame)
+  }, [keyboardInset, revealFocusedField])
+
   return (
-    <main className="flex h-dvh w-screen flex-col overflow-hidden bg-background text-foreground touch-pan-y">
+    <main
+      ref={rootRef}
+      data-workout-surface
+      className="flex h-dvh w-screen flex-col overflow-hidden bg-background text-foreground touch-pan-y"
+      style={{
+        "--orch-mobile-keyboard-inset": `${keyboardInset}px`,
+      } as React.CSSProperties}
+    >
       {children}
     </main>
   )
+}
+
+function isWorkoutTypingField(
+  target: EventTarget | Element | null
+): target is HTMLInputElement | HTMLTextAreaElement {
+  if (target instanceof HTMLTextAreaElement) return true
+  if (!(target instanceof HTMLInputElement)) return false
+  return ![
+    "button",
+    "checkbox",
+    "color",
+    "file",
+    "hidden",
+    "radio",
+    "range",
+    "reset",
+    "submit",
+  ].includes(target.type)
 }
 
 function SurfaceControls({
@@ -239,11 +408,11 @@ function SurfaceControls({
   onClose: () => void
 }) {
   return (
-    <div className="mb-3 flex items-center justify-between">
+    <div className="pointer-events-none fixed inset-x-0 top-[calc(0.75rem+env(safe-area-inset-top))] z-[75] mx-auto flex w-full max-w-3xl items-center justify-between px-3 sm:px-4">
       <button
         type="button"
         onClick={onBack}
-        className="flex size-10 shrink-0 items-center justify-center rounded-full border border-border/70 bg-background text-foreground/70 shadow-sm transition-colors hover:bg-muted hover:text-foreground"
+        className="pointer-events-auto flex size-10 shrink-0 items-center justify-center rounded-full border border-border/70 bg-background/92 text-foreground/70 shadow-lg backdrop-blur transition-colors hover:bg-muted hover:text-foreground"
         aria-label="Back"
         title="Back"
       >
@@ -252,12 +421,29 @@ function SurfaceControls({
       <button
         type="button"
         onClick={onClose}
-        className="flex size-10 shrink-0 items-center justify-center rounded-full border border-border/70 bg-background text-foreground/70 shadow-sm transition-colors hover:bg-muted hover:text-foreground"
-        aria-label="Close"
-        title="Close"
+        className="pointer-events-auto flex size-10 shrink-0 items-center justify-center rounded-full border border-border/70 bg-background/92 text-foreground/70 shadow-lg backdrop-blur transition-colors hover:bg-muted hover:text-foreground"
+        aria-label="New chat"
+        title="New chat"
       >
         <X className="size-5" />
       </button>
     </div>
   )
+}
+
+function readWorkoutScroll(key: string): number {
+  try {
+    const value = Number.parseInt(window.localStorage.getItem(key) ?? "", 10)
+    return Number.isFinite(value) ? Math.max(0, value) : 0
+  } catch {
+    return 0
+  }
+}
+
+function writeWorkoutScroll(key: string, value: number): void {
+  try {
+    window.localStorage.setItem(key, Math.max(0, Math.round(value)).toString())
+  } catch {
+    /* localStorage may be unavailable in private contexts */
+  }
 }

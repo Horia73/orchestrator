@@ -14,9 +14,11 @@ export interface ExerciseSummary {
     id: string
     name: string
     kind: string
+    loadUnit?: string
     muscleGroups: string[]
     personalBest: {
         weightKg?: number
+        load?: number
         reps?: number
         durationSec?: number
         distanceM?: number
@@ -81,11 +83,13 @@ interface ExerciseDetailResponse {
     id: string
     name: string
     kind: string
+    definition?: { loadUnit?: string }
     sessions: Array<{
         date: string
         title: string
         bestSet: {
             actualWeightKg?: number
+            actualLoad?: number
             actualReps?: number
             actualDurationSec?: number
             actualDistanceM?: number
@@ -171,7 +175,7 @@ function ExerciseRow({ exercise }: { exercise: ExerciseSummary }) {
                 {exercise.personalBest ? (
                     <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-amber-700 dark:text-amber-300">
                         <Trophy className="size-3" strokeWidth={2} />
-                        {formatPbInline(exercise.personalBest)}
+                        {formatPbInline(exercise.personalBest, exercise.loadUnit)}
                     </span>
                 ) : null}
                 <span className="shrink-0 text-muted-foreground/65">
@@ -203,8 +207,9 @@ function ExerciseRow({ exercise }: { exercise: ExerciseSummary }) {
     )
 }
 
-function formatPbInline(pb: NonNullable<ExerciseSummary['personalBest']>): string {
+function formatPbInline(pb: NonNullable<ExerciseSummary['personalBest']>, loadUnit?: string): string {
     if (pb.weightKg !== undefined && pb.reps !== undefined) return `${pb.weightKg} kg × ${pb.reps}`
+    if (pb.load !== undefined && pb.reps !== undefined) return `${pb.load} ${loadUnit || 'level'} × ${pb.reps}`
     if (pb.durationSec !== undefined) return formatDuration(pb.durationSec)
     if (pb.reps !== undefined) return `${pb.reps} reps`
     if (pb.distanceM !== undefined) return `${pb.distanceM} m`
@@ -242,6 +247,8 @@ function ExerciseTrend({ detail }: { detail: ExerciseDetailResponse }) {
                         <span className="shrink-0 text-foreground tabular-nums">
                             {s.bestSet.actualWeightKg !== undefined
                                 ? `${s.bestSet.actualWeightKg} × ${s.bestSet.actualReps ?? '?'}`
+                                : s.bestSet.actualLoad !== undefined
+                                    ? `${s.bestSet.actualLoad} ${detail.definition?.loadUnit || 'level'} × ${s.bestSet.actualReps ?? '?'}`
                                 : s.bestSet.actualDurationSec !== undefined
                                     ? formatDuration(s.bestSet.actualDurationSec)
                                     : s.bestSet.actualReps !== undefined

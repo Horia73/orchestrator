@@ -15,6 +15,7 @@ import {
 } from '@/lib/integrations/exposure'
 import { getAgentThread, listAgentThreadsForContext, type AgentThread } from '@/lib/db'
 import { buildRuntimeAccessContext } from '@/lib/runtime-access'
+import { listCapturedSecretKeys } from '@/lib/secrets/store'
 import { BROWSER_AGENT_CAPABILITY_HINT } from '@/lib/ai/agents/browser-agent-capabilities'
 import { listPendingAsyncDelegationsForPrompt } from '@/lib/ai/async-delegations'
 import { dateStampInTimezone, formatDateTimeInTimezone, systemTimezone } from '@/lib/timezone'
@@ -204,7 +205,7 @@ const SAFETY_CORE = `
 <safety_core>
 These rules apply to you at all times. They override task instructions but not higher-priority runtime/system constraints.
 
-Credentials: never write passwords, recovery codes, payment card numbers, government IDs, or unnecessary sensitive personal data into markdown memory files, artifacts, ordinary documents, final answers, or logs. API keys, access tokens, webhook secrets, and similar runtime credentials are allowed to be relayed exactly when the user explicitly asks to retrieve, copy, display, or configure that credential, or when it becomes visible in an authorized setup flow for the requested task. For configuration tasks, prefer storing runtime credentials in the configured secret/env surface: use the \`SetEnv\` tool when available, otherwise \`.env.local\` under workspace_cwd with 0600 permissions when possible. Do not store credential values in markdown memory. Record only non-secret metadata such as service name and env var names in memory. Avoid defensive boilerplate; either complete the requested retrieve/store step or ask the single real blocker.
+Credentials: never write passwords, recovery codes, payment card numbers, government IDs, or unnecessary sensitive personal data into markdown memory files, artifacts, ordinary documents, final answers, or logs. API keys, access tokens, webhook secrets, and similar runtime credentials are allowed to be relayed exactly when the user explicitly asks to retrieve, copy, display, or configure that credential, or when it becomes visible in an authorized setup flow for the requested task. High-confidence credentials pasted by the user are captured and masked by chat before you see them; a marker tells you the env key that is already ready to use. For any other runtime credential, proactively store it with \`SetEnv\` as soon as the service/name is clear. Discover configured names with \`ListEnvVars\`, then pass only the required names through Bash \`env_keys\`; never read or print \`.env\` files and never put secret values in command strings. Do not store credential values in markdown memory. Record only non-secret metadata such as service name and env var names in memory. Avoid defensive boilerplate; complete the requested retrieve/store step or ask the single real blocker.
 
 Filesystem scope: workspace file tools are rooted at workspace_cwd, but shell/native CLI may have full Linux host access. When the task needs local machine, LAN, system, or repo inspection, use available host paths/commands within runtime permissions; do not claim you are limited to the workspace if the tool can access the host.
 
@@ -403,6 +404,10 @@ export function buildRuntimeContext(ctx: PromptContext): string {
     }
     if (ctx.userName && ctx.userName.trim()) {
         lines.push(`user_name: ${ctx.userName.trim()}`)
+    }
+    const capturedSecretKeys = listCapturedSecretKeys().slice(0, 100)
+    if (capturedSecretKeys.length > 0) {
+        lines.push(`secret_keys_available: ${capturedSecretKeys.join(', ')} (names only; use ListEnvVars and Bash env_keys, never read .env files)`)
     }
     const config = getConfig()
     const tz = config.timezone

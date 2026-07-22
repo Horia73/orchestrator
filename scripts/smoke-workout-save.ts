@@ -15,7 +15,13 @@
 import { parseWorkoutArtifact } from '@/lib/workout/parser'
 import { summarizeWorkoutForPrompt } from '@/lib/workout/prompt-context'
 import { buildEffectiveWorkout } from '@/lib/workout/session-plan'
-import type { WorkoutSessionState } from '@/lib/workout/use-workout-session'
+import {
+    createRestState,
+    normalizePersistedRestState,
+    resolveTimedSetDraftDuration,
+    sessionContentSignature,
+    type WorkoutSessionState,
+} from '@/lib/workout/use-workout-session'
 import {
     buildSessionLog,
     buildSessionSlug,
@@ -49,7 +55,9 @@ const minimalWorkoutJson = JSON.stringify({
                     id: 'bench-press',
                     name: 'Bench Press',
                     kind: 'weighted',
+                    equipment: ['barbell', 'bench'],
                     muscleGroups: ['chest'],
+                    description: 'Set the shoulder blades, then press with control.',
                     personalBest: { weightKg: 60, reps: 8, estimated1RM: 73, achievedAt: '2026-05-12' },
                     planned: [
                         { weightKg: 60, reps: 8 },
@@ -199,6 +207,102 @@ function stateWithLogs(opts: {
     check('merge: new history has 1 session', merged.sessions.length === 1)
     check('merge: new PB is 62.5×8', merged.personalBest?.weightKg === 62.5 && merged.personalBest?.reps === 8)
     check('merge: estimated1RM populated', typeof merged.personalBest?.estimated1RM === 'number')
+    check('merge: canonical exercise definition saved once',
+        merged.definition?.id === 'bench-press'
+        && merged.definition?.equipment?.includes('barbell')
+        && merged.definition?.description?.includes('shoulder blades'))
+}
+
+// === non-kg resistance + measured duration ================================
+
+{
+    const parsed = parseWorkoutArtifact(JSON.stringify({
+        sessionId: 'sess-kinesis',
+        title: 'Kinesis Test',
+        units: 'kg',
+        groups: [{
+            kind: 'straight',
+            exercises: [{
+                id: 'kinesis-chest-press',
+                name: 'Kinesis Chest Press',
+                kind: 'resistance',
+                loadUnit: 'level',
+                equipment: ['machine', 'cable'],
+                muscleGroups: ['chest', 'triceps'],
+                personalBest: { load: 6, reps: 10, achievedAt: '2026-05-01' },
+                planned: [{ load: 6, reps: 10 }],
+            }],
+        }],
+    }))
+    if (!parsed.ok) throw new Error(`resistance fixture failed: ${parsed.error}`)
+    const state: WorkoutSessionState = {
+        sessionId: parsed.value.sessionId,
+        startedAt: new Date(Date.now() - 600_000).toISOString(),
+        completedAt: new Date().toISOString(),
+        logsByExerciseId: {
+            'kinesis-chest-press': {
+                sets: [{ completed: true, actualLoad: 7, actualReps: 8 }],
+            },
+        },
+        _v: 1,
+    }
+    const log = buildSessionLog(parsed.value, state)
+    const history = mergeExerciseHistory(null, parsed.value, log, log.exercises[0])
+    const md = formatSessionMarkdown(log)
+    const sameLoadPrs = detectExercisePrs(parsed.value.groups[0].exercises[0], [
+        { completed: true, actualLoad: 6, actualReps: 8 },
+        { completed: true, actualLoad: 6, actualReps: 12 },
+    ])
+    check('resistance: proprietary load does not become kg tonnage', log.totalVolumeKg === 0, log)
+    check('resistance: load PR detected', log.prs.some((pr) => pr.kind === 'load'), log.prs)
+    check('resistance: highest reps win when load is tied', sameLoadPrs.some((pr) => pr.kind === 'reps'), sameLoadPrs)
+    check('resistance: canonical load unit persisted', history.definition?.loadUnit === 'level', history.definition)
+    check('resistance: PB persists load and reps', history.personalBest?.load === 7 && history.personalBest?.reps === 8, history.personalBest)
+    check('resistance: markdown uses its real unit', md.includes('7 level × 8'), md)
+}
+
+{
+    check('timer: measured plank duration overrides planned target',
+        resolveTimedSetDraftDuration(60, undefined, 37, true) === 37)
+    check('timer: saved actual duration remains authoritative',
+        resolveTimedSetDraftDuration(60, 42, 37, true) === 42)
+    check('timer: unopened set still defaults to planned target',
+        resolveTimedSetDraftDuration(60, undefined, 0, false) === 60)
+}
+
+{
+    const label = {
+        exerciseId: 'bench-press',
+        exerciseName: 'Bench Press',
+        setIndex: 0,
+    }
+    const rest = createRestState(90, label, 1, 1_000)
+    const repaired = normalizePersistedRestState({
+        ...rest,
+        durationSec: 0,
+    })
+    const completedButRecent = normalizePersistedRestState({
+        ...rest,
+        durationSec: 0,
+        startedAt: Date.now() - 120_000,
+        endsAt: Date.now() - 30_000,
+    })
+    const baseState: WorkoutSessionState = {
+        sessionId: 'timer-signature',
+        startedAt: new Date().toISOString(),
+        logsByExerciseId: {},
+        _v: 1,
+    }
+    check('rest timer: valid duration builds timestamp-backed state',
+        rest?.durationSec === 90 && rest.endsAt === 91_000, rest)
+    check('rest timer: explicit zero means no 0:00 timer bar',
+        createRestState(0, label, 1, 1_000) === undefined)
+    check('rest timer: persisted zero duration repairs from timestamps',
+        repaired?.durationSec === 90, repaired)
+    check('rest timer: recently completed pause remains resumable as done',
+        completedButRecent?.durationSec === 90, completedButRecent)
+    check('rest timer: server autosave signature includes active rest',
+        sessionContentSignature(baseState) !== sessionContentSignature({ ...baseState, rest }))
 }
 
 {

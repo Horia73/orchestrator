@@ -18,7 +18,12 @@ import {
     formatWeightNumber,
 } from "@/lib/workout/format"
 import { findGlossaryTermsInText } from "@/lib/workout/glossary"
-import { isNewPersonalBest, type ActiveSetState, type WorkoutSessionApi } from "@/lib/workout/use-workout-session"
+import {
+    isNewPersonalBest,
+    resolveTimedSetDraftDuration,
+    type ActiveSetState,
+    type WorkoutSessionApi,
+} from "@/lib/workout/use-workout-session"
 
 import { GlossaryInfo } from "./glossary-info"
 import { WeightPicker } from "./weight-picker"
@@ -251,6 +256,7 @@ export function SetRow({
                     plannedSet={plannedSet}
                     logged={logged}
                     exerciseKind={exercise.kind}
+                    loadUnit={exercise.kind === 'resistance' ? exercise.loadUnit : undefined}
                     units={units}
                     interactive={metricEditable}
                     onWeightClick={() => setWeightPickerOpen(true)}
@@ -321,6 +327,7 @@ export function SetRow({
                     draft={draft}
                     setDraft={setDraft}
                     exerciseKind={exercise.kind}
+                    loadUnit={exercise.kind === 'resistance' ? exercise.loadUnit : undefined}
                     units={units}
                     elapsedSec={editorElapsedSec}
                     onSave={handleSaveEditor}
@@ -524,6 +531,7 @@ function setKindBadgeClass(setKind: string): string {
 
 interface SetDraft {
     weightKg?: number
+    load?: number
     reps?: number
     durationSec?: number
     distanceM?: number
@@ -549,16 +557,20 @@ function buildSetDraft(
             : Array.isArray(planned.reps)
                 ? (planned.reps as [number, number])[1]
                 : undefined)
+    const usesMeasuredDuration = exerciseKind === 'hold'
+        || exerciseKind === 'cardio_dur'
+        || exerciseKind === 'interval'
 
     return {
         weightKg: logged?.actualWeightKg ?? (typeof planned.weightKg === 'number' ? planned.weightKg : undefined),
+        load: logged?.actualLoad ?? (typeof planned.load === 'number' ? planned.load : undefined),
         reps,
-        durationSec: logged?.actualDurationSec
-            ?? (exerciseKind === 'interval'
-                ? elapsedSec
-                : typeof planned.durationSec === 'number'
-                    ? planned.durationSec
-                    : elapsedSec),
+        durationSec: resolveTimedSetDraftDuration(
+            typeof planned.durationSec === 'number' ? planned.durationSec : undefined,
+            logged?.actualDurationSec,
+            elapsedSec,
+            Boolean(activeSet && usesMeasuredDuration),
+        ),
         distanceM: logged?.actualDistanceM ?? (typeof planned.distanceM === 'number' ? planned.distanceM : undefined),
         rpe: logged?.actualRpe,
         rir: logged?.actualRir,
@@ -618,6 +630,9 @@ function draftToLoggedSet(
     if (exerciseKind === 'weighted' || exerciseKind === 'weighted_bw') {
         logged.actualWeightKg = draft.weightKg
         logged.actualReps = draft.reps
+    } else if (exerciseKind === 'resistance') {
+        logged.actualLoad = draft.load
+        logged.actualReps = draft.reps
     } else if (exerciseKind === 'bodyweight') {
         logged.actualReps = draft.reps
     } else if (exerciseKind === 'hold' || exerciseKind === 'cardio_dur' || exerciseKind === 'interval') {
@@ -633,6 +648,7 @@ function ActiveSetEditor({
     draft,
     setDraft,
     exerciseKind,
+    loadUnit,
     units,
     elapsedSec,
     onSave,
@@ -641,6 +657,7 @@ function ActiveSetEditor({
     draft: SetDraft
     setDraft: React.Dispatch<React.SetStateAction<SetDraft>>
     exerciseKind: Exercise['kind']
+    loadUnit?: string
     units: WorkoutUnits
     elapsedSec: number
     onSave: () => void
@@ -666,7 +683,16 @@ function ActiveSetEditor({
                     />
                 ) : null}
 
-                {(exerciseKind === 'weighted' || exerciseKind === 'weighted_bw' || exerciseKind === 'bodyweight') ? (
+                {exerciseKind === 'resistance' ? (
+                    <NumberField
+                        label={`Load (${loadUnit || 'level'})`}
+                        value={draft.load}
+                        step={1}
+                        onChange={(load) => setDraft((d) => ({ ...d, load }))}
+                    />
+                ) : null}
+
+                {(exerciseKind === 'weighted' || exerciseKind === 'weighted_bw' || exerciseKind === 'resistance' || exerciseKind === 'bodyweight') ? (
                     <NumberField
                         label="Reps"
                         value={draft.reps}
@@ -965,6 +991,7 @@ function PrimaryMetric({
     plannedSet,
     logged,
     exerciseKind,
+    loadUnit,
     units,
     interactive,
     onWeightClick,
@@ -974,6 +1001,7 @@ function PrimaryMetric({
     plannedSet: PlannedSet
     logged?: LoggedSet
     exerciseKind: Exercise['kind']
+    loadUnit?: string
     units: WorkoutUnits
     interactive: boolean
     onWeightClick: () => void
@@ -1046,6 +1074,31 @@ function PrimaryMetric({
                         {repsStr} <span className="text-muted-foreground/60">reps</span>
                     </button>
                 </span>
+            )
+        }
+        case 'resistance': {
+            const plannedLoad = typeof set.load === 'number' ? set.load : undefined
+            const plannedReps = set.reps
+            const actualLoad = logged?.actualLoad
+            const actualReps = logged?.actualReps ?? logged?.partialReps
+            const load = actualLoad ?? plannedLoad
+            const reps = actualReps !== undefined
+                ? actualReps.toString()
+                : plannedReps !== undefined
+                    ? formatRepRange(plannedReps as never)
+                    : '–'
+            return (
+                <button
+                    type="button"
+                    disabled={!interactive}
+                    onClick={interactive ? onEditClick : undefined}
+                    className={cn("font-medium tabular-nums text-foreground", editableClass)}
+                >
+                    {load !== undefined ? formatWeightNumber(load) : '–'}
+                    <span className="ml-0.5 text-muted-foreground/60">{loadUnit}</span>
+                    <span className="mx-1 text-muted-foreground/60">×</span>
+                    {reps}
+                </button>
             )
         }
         case 'hold': {

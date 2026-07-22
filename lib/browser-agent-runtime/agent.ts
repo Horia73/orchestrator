@@ -18,6 +18,7 @@ import {
     summarizeDownloadWait,
 } from './agent-formatters';
 import { formatBrowserAgentTextForLog, isLikelySensitiveBrowserText, redactBrowserAgentText } from './redaction';
+import { formatBrowserScrollObservation } from './scroll-state';
 
 export interface SetTaskOptions {
     preserveContext?: boolean;
@@ -1755,14 +1756,29 @@ async function executeAction(
                     await sleep(300);
                 }
                 onStatusUpdate(`📜 Scrolling ${action.scrollDirection || 'down'}${amountText}...`);
-                await browser.scroll(action.scrollDirection || 'down', action.scrollAmount);
-                return { success: true, trace: null, supplementalFrames: [] };
+                const direction = action.scrollDirection || 'down';
+                const result = await browser.scroll(direction, action.scrollAmount);
+                return {
+                    success: true,
+                    trace: null,
+                    supplementalFrames: [],
+                    observation: formatBrowserScrollObservation(result, {
+                        direction,
+                        requestedRef: action.ref,
+                    }),
+                };
             }
 
-            case 'scrollToBottom':
+            case 'scrollToBottom': {
                 onStatusUpdate('📜 Scrolling to bottom...');
-                await browser.scrollToBottom();
-                return { success: true, trace: null, supplementalFrames: [] };
+                const result = await browser.scrollToBottom();
+                return {
+                    success: true,
+                    trace: null,
+                    supplementalFrames: [],
+                    observation: formatBrowserScrollObservation(result, { direction: 'down' }),
+                };
+            }
 
             case 'undo':
                 onStatusUpdate('↩️ Undoing last edit...');

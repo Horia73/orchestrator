@@ -10,8 +10,8 @@ import { runWithRequestProfile } from "@/lib/profiles/server"
  *
  * Latest version of every conversation artifact that does NOT have its own
  * Library home (workouts/recipes/maps have dedicated tabs, weather cards are
- * transient, app-link cards are chat chrome). Returns metadata only — the
- * grid never needs the body, and html/react artifacts can be large.
+ * transient, question/app-link cards are chat chrome). Returns metadata only
+ * — the grid never needs the body, and html/react artifacts can be large.
  */
 
 /** Types with a dedicated surface elsewhere — excluded from the generic tab. */
@@ -20,6 +20,7 @@ const EXCLUDED_TYPES = [
     'application/vnd.ant.recipe',
     'application/vnd.ant.map',
     'application/vnd.ant.weather',
+    'application/vnd.ant.question',
     'application/vnd.ant.app-link',
 ]
 

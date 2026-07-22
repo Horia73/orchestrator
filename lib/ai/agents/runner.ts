@@ -16,7 +16,7 @@ import { MAX_AGENT_DEPTH } from './types'
 import { acquireRun, releaseTree, type GatePriority, type RunPermit } from '@/lib/ai/concurrency-gate'
 import { getAgent } from './registry'
 import { AUDIO_CONTEXT_AGENT_ID, AUDIO_TRANSCRIPT_AGENT_ID } from './audio-context-agent'
-import { resolveRuntimeAgentConfig } from './runtime-agent-config'
+import { resolveRuntimeAgentConfig, runtimeBuiltinsForProvider } from './runtime-agent-config'
 import { getProvider, getProviderCapabilities } from '@/lib/ai/providers'
 import { MAX_MODEL_RETRIES_BEFORE_FALLBACK, shouldTryModelFallback } from '@/lib/ai/model-fallback'
 import { formatAssetSummary, saveGeneratedAsset } from '@/lib/ai/media-assets'
@@ -27,7 +27,7 @@ import {
 } from '@/lib/ai/reasoning-limits'
 import { getApiKey, getEffectiveAgentSettings } from '@/lib/config'
 import { getEffectiveModel } from '@/lib/models/registry'
-import { getToolsForAgent, getToolsForBuiltins, resolveProviderToolSurface } from '@/lib/ai/tools/registry'
+import { getAllowedProviderBuiltins, getToolsForAgent, getToolsForBuiltins, resolveProviderToolSurface } from '@/lib/ai/tools/registry'
 import { redactToolArgs } from '@/lib/ai/tools/redaction'
 import { isReadOnlyWakeToolAllowed } from '@/lib/ai/tools/read-only-policy'
 import { filterIntegrationToolExposure } from '@/lib/integrations/exposure'
@@ -310,7 +310,11 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
     const modelSupportsFunctionTools =
         runtime.provider !== 'openrouter' ||
         selectedModel?.capabilities.includes('function_calling') === true
-    const requestedBuiltins = modelSupportsFunctionTools ? runtimeTarget.builtins : []
+    const requestedBuiltins = modelSupportsFunctionTools
+        ? getAllowedProviderBuiltins(
+            runtimeBuiltinsForProvider(runtimeTarget, runtime.provider)
+        )
+        : []
     const candidateTools = modelSupportsFunctionTools
         ? filterReadOnlyIfNeeded(
             filterIntegrationToolExposure(

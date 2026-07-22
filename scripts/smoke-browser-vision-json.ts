@@ -6,6 +6,13 @@ import { browserAgentCoordinateTestHooks } from '@/lib/browser-agent-runtime/age
 import { buildSystemPrompt, buildActionPrompt } from '@/lib/browser-agent-runtime/prompts'
 import { buildVisionParts } from '@/lib/browser-agent-runtime/vision-shared'
 import type { BrowserFrameSnapshot } from '@/lib/browser-agent-runtime/browser'
+import {
+    BROWSER_AGENT_CAPABILITY_GROUPS,
+    BROWSER_AGENT_EXECUTION_ACTIONS,
+    getBrowserAgentPromptActions,
+} from '@/lib/browser-agent-runtime/capabilities'
+import { BROWSER_AGENT_CAPABILITY_HINT } from '@/lib/ai/agents/browser-agent-capabilities'
+import { calculateBrowserScrollAxis } from '@/lib/browser-agent-runtime/scroll-state'
 
 const {
     buildRequestConfig,
@@ -13,6 +20,34 @@ const {
     parseIterationLimitReviewFromModelText,
     requestParsedJsonWithRetries,
 } = browserVisionTestHooks
+
+// One canonical manifest drives schema validation, the browser-model prompt,
+// and the exact capability surface shown to the parent Orchestrator.
+{
+    const groupedActions = BROWSER_AGENT_CAPABILITY_GROUPS.flatMap(group => [...group.actions])
+    assert.deepEqual(
+        [...new Set(groupedActions)].sort(),
+        [...BROWSER_AGENT_EXECUTION_ACTIONS].sort(),
+        'every executable browser action should appear exactly once in the capability map',
+    )
+    assert.equal(groupedActions.length, new Set(groupedActions).size)
+    for (const action of BROWSER_AGENT_EXECUTION_ACTIONS) {
+        assert.ok(BROWSER_AGENT_CAPABILITY_HINT.includes(action), `Orchestrator capability hint is missing ${action}`)
+    }
+    assert.deepEqual(
+        getBrowserAgentPromptActions({ escalationEnabled: false }).slice(0, BROWSER_AGENT_EXECUTION_ACTIONS.length),
+        [...BROWSER_AGENT_EXECUTION_ACTIONS],
+    )
+}
+
+{
+    const middle = calculateBrowserScrollAxis(2_000, 6_000, 1_000)
+    assert.equal(middle.progressPercent, 40)
+    assert.equal(middle.visibleEnd, 3_000)
+    assert.equal(middle.remaining, 3_000)
+    assert.equal(middle.atStart, false)
+    assert.equal(middle.atEnd, false)
+}
 
 const config = buildRequestConfig(
     { provider: 'google', model: 'gemini-smoke', thinkingLevel: 'low', mediaResolution: 'medium' },
@@ -212,6 +247,9 @@ assert.equal(
     const normalizedPrompt = buildSystemPrompt(false, 'normalized-viewport', true)
     assert.match(normalizedPrompt, /NORMALIZED COORDINATES \(0-1000 range\)/)
     assert.match(normalizedPrompt, /1000x1000 grid/)
+    for (const action of getBrowserAgentPromptActions({ escalationEnabled: true })) {
+        assert.ok(normalizedPrompt.includes(`"${action}"`), `browser system prompt is missing ${action}`)
+    }
 
     const pixelActionPrompt = buildActionPrompt('goal', [], [], [], true, 'pixel-viewport')
     assert.match(pixelActionPrompt, /Output PIXEL COORDINATES/)
@@ -235,10 +273,38 @@ assert.equal(
         captureMode: 'viewport',
         coordinateSpace: 'normalized-display',
         viewport: { width: 1280, height: 720 },
-        page: { width: 1280, height: 720, scrollX: 0, scrollY: 0 },
+        page: {
+            measurement: 'dom',
+            width: 1180,
+            height: 6_000,
+            viewportWidth: 1180,
+            viewportHeight: 640,
+            scrollX: 0,
+            scrollY: 2_000,
+        },
     }
     const displayParts = buildVisionParts('', '', 'act', displayFrame, null, [], 'pixel-display')
     assert.match(displayParts[0].text ?? '', /current display frame/)
+    assert.match(displayParts[1].text ?? '', /Document vertical scroll: 37%/)
+    assert.match(displayParts[1].text ?? '', /visible 2000-2640px of 6000px/)
+    assert.match(displayParts[1].text ?? '', /below=3360px/)
+
+    const unknownDisplayFrame: BrowserFrameSnapshot = {
+        ...displayFrame,
+        id: 'frame-display-unknown',
+        page: {
+            measurement: 'unavailable',
+            width: null,
+            height: null,
+            viewportWidth: null,
+            viewportHeight: null,
+            scrollX: null,
+            scrollY: null,
+        },
+    }
+    const unknownParts = buildVisionParts('', '', 'act', unknownDisplayFrame, null, [], 'pixel-display')
+    assert.match(unknownParts[1].text ?? '', /Document scroll: unknown/)
+    assert.doesNotMatch(unknownParts[1].text ?? '', /Scroll: 0, 0/)
 }
 
 const review = parseIterationLimitReviewFromModelText(JSON.stringify({

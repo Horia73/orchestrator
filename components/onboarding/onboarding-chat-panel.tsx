@@ -96,6 +96,7 @@ export function OnboardingChatPanel({
               <MessageBubble
                 key={message.id}
                 message={message}
+                conversationId={conversationId}
                 compact
                 isLatestAssistantMessage={message.id === latestAssistantMessageId}
                 onLoadToolCallDetails={handleLoadToolCallDetails}

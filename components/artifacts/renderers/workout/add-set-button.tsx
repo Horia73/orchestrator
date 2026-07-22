@@ -42,20 +42,31 @@ export function AddSetButton({
 }) {
     void units
     const lastPlanned = exercise.planned[exercise.planned.length - 1] as unknown as Record<string, unknown>
-    const supportsFreestyle = exercise.kind === 'weighted' || exercise.kind === 'weighted_bw' || exercise.kind === 'bodyweight'
+    const supportsFreestyle = exercise.kind === 'weighted'
+        || exercise.kind === 'weighted_bw'
+        || exercise.kind === 'resistance'
+        || exercise.kind === 'bodyweight'
 
-    type Phase = 'idle' | 'weight' | 'reps'
+    type Phase = 'idle' | 'weight' | 'load' | 'reps'
     const [phase, setPhase] = React.useState<Phase>('idle')
     const [stagedWeight, setStagedWeight] = React.useState<number | null>(null)
+    const [stagedLoad, setStagedLoad] = React.useState<number | null>(null)
 
     if (!supportsFreestyle) return null
 
     const handleStart = () => {
         if (exercise.kind === 'bodyweight') {
             setPhase('reps')
+        } else if (exercise.kind === 'resistance') {
+            setPhase('load')
         } else {
             setPhase('weight')
         }
+    }
+
+    const handleLoadApplied = (load: number) => {
+        setStagedLoad(load)
+        setPhase('reps')
     }
 
     const handleWeightApplied = (kg: number) => {
@@ -68,6 +79,13 @@ export function AddSetButton({
             if (exercise.kind === 'bodyweight') {
                 return { kind: 'working', reps }
             }
+            if (exercise.kind === 'resistance') {
+                return {
+                    kind: 'working',
+                    load: stagedLoad ?? (typeof lastPlanned.load === 'number' ? lastPlanned.load : undefined),
+                    reps,
+                }
+            }
             return {
                 kind: 'working',
                 weightKg: stagedWeight ?? (typeof lastPlanned.weightKg === 'number' ? lastPlanned.weightKg : 0),
@@ -76,16 +94,19 @@ export function AddSetButton({
         })()
         sessionApi.addSet(exercise, planned)
         setStagedWeight(null)
+        setStagedLoad(null)
         setPhase('idle')
     }
 
     const handleClose = () => {
         setStagedWeight(null)
+        setStagedLoad(null)
         setPhase('idle')
     }
 
     const initialWeight =
         typeof lastPlanned.weightKg === 'number' ? lastPlanned.weightKg : 0
+    const initialLoad = typeof lastPlanned.load === 'number' ? lastPlanned.load : 0
     const initialReps = (() => {
         const r = lastPlanned.reps
         if (typeof r === 'number') return r
@@ -127,6 +148,18 @@ export function AddSetButton({
                         initialReps={initialReps}
                         plannedRange={typeof lastPlanned.reps === 'number' || Array.isArray(lastPlanned.reps) ? (lastPlanned.reps as number | [number, number]) : undefined}
                         onApply={handleRepsApplied}
+                        onClose={handleClose}
+                    />
+                </div>
+            )}
+
+            {phase === 'load' && exercise.kind === 'resistance' && (
+                <div className="absolute left-0 top-full z-30 mt-1">
+                    <RepsPicker
+                        initialReps={stagedLoad ?? initialLoad}
+                        plannedRange={initialLoad}
+                        label={exercise.loadUnit}
+                        onApply={handleLoadApplied}
                         onClose={handleClose}
                     />
                 </div>

@@ -75,6 +75,7 @@ import {
   chatUpdateRetryDelayMs,
   deriveUnreadConversationIds,
   errorMessageFromUnknown,
+  isAssistantCompletionUnread,
   isChatAiWorkerUnavailableResponse,
   isChatUpdateInProgressResponse,
   isConversationUnread,
@@ -336,6 +337,55 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     pathnameRef.current = pathname
   }, [pathname])
 
+  // Web Push is delivered in the service worker, whose WindowClient.focused
+  // flag is unreliable in some installed macOS PWAs. Let it ask the live page
+  // which conversation is actually open before showing a "Chat finished"
+  // notification. MessageChannel keeps the reply scoped to that push event.
+  React.useEffect(() => {
+    if (!("serviceWorker" in navigator)) return
+
+    const handleServiceWorkerMessage = (event: MessageEvent) => {
+      const data = event.data as
+        | {
+            type?: unknown
+            chatId?: unknown
+            requestId?: unknown
+          }
+        | null
+      if (
+        data?.type !== "orchestrator:chat-presence-probe" ||
+        typeof data.chatId !== "string"
+      ) {
+        return
+      }
+
+      const replyPort = event.ports[0]
+      if (!replyPort) return
+      replyPort.postMessage({
+        type: "orchestrator:chat-presence-state",
+        requestId:
+          typeof data.requestId === "string" ? data.requestId : undefined,
+        chatId: data.chatId,
+        active:
+          pathnameRef.current === "/" &&
+          activeConversationIdRef.current === data.chatId,
+        visible: document.visibilityState === "visible",
+        focused: document.hasFocus(),
+      })
+    }
+
+    navigator.serviceWorker.addEventListener(
+      "message",
+      handleServiceWorkerMessage
+    )
+    return () => {
+      navigator.serviceWorker.removeEventListener(
+        "message",
+        handleServiceWorkerMessage
+      )
+    }
+  }, [])
+
   // Release the view-switch hold once the swap has committed (the new view is
   // in the tree, invisible behind the page's fade gate).
   React.useEffect(() => {
@@ -484,13 +534,21 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
   const applyConversationReadState = React.useCallback(
     (id: string, readAt: number | null) => {
+      const conversation = conversationsRef.current.find((c) => c.id === id)
+      if (conversation) {
+        // Keep the imperative snapshot in lockstep with the reducer. Chat and
+        // read-state frames can be merged from different SSE processes, so a
+        // terminal frame may be handled before React commits this dispatch.
+        conversationsRef.current = conversationsRef.current.map((current) =>
+          current.id === id ? { ...current, readAt } : current
+        )
+      }
       dispatch({
         type: "SET_CONVERSATION_READ_STATE",
         conversationId: id,
         readAt,
       })
       updateUnreadConversationIds((current) => {
-        const conversation = conversationsRef.current.find((c) => c.id === id)
         if (!conversation) {
           current.delete(id)
           return current
@@ -618,6 +676,17 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       options?: { forceUnread?: boolean }
     ) => {
       if (message.status === "aborted") return
+      const conversation = conversationsRef.current.find(
+        (c) => c.id === conversationId
+      )
+
+      // /api/sync merges events from the web process and the durable worker.
+      // If another device opened the conversation, its read frame can beat a
+      // delayed terminal frame here. The server read watermark wins.
+      if (!isAssistantCompletionUnread(conversation, message)) {
+        clearConversationUnread(conversationId)
+        return
+      }
       const isVisibleActive =
         !options?.forceUnread &&
         getVisibleActiveConversationId() === conversationId
@@ -628,12 +697,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       }
 
       markConversationUnread(conversationId)
-      const conversation = conversationsRef.current.find(
-        (c) => c.id === conversationId
-      )
       void showChatCompletionNotification(conversationId, conversation, message)
     },
     [
+      clearConversationUnread,
       getVisibleActiveConversationId,
       markConversationRead,
       markConversationUnread,

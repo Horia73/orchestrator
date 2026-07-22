@@ -4,7 +4,7 @@ import { spawn as spawnProcess } from 'child_process'
 
 import db, { addMessage, getConversation } from '@/lib/db'
 import type { Message } from '@/lib/types'
-import { augmentedEnv, resolveCommandShell } from '@/lib/cli/resolve-bin'
+import { agentCommandEnv, augmentedEnv, resolveCommandShell } from '@/lib/cli/resolve-bin'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { getActiveProfileId, runWithProfileContext } from '@/lib/profiles/context'
 import { getActiveChatStream } from '@/lib/chat-streams'
@@ -403,7 +403,7 @@ export async function startTrackedBackgroundJob(args: StartBackgroundJobArgs): P
     try {
         proc = spawnProcess(resolveCommandShell(), ['-lc', wrappedCommand], {
             cwd: args.cwd,
-            env: augmentedEnv({ ...runtimeEnv, ...args.injection.env }),
+            env: agentCommandEnv({ ...runtimeEnv, ...args.injection.env }),
             stdio: pipeOutput ? ['ignore', 'pipe', 'pipe'] : ['ignore', logFd!, logFd!],
             detached: true,
         })

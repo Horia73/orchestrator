@@ -6,6 +6,7 @@ import {
 } from "@/lib/db"
 import type { Conversation } from "@/lib/types"
 import { runWithRequestProfile } from "@/lib/profiles/server"
+import { protectConversationMessages } from "@/lib/secrets/store"
 
 export async function GET(request: Request) {
   return runWithRequestProfile(request, async () => {
@@ -38,8 +39,12 @@ export async function POST(request: Request) {
             { status: 400 }
           )
         }
-        createConversation(conversation)
-        return NextResponse.json({ success: true, conversation })
+        const protectedConversation: Conversation = {
+          ...conversation,
+          messages: protectConversationMessages(conversation.messages ?? []),
+        }
+        createConversation(protectedConversation)
+        return NextResponse.json({ success: true, conversation: protectedConversation })
       } catch (error) {
         console.error("Failed to create conversation", error)
         return NextResponse.json(

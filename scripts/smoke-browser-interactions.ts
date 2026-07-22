@@ -6,6 +6,7 @@ import path from 'node:path'
 
 import { createBrowserManager } from '@/lib/browser-agent-runtime/browser'
 import { browserAgentPauseKindFromContent } from '@/lib/browser-agent-run-state'
+import { formatBrowserScrollObservation } from '@/lib/browser-agent-runtime/scroll-state'
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-interactions-'))
 const workspaceDir = path.join(root, 'workspace')
@@ -43,6 +44,16 @@ async function main(): Promise<void> {
             response.end([
                 '<button id="frame-button" onclick="document.querySelector(\'#frame-result\').textContent=\'clicked\'">Framed action</button>',
                 '<output id="frame-result"></output>',
+            ].join(''))
+            return
+        }
+        if (request.url === '/scroll') {
+            response.setHeader('content-type', 'text/html')
+            response.end([
+                '<div id="scroll-panel" role="region" aria-label="Scrollable results" style="height:100px;width:320px;overflow-y:auto;border:1px solid black">',
+                '<div style="height:900px">Panel top<div style="margin-top:820px">Panel bottom</div></div>',
+                '</div>',
+                '<div id="document-scroll-zone" style="height:1800px"></div>',
             ].join(''))
             return
         }
@@ -149,6 +160,44 @@ async function main(): Promise<void> {
         const staleAsset = await session.downloadMedia({ assetRef: pixelAsset.ref })
         assert.equal(staleAsset.success, false)
         assert.equal(staleAsset.stale, true)
+
+        await session.navigate(`http://127.0.0.1:${port}/scroll`)
+        for (const frame of session.getPage()?.frames() || []) {
+            await frame.evaluate('globalThis.__name ||= ((value) => value)')
+        }
+        const scrollPanelBox = await session.getPage()?.locator('#scroll-panel').boundingBox()
+        assert.ok(scrollPanelBox)
+        await session.hoverCoordinate(
+            scrollPanelBox.x + scrollPanelBox.width / 2,
+            scrollPanelBox.y + scrollPanelBox.height / 2,
+        )
+        const panelScroll = await session.scroll('down', 300)
+        assert.equal(panelScroll.available, true, panelScroll.error)
+        assert.equal(panelScroll.changed, true)
+        assert.equal(panelScroll.after?.target, 'element')
+        assert.equal(panelScroll.after?.name, 'Scrollable results')
+        assert.ok((panelScroll.after?.scrollTop || 0) > 0)
+        assert.match(
+            formatBrowserScrollObservation(panelScroll, { direction: 'down', requestedRef: 'e-panel' }),
+            /Scroll target: element .*Scrollable results.*via ref=e-panel/,
+        )
+
+        const panelBottom = await session.scrollToBottom()
+        assert.equal(panelBottom.available, true, panelBottom.error)
+        assert.equal(panelBottom.after?.target, 'element')
+        assert.equal(
+            panelBottom.after?.scrollTop,
+            (panelBottom.after?.scrollHeight || 0) - (panelBottom.after?.clientHeight || 0),
+        )
+
+        await session.getPage()?.evaluate(() => window.scrollTo(0, 0))
+        const viewport = await session.getViewport()
+        await session.hoverCoordinate(viewport.width - 12, viewport.height - 12)
+        const documentScroll = await session.scroll('down', 500)
+        assert.equal(documentScroll.available, true, documentScroll.error)
+        assert.equal(documentScroll.changed, true)
+        assert.equal(documentScroll.after?.target, 'document')
+        assert.ok((documentScroll.after?.scrollTop || 0) > 0)
     } finally {
         await manager.close()
         await new Promise<void>(resolve => server.close(() => resolve()))

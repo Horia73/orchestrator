@@ -22,9 +22,10 @@ import { AddExerciseButton } from "./workout/add-exercise-button"
 /**
  * Warm every exercise's demo image into the browser cache on idle, using the
  * exact same lookup URL the (i) panel will request — so opening the panel is
- * instant instead of waiting on a CDN download. Resolution calls hit the
- * route's HTTP cache; only the image bytes are actually fetched. Runs once per
- * workout when `enabled` (the full-screen surface passes true).
+ * instant instead of waiting on a CDN download. The route only resolves a
+ * verified saved image for that stable id; it performs no search or fuzzy
+ * fallback. Runs once per workout when `enabled` (the full-screen surface
+ * passes true).
  */
 function useExerciseImagePrefetch(workout: WorkoutArtifact, enabled: boolean) {
     React.useEffect(() => {

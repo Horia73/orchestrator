@@ -40,7 +40,15 @@ async function buildSyntheticFrame(): Promise<BrowserFrameSnapshot> {
         captureMode: 'viewport',
         coordinateSpace: 'normalized-viewport',
         viewport: { width: WIDTH, height: HEIGHT },
-        page: { width: WIDTH, height: HEIGHT, scrollX: 0, scrollY: 0 },
+        page: {
+            measurement: 'dom',
+            width: WIDTH,
+            height: HEIGHT,
+            viewportWidth: WIDTH,
+            viewportHeight: HEIGHT,
+            scrollX: 0,
+            scrollY: 0,
+        },
     } as BrowserFrameSnapshot
 }
 

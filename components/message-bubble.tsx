@@ -12,7 +12,7 @@ import { AttachmentCard } from "@/components/attachment-card"
 import { RenderMessageContent } from "@/components/artifacts/render-message-content"
 import { useConversationArtifacts } from "@/components/artifacts/use-conversation-artifacts"
 import { downloadArtifact } from "@/components/artifacts/artifact-inline"
-import { InlineToolCallView, TOOL_CALL_CARD_HEIGHT, getToolCallDisplayTitle, isHiddenToolCall, isWebSearchToolCall, shouldExpandToolCallByDefault } from "@/components/tool-call-view"
+import { InlineToolCallPlaceholder, InlineToolCallView, TOOL_CALL_CARD_HEIGHT, getToolCallDisplayTitle, isHiddenToolCall, isWebSearchToolCall, shouldExpandToolCallByDefault } from "@/components/tool-call-view"
 import { BrowserAgentLiveView } from "@/components/browser-agent-live-view"
 import { useBrowserPanelState } from "@/components/chat/browser-panel-context"
 import { AUDIO_CONTEXT_AGENT_ID, AUDIO_TRANSCRIPT_AGENT_ID, AudioContextAgentCard } from "@/components/chat/audio-context-agent-card"
@@ -30,6 +30,7 @@ import {
 } from "@/lib/browser-agent-run-state"
 import { isDesktopViewport } from "@/lib/desktop-viewport"
 import { hideInlineImageAttachments } from "@/lib/chat-attachment-display"
+import { ChatSecretText, secretSafeDisplayText } from "@/components/chat-secret-text"
 
 // Layout effect on the client, plain effect during SSR (matches collapse.tsx /
 // app-sidebar.tsx). Lets us measure collapsible content before the first paint
@@ -1494,16 +1495,10 @@ function ToolCallBlock({
     onToggle: () => void
     onLoadDetails?: (toolCallId: string) => Promise<ToolCallReasoningEntry>
 }) {
-    const buttonRef = React.useRef<HTMLButtonElement | null>(null)
     const detailsPanelRef = React.useRef<HTMLDivElement | null>(null)
-    const shiftContributionId = React.useId()
-    const shiftUpRef = React.useRef(false)
-    const preparedShiftRootRef = React.useRef<HTMLElement | null>(null)
-    const registeredShiftRootRef = React.useRef<HTMLElement | null>(null)
     const [loadedEntry, setLoadedEntry] = React.useState<ToolCallReasoningEntry | null>(null)
     const [loading, setLoading] = React.useState(false)
     const [loadError, setLoadError] = React.useState<string | null>(null)
-    const [hasRevealedDeferredDetails, setHasRevealedDeferredDetails] = React.useState(false)
     const detailsRequestIdRef = React.useRef(0)
     const resolvedEntry = loadedEntry ?? entry
     const status = resolvedEntry.status ?? (
@@ -1511,86 +1506,16 @@ function ToolCallBlock({
     )
     const hasLoadedDetails = loadedEntry !== null
     const bodyReady = !entry.detailsDeferred || hasLoadedDetails
-    const canOpen = bodyReady || Boolean(onLoadDetails)
-    const detailsVisible = open && bodyReady && (
-        !entry.detailsDeferred || hasRevealedDeferredDetails
-    )
-
-    const prepareLayoutShift = React.useCallback(() => {
-        const button = buttonRef.current
-        if (!button || typeof window === "undefined") {
-            shiftUpRef.current = false
-            preparedShiftRootRef.current = null
-            return
-        }
-        const scrollContainer = findDisclosureScrollContainer(button)
-        if (!scrollContainer) {
-            shiftUpRef.current = false
-            preparedShiftRootRef.current = null
-            return
-        }
-        const root = findToolDisclosureShiftRoot(button, scrollContainer)
-        if (!root) {
-            shiftUpRef.current = false
-            preparedShiftRootRef.current = null
-            return
-        }
-
-        const containerTop = scrollContainer === document.scrollingElement
-            ? 0
-            : scrollContainer.getBoundingClientRect().top
-        preparedShiftRootRef.current = root
-        // Decide from the row's actual painted position. The root may already
-        // be shifted by an outer Worked-for disclosure; adding that existing
-        // compensation back here misclassifies a row near the viewport top as
-        // "low" and opens it upward off-screen.
-        shiftUpRef.current =
-            button.getBoundingClientRect().top - containerTop >=
-            TOOL_CALL_CARD_HEIGHT + 12
-    }, [])
-
-    useIsomorphicLayoutEffect(() => {
-        const nextRoot = preparedShiftRootRef.current
-        const registeredRoot = registeredShiftRootRef.current
-        if (registeredRoot && registeredRoot !== nextRoot) {
-            setToolDisclosureShift(registeredRoot, shiftContributionId, 0)
-            registeredShiftRootRef.current = null
-        }
-
-        if (open && bodyReady && shiftUpRef.current && nextRoot) {
-            setToolDisclosureShift(
-                nextRoot,
-                shiftContributionId,
-                TOOL_CALL_CARD_HEIGHT + 4
-            )
-            registeredShiftRootRef.current = nextRoot
-        } else if (registeredRoot) {
-            setToolDisclosureShift(registeredRoot, shiftContributionId, 0)
-            registeredShiftRootRef.current = null
-        }
-    }, [bodyReady, open, shiftContributionId])
-
-    React.useEffect(() => () => {
-        const root = registeredShiftRootRef.current
-        if (root) setToolDisclosureShift(root, shiftContributionId, 0)
-    }, [shiftContributionId])
+    const detailsVisible = open
 
     useIsomorphicLayoutEffect(() => {
         const panel = detailsPanelRef.current
-        if (!bodyReady || !panel) return
-
-        if (!detailsVisible) {
-            // A new live row first mounts closed under the previous two-tool
-            // window. Commit that closed layout before the parent swaps the
-            // window in its layout effect, so the entering expansion and the
-            // retiring collapse share one CSS-transition frame.
-            void panel.getBoundingClientRect()
-        }
-
-        if (!entry.detailsDeferred || !open || hasRevealedDeferredDetails) return
-        const frame = window.requestAnimationFrame(() => setHasRevealedDeferredDetails(true))
-        return () => window.cancelAnimationFrame(frame)
-    }, [bodyReady, detailsVisible, entry.detailsDeferred, hasRevealedDeferredDetails, open])
+        if (!panel || detailsVisible) return
+        // Commit the entering card's closed placeholder before the parent swaps
+        // the live two-tool window. The next commit can then collapse the old
+        // card and expand this one on the exact same transition frame.
+        void panel.getBoundingClientRect()
+    }, [detailsVisible])
 
     React.useEffect(() => {
         if (!open || !entry.detailsDeferred || hasLoadedDetails || !onLoadDetails) return
@@ -1658,12 +1583,9 @@ function ToolCallBlock({
     }, [entry.detailsDeferred, entry.toolCallId, hasLoadedDetails, onLoadDetails, open, resolvedEntry.status])
 
     const handleToggle = React.useCallback(() => {
-        const opening = !open
-        if (opening && !canOpen) return
         window.dispatchEvent(new Event("stop-chat-autoscroll"))
-        if (opening) prepareLayoutShift()
         onToggle()
-    }, [canOpen, onToggle, open, prepareLayoutShift])
+    }, [onToggle])
 
     const Icon = isWebSearchToolCall(resolvedEntry)
         ? Search
@@ -1671,7 +1593,7 @@ function ToolCallBlock({
             ? Terminal
             : Wrench
     const title = getToolCallDisplayTitle(resolvedEntry)
-    const detailsPanel = bodyReady ? (
+    const detailsPanel = (
         <div
             ref={detailsPanelRef}
             aria-hidden={!detailsVisible}
@@ -1690,29 +1612,33 @@ function ToolCallBlock({
                         "mt-1"
                     )}
                 >
-                    <InlineToolCallView
-                        entry={resolvedEntry}
-                        onOpen={onArtifactClick}
-                        searchDisplay={searchToolDisplay}
-                        ownerLabel={ownerLabel}
-                    />
+                    {bodyReady ? (
+                        <InlineToolCallView
+                            entry={resolvedEntry}
+                            onOpen={onArtifactClick}
+                            searchDisplay={searchToolDisplay}
+                            ownerLabel={ownerLabel}
+                        />
+                    ) : (
+                        <InlineToolCallPlaceholder
+                            entry={resolvedEntry}
+                            ownerLabel={ownerLabel}
+                        />
+                    )}
                 </div>
             </div>
         </div>
-    ) : null
+    )
 
     return (
         <div className="relative z-10 flex min-w-0 flex-col text-left">
             <button
-                ref={buttonRef}
                 type="button"
                 onClick={handleToggle}
                 aria-expanded={open}
-                disabled={!canOpen}
                 className={cn(
                     "group flex w-full min-w-0 items-center gap-3 py-1 text-left",
-                    status === "error" ? "text-destructive" : "text-muted-foreground hover:text-foreground",
-                    !canOpen && "cursor-default hover:text-muted-foreground"
+                    status === "error" ? "text-destructive" : "text-muted-foreground hover:text-foreground"
                 )}
             >
                 {(open && loading) || status === "running" ? (
@@ -1731,14 +1657,12 @@ function ToolCallBlock({
                 >
                     {title}
                 </span>
-                {canOpen && (
-                    <ChevronDown
-                        className={cn(
-                            "size-4 shrink-0 text-muted-foreground/70 transition-transform duration-200",
-                            open ? "rotate-0" : "-rotate-90"
-                        )}
-                    />
-                )}
+                <ChevronDown
+                    className={cn(
+                        "size-4 shrink-0 text-muted-foreground/70 transition-transform duration-200",
+                        open ? "rotate-0" : "-rotate-90"
+                    )}
+                />
             </button>
 
             {open && loadError && (
@@ -1907,7 +1831,17 @@ function countAgentTools(entry: AgentCallReasoningEntry): number {
 
 const USER_MESSAGE_COLLAPSED_HEIGHT = 160
 
-function UserMessageContent({ messageId, content }: { messageId: string; content: string }) {
+function UserMessageContent({
+    messageId,
+    content,
+    conversationId,
+    secretRefs,
+}: {
+    messageId: string
+    content: string
+    conversationId?: string
+    secretRefs?: Message["secretRefs"]
+}) {
     const [isExpanded, setIsExpanded] = React.useState(() => {
         const saved = localStorage.getItem(`user:expanded:${messageId}`)
         return saved === "true"
@@ -1955,7 +1889,14 @@ function UserMessageContent({ messageId, content }: { messageId: string; content
                             : `${USER_MESSAGE_COLLAPSED_HEIGHT}px`,
                     }}
                 >
-                    <div ref={contentRef} className="whitespace-pre-wrap break-words">{content}</div>
+                    <div ref={contentRef} className="whitespace-pre-wrap break-words">
+                        <ChatSecretText
+                            content={content}
+                            messageId={messageId}
+                            conversationId={conversationId}
+                            secretRefs={secretRefs}
+                        />
+                    </div>
                 </div>
                 {isCollapsible && !isExpanded && (
                     <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-[#f0ede6] dark:bg-muted [mask-image:linear-gradient(to_top,black,transparent)]" />
@@ -1981,14 +1922,25 @@ function UserMessageContent({ messageId, content }: { messageId: string; content
 // user branch), so this block is its only visible rendering.
 // ---------------------------------------------------------------------------
 
-function SteeredMessageBlock({ entry }: { entry: SteeredMessageReasoningEntry }) {
+function SteeredMessageBlock({
+    entry,
+    conversationId,
+}: {
+    entry: SteeredMessageReasoningEntry
+    conversationId?: string
+}) {
     return (
         <div className="my-1.5 flex items-center justify-end gap-3">
             <span className="shrink-0 select-none text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
                 Steered message
             </span>
             <div className="max-w-[75%] select-text whitespace-pre-wrap break-words rounded-[10px] bg-[#f0ede6] px-4 py-2.5 text-[15px] dark:bg-muted">
-                {entry.content}
+                <ChatSecretText
+                    content={entry.content}
+                    messageId={entry.userMessageId}
+                    conversationId={conversationId}
+                    secretRefs={entry.secretRefs}
+                />
             </div>
         </div>
     )
@@ -2097,6 +2049,7 @@ function DeferredThoughtBlock({
 
 interface MessageBubbleProps {
     message: Message
+    conversationId?: string
     isLatestAssistantMessage?: boolean
     isStreamingMessage?: boolean
     compact?: boolean
@@ -2118,6 +2071,7 @@ interface MessageBubbleProps {
 
 function MessageBubbleComponent({
     message,
+    conversationId,
     isLatestAssistantMessage,
     isStreamingMessage,
     compact = false,
@@ -2144,10 +2098,10 @@ function MessageBubbleComponent({
     const { byMessage } = useConversationArtifacts()
 
     const handleCopy = React.useCallback(async () => {
-        if (!await copyTextToClipboard(message.content)) return
+        if (!await copyTextToClipboard(secretSafeDisplayText(message.content, message.secretRefs))) return
         setCopied(true)
         window.setTimeout(() => setCopied(false), 1500)
-    }, [message.content])
+    }, [message.content, message.secretRefs])
 
     const loadDeferredDetails = React.useCallback(async (openAfterLoad: boolean) => {
         if (!message.deferred || !onLoadMessageDetails || detailLoading) return
@@ -2316,7 +2270,14 @@ function MessageBubbleComponent({
                         ))}
                     </div>
                 )}
-                {message.content && <UserMessageContent messageId={message.id} content={message.content} />}
+                {message.content && (
+                    <UserMessageContent
+                        messageId={message.id}
+                        content={message.content}
+                        conversationId={conversationId}
+                        secretRefs={message.secretRefs}
+                    />
+                )}
                 {meta}
             </div>
         )
@@ -2399,6 +2360,7 @@ function MessageBubbleComponent({
             <SteeredMessageBlock
                 key={`steered-${message.id}-${item.entry.id}`}
                 entry={item.entry}
+                conversationId={conversationId}
             />
         ) : (
             <div key={`content-${message.id}-${item.phase}`} className="min-w-0 break-words text-[16px] leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-1">
@@ -2454,7 +2416,10 @@ function MessageBubbleComponent({
                     return (
                         <React.Fragment key={`section-${message.id}-${index}`}>
                             {section.steered && (
-                                <SteeredMessageBlock entry={section.steered} />
+                                <SteeredMessageBlock
+                                    entry={section.steered}
+                                    conversationId={conversationId}
+                                />
                             )}
                             {workItems.length > 0 && (
                                 <WorkedForBlock

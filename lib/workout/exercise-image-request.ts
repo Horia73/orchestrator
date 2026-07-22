@@ -1,9 +1,10 @@
-// Client-safe builder for the exercise demo-image lookup URL.
+// Client-safe builder for the verified exercise demo-image lookup URL.
 //
 // Shared by the exercise info panel (which fetches on open) and the surface
 // prefetcher (which warms the browser cache on idle). They MUST build the exact
 // same URL or the prefetched image won't satisfy the panel's request — hence
-// this single source of truth. No server imports; just string assembly.
+// this single source of truth. The API uses the stable id; the other identity
+// fields remain for backwards-compatible request URLs only.
 
 export interface WorkoutImageRequestInput {
     id: string

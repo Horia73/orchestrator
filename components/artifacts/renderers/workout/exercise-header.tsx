@@ -9,6 +9,7 @@ import {
     formatDuration,
     formatSetSequence,
     formatWeight,
+    formatWeightNumber,
 } from "@/lib/workout/format"
 import { findGlossaryTermsInText, getGlossary } from "@/lib/workout/glossary"
 import { workoutImageRequestPath } from "@/lib/workout/exercise-image-request"
@@ -40,10 +41,9 @@ export function ExerciseHeader({
     const alternatives = exercise.alternatives ?? []
     const hasContext = !!(exercise.previous || exercise.personalBest)
     const glossaryTerms = React.useMemo(() => collectExerciseGlossaryTerms(exercise), [exercise])
-    // The (i) panel always offers something useful: the renderer resolves a
-    // demo image from the built-in exercise library (keyed by id/name) even
-    // when the model supplied no extra metadata, so the button shows for every
-    // exercise.
+    // The (i) panel remains available for the saved definition and its verified
+    // demo. Image discovery is deliberately model-driven; the renderer never
+    // guesses a fuzzy movement at display time.
     const [infoOpen, setInfoOpen] = React.useState(false)
     const infoPanelId = React.useId()
 
@@ -95,7 +95,11 @@ export function ExerciseHeader({
                         <PreviousLine exercise={exercise} units={units} />
                     ) : null}
                     {exercise.personalBest ? (
-                        <PrBadge pb={exercise.personalBest} units={units} />
+                        <PrBadge
+                            pb={exercise.personalBest}
+                            units={units}
+                            loadUnit={exercise.kind === 'resistance' ? exercise.loadUnit : undefined}
+                        />
                     ) : null}
                 </div>
             ) : null}
@@ -142,18 +146,25 @@ function withUnits(seq: string, exercise: Exercise, units: WorkoutUnits): string
     if (exercise.kind === 'weighted' || exercise.kind === 'weighted_bw') {
         return seq.replace(' × ', ` ${units} × `)
     }
+    if (exercise.kind === 'resistance') {
+        return seq.replace(' × ', ` ${exercise.loadUnit} × `)
+    }
     return seq
 }
 
 function PrBadge({
     pb,
     units,
+    loadUnit,
 }: {
     pb: NonNullable<Exercise['personalBest']>
     units: WorkoutUnits
+    loadUnit?: string
 }) {
     const main = pb.weightKg !== undefined && pb.reps !== undefined
         ? `${formatWeight(pb.weightKg, units)} × ${pb.reps}`
+        : pb.load !== undefined && pb.reps !== undefined
+            ? `${formatWeightNumber(pb.load)} ${loadUnit || 'level'} × ${pb.reps}`
         : pb.durationSec !== undefined
             ? formatDuration(pb.durationSec)
             : pb.reps !== undefined
@@ -320,19 +331,18 @@ function ExerciseDemoImage({
     const [fetched, setFetched] = React.useState<WorkoutImage | null>(null)
     const [loading, setLoading] = React.useState(false)
     const [failed, setFailed] = React.useState(false)
+    const [naturalRatio, setNaturalRatio] = React.useState<string | null>(null)
 
     React.useEffect(() => {
         setDirectBroken(false)
         setFetched(null)
         setFailed(false)
+        setNaturalRatio(null)
     }, [exerciseId, imageQuery, imageUrl])
 
-    // The resolver matches the exercise against a built-in image library
-    // (keyed by id/name) and only falls back to a keyless web search (`q`)
-    // when there is no library match. We send identity (id/name/muscle/
-    // equipment) so the match is precise even when the display name is
-    // localized. Shared builder so the surface prefetcher warms the exact
-    // same URL.
+    // The route serves only the verified image saved for this stable exercise
+    // id. Identity fields remain in the request for compatibility, but no blind
+    // fuzzy lookup runs at display time.
     const requestPath = React.useMemo(
         () => workoutImageRequestPath({ id: exerciseId, name: exerciseName, muscleGroups, equipment, imageQuery }),
         [exerciseId, exerciseName, muscleGroups, equipment, imageQuery],
@@ -394,8 +404,14 @@ function ExerciseDemoImage({
                 alt={`${exerciseName} demo`}
                 loading="lazy"
                 referrerPolicy="no-referrer"
-                className="block w-full object-cover"
-                style={{ aspectRatio: ratio }}
+                className="block max-h-[70dvh] w-full bg-muted/20 object-contain"
+                style={{ aspectRatio: naturalRatio ?? ratio }}
+                onLoad={(event) => {
+                    const { naturalWidth, naturalHeight } = event.currentTarget
+                    if (naturalWidth > 0 && naturalHeight > 0) {
+                        setNaturalRatio(`${naturalWidth} / ${naturalHeight}`)
+                    }
+                }}
                 onError={() => {
                     if (display.url === imageUrl) setDirectBroken(true)
                     else {

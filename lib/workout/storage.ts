@@ -31,12 +31,10 @@ export function exercisesDir(): string {
 }
 
 /**
- * Verified demo-image library, keyed by exercise slug. Unlike the built-in
- * fuzzy-matched `exercise-image-db` (which the renderer resolves blindly at
- * render time and often picks the wrong movement), entries here are the ones
- * the model deliberately searched, confirmed against the exact exercise, and
- * saved — once per exercise/machine, reused forever. The /api/workout-images
- * route serves these first, before any fuzzy fallback.
+ * Verified demo-image library, keyed by exercise slug. Entries here are the
+ * ones the model deliberately searched, visually confirmed against the exact
+ * exercise, and saved — once per exercise/machine, reused forever. The display
+ * route serves only this library and never substitutes a fuzzy guess.
  */
 export function exerciseImagesDir(): string {
     return path.join(workoutsDir(), 'exercise-images')

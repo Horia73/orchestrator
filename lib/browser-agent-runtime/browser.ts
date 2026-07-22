@@ -50,6 +50,7 @@ import type {
     BrowserPageAssetsResult,
     BrowserUploadFileResult,
     BrowserPageElementRef,
+    BrowserPageMetrics,
     BrowserPageSettleOptions,
     BrowserPageSettleResult,
     BrowserPageSession,
@@ -59,6 +60,8 @@ import type {
     BrowserPointerActionKind,
     BrowserPointerState,
     BrowserReadPageResult,
+    BrowserScrollResult,
+    BrowserScrollSnapshot,
     BrowserSetViewportResult,
     BrowserTabInfo,
     BrowserTabOrigin,
@@ -110,6 +113,8 @@ export type {
     BrowserPointerActionKind,
     BrowserPointerState,
     BrowserReadPageResult,
+    BrowserScrollResult,
+    BrowserScrollSnapshot,
     BrowserSetViewportResult,
     BrowserTabInfo,
     BrowserTabOrigin,
@@ -151,6 +156,30 @@ interface BrowserFrameMetrics {
 interface BrowserPageSettleSignature extends BrowserFrameMetrics {
     url: string;
     readyState: string;
+}
+
+function toBrowserPageMetrics(metrics: BrowserFrameMetrics): BrowserPageMetrics {
+    return {
+        measurement: 'dom',
+        width: metrics.pageWidth,
+        height: metrics.pageHeight,
+        viewportWidth: metrics.viewportWidth,
+        viewportHeight: metrics.viewportHeight,
+        scrollX: metrics.scrollX,
+        scrollY: metrics.scrollY,
+    };
+}
+
+function unavailableBrowserPageMetrics(): BrowserPageMetrics {
+    return {
+        measurement: 'unavailable',
+        width: null,
+        height: null,
+        viewportWidth: null,
+        viewportHeight: null,
+        scrollX: null,
+        scrollY: null,
+    };
 }
 
 const DISPLAY_AUTOMATION_COMMANDS = ['import', 'xdotool'] as const;
@@ -1275,6 +1304,260 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         });
     };
 
+    type BrowserScrollProbe = {
+        key: string;
+        before: BrowserScrollSnapshot[];
+    };
+
+    const beginScrollProbe = async (
+        activePage: Page,
+        pointer: { x: number; y: number } | null,
+        inputMode: BrowserScrollResult['inputMode'],
+    ): Promise<BrowserScrollProbe> => {
+        const key = `__orchestrator_scroll_probe_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+        const before = await activePage.evaluate(({ probeKey, pointerPosition, mode }) => {
+            type ProbeSnapshot = {
+                target: 'document' | 'element';
+                label: string;
+                tagName: string;
+                role?: string;
+                name?: string;
+                scrollLeft: number;
+                scrollTop: number;
+                scrollWidth: number;
+                scrollHeight: number;
+                clientWidth: number;
+                clientHeight: number;
+            };
+            type ProbeState = { elements: Element[] };
+
+            const root = document.scrollingElement || document.documentElement;
+            const elements: Element[] = [];
+            const seen = new Set<Element>();
+            const add = (element: Element | null) => {
+                if (!element || seen.has(element)) return;
+                seen.add(element);
+                elements.push(element);
+            };
+            const isScrollable = (element: Element) => {
+                if (element === root) return true;
+                if (!(element instanceof HTMLElement)) return false;
+                const style = getComputedStyle(element);
+                const permitsY = /^(auto|scroll|overlay)$/.test(style.overflowY);
+                const permitsX = /^(auto|scroll|overlay)$/.test(style.overflowX);
+                return (permitsY && element.scrollHeight > element.clientHeight + 1)
+                    || (permitsX && element.scrollWidth > element.clientWidth + 1);
+            };
+            const collectAncestors = (start: Element | null) => {
+                let current = start;
+                while (current) {
+                    if (isScrollable(current)) add(current);
+                    current = current.parentElement;
+                }
+            };
+
+            let pagePoint = pointerPosition;
+            if (pagePoint && mode === 'display') {
+                const sideChrome = Math.max(0, Math.round((window.outerWidth - window.innerWidth) / 2));
+                const topChrome = Math.max(0, Math.round(window.outerHeight - window.innerHeight - sideChrome));
+                pagePoint = {
+                    x: Math.round(pagePoint.x - window.screenX - sideChrome),
+                    y: Math.round(pagePoint.y - window.screenY - topChrome),
+                };
+            }
+            if (!pagePoint) {
+                pagePoint = { x: Math.round(window.innerWidth / 2), y: Math.round(window.innerHeight / 2) };
+            }
+
+            if (pagePoint.x >= 0 && pagePoint.y >= 0 && pagePoint.x < window.innerWidth && pagePoint.y < window.innerHeight) {
+                collectAncestors(document.elementFromPoint(pagePoint.x, pagePoint.y));
+            }
+            collectAncestors(document.activeElement);
+            add(root);
+
+            const cleanText = (value: string | null | undefined, max = 80) => String(value || '')
+                .replace(/\s+/g, ' ')
+                .trim()
+                .slice(0, max);
+            const snapshot = (element: Element): ProbeSnapshot => {
+                const isDocument = element === root;
+                const html = element as HTMLElement;
+                const tagName = isDocument ? 'document' : element.tagName.toLowerCase();
+                const role = isDocument ? undefined : cleanText(element.getAttribute('role'), 40) || undefined;
+                const name = isDocument
+                    ? undefined
+                    : cleanText(
+                        element.getAttribute('aria-label')
+                        || element.getAttribute('title')
+                        || (element.id ? `#${element.id}` : ''),
+                    ) || undefined;
+                const label = isDocument
+                    ? 'document'
+                    : name || role || tagName;
+
+                return {
+                    target: isDocument ? 'document' : 'element',
+                    label,
+                    tagName,
+                    role,
+                    name,
+                    scrollLeft: Math.round(html.scrollLeft || 0),
+                    scrollTop: Math.round(html.scrollTop || 0),
+                    scrollWidth: Math.round(html.scrollWidth || 0),
+                    scrollHeight: Math.round(html.scrollHeight || 0),
+                    clientWidth: Math.round(html.clientWidth || window.innerWidth),
+                    clientHeight: Math.round(html.clientHeight || window.innerHeight),
+                };
+            };
+
+            const globalStore = globalThis as typeof globalThis & Record<string, ProbeState | undefined>;
+            globalStore[probeKey] = { elements };
+            return elements.map(snapshot);
+        }, { probeKey: key, pointerPosition: pointer, mode: inputMode });
+
+        return { key, before };
+    };
+
+    const finishScrollProbe = async (
+        activePage: Page,
+        probe: BrowserScrollProbe,
+    ): Promise<BrowserScrollSnapshot[]> => {
+        return activePage.evaluate((probeKey) => {
+            type ProbeState = { elements: Element[] };
+            const globalStore = globalThis as typeof globalThis & Record<string, ProbeState | undefined>;
+            const state = globalStore[probeKey];
+            delete globalStore[probeKey];
+            if (!state) return [];
+
+            const root = document.scrollingElement || document.documentElement;
+            const cleanText = (value: string | null | undefined, max = 80) => String(value || '')
+                .replace(/\s+/g, ' ')
+                .trim()
+                .slice(0, max);
+
+            return state.elements
+                .map(element => {
+                    const isDocument = element === root;
+                    const html = element as HTMLElement;
+                    const tagName = isDocument ? 'document' : element.tagName.toLowerCase();
+                    const role = isDocument ? undefined : cleanText(element.getAttribute('role'), 40) || undefined;
+                    const name = isDocument
+                        ? undefined
+                        : cleanText(
+                            element.getAttribute('aria-label')
+                            || element.getAttribute('title')
+                            || (element.id ? `#${element.id}` : ''),
+                        ) || undefined;
+                    return {
+                        target: isDocument ? 'document' as const : 'element' as const,
+                        label: isDocument ? 'document' : name || role || tagName,
+                        tagName,
+                        role,
+                        name,
+                        scrollLeft: Math.round(html.scrollLeft || 0),
+                        scrollTop: Math.round(html.scrollTop || 0),
+                        scrollWidth: Math.round(html.scrollWidth || 0),
+                        scrollHeight: Math.round(html.scrollHeight || 0),
+                        clientWidth: Math.round(html.clientWidth || window.innerWidth),
+                        clientHeight: Math.round(html.clientHeight || window.innerHeight),
+                    };
+                });
+        }, probe.key);
+    };
+
+    const selectScrollProbeResult = (
+        probe: BrowserScrollProbe,
+        after: BrowserScrollSnapshot[],
+        direction: 'up' | 'down' | 'left' | 'right',
+        inputMode: BrowserScrollResult['inputMode'],
+    ): BrowserScrollResult => {
+        const horizontal = direction === 'left' || direction === 'right';
+        const candidateCount = Math.min(probe.before.length, after.length);
+        let selectedIndex = -1;
+
+        for (let index = 0; index < candidateCount; index++) {
+            const beforePosition = horizontal ? probe.before[index].scrollLeft : probe.before[index].scrollTop;
+            const afterPosition = horizontal ? after[index].scrollLeft : after[index].scrollTop;
+            if (Math.abs(afterPosition - beforePosition) > 1) {
+                selectedIndex = index;
+                break;
+            }
+        }
+
+        if (selectedIndex < 0) {
+            selectedIndex = after.findIndex(snapshot => horizontal
+                ? snapshot.scrollWidth > snapshot.clientWidth + 1
+                : snapshot.scrollHeight > snapshot.clientHeight + 1);
+        }
+        if (selectedIndex < 0 && after.length > 0) {
+            selectedIndex = after.findIndex(snapshot => snapshot.target === 'document');
+            if (selectedIndex < 0) selectedIndex = 0;
+        }
+
+        const before = selectedIndex >= 0 ? probe.before[selectedIndex] || null : null;
+        const selectedAfter = selectedIndex >= 0 ? after[selectedIndex] || null : null;
+        const changed = Boolean(before && selectedAfter && (
+            horizontal
+                ? Math.abs(selectedAfter.scrollLeft - before.scrollLeft) > 1
+                : Math.abs(selectedAfter.scrollTop - before.scrollTop) > 1
+        ));
+
+        return {
+            available: Boolean(selectedAfter),
+            inputMode,
+            changed,
+            before,
+            after: selectedAfter,
+            ...(!selectedAfter ? { error: 'No measurable document or scrollable element was available after input.' } : {}),
+        };
+    };
+
+    const performScrollWithTelemetry = async (
+        activePage: Page,
+        session: BrowserSessionState,
+        direction: 'up' | 'down' | 'left' | 'right',
+        inputMode: BrowserScrollResult['inputMode'],
+        work: () => Promise<void>,
+    ): Promise<BrowserScrollResult> => {
+        let probeError = '';
+        const probe = await beginScrollProbe(activePage, session.lastMousePosition, inputMode).catch((error) => {
+            probeError = formatBrowserError(error);
+            return null;
+        });
+        try {
+            await work();
+        } catch (error) {
+            if (probe) await finishScrollProbe(activePage, probe).catch(() => []);
+            throw error;
+        }
+
+        if (!probe) {
+            return {
+                available: false,
+                inputMode,
+                changed: false,
+                before: null,
+                after: null,
+                error: `Could not capture pre-scroll DOM telemetry${probeError ? `: ${probeError}` : '.'}`,
+            };
+        }
+
+        await sleep(80);
+        const after = await finishScrollProbe(activePage, probe).catch(() => []);
+        if (after.length === 0) {
+            return {
+                available: false,
+                inputMode,
+                changed: false,
+                before: null,
+                after: null,
+                error: 'Could not capture post-scroll DOM telemetry.',
+            };
+        }
+
+        return selectScrollProbeResult(probe, after, direction, inputMode);
+    };
+
     const getPageSettleSignature = async (activePage: Page): Promise<BrowserPageSettleSignature> => {
         return activePage.evaluate(() => {
             const doc = document.documentElement;
@@ -1418,6 +1701,12 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
 
         if (useDisplayAutomation) {
             const display = getDisplayDimensions();
+            const metrics = await getFrameMetrics(activePage).catch((error) => {
+                if (source === 'agent') {
+                    log(`⚠️ Page DOM metrics unavailable for display capture: ${formatBrowserError(error)}`);
+                }
+                return null;
+            });
             if (source === 'agent') {
                 log(`📸 Display screenshot ${display.width}x${display.height} (${source})`);
             }
@@ -1436,12 +1725,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 captureMode: 'viewport',
                 coordinateSpace: 'normalized-display',
                 viewport: { ...display },
-                page: {
-                    width: display.width,
-                    height: display.height,
-                    scrollX: 0,
-                    scrollY: 0,
-                },
+                page: metrics ? toBrowserPageMetrics(metrics) : unavailableBrowserPageMetrics(),
             };
 
             if (trackInHistory) {
@@ -1484,12 +1768,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 width: metrics.viewportWidth,
                 height: metrics.viewportHeight,
             },
-            page: {
-                width: metrics.pageWidth,
-                height: metrics.pageHeight,
-                scrollX: metrics.scrollX,
-                scrollY: metrics.scrollY,
-            },
+            page: toBrowserPageMetrics(metrics),
         };
 
         if (trackInHistory) {
@@ -2035,6 +2314,10 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                     );
                     const fps = DEFAULT_VIDEO_FPS;
                     const display = getDisplayDimensions();
+                    const metrics = await getFrameMetrics(activePage).catch((error) => {
+                        log(`⚠️ Page DOM metrics unavailable for display recording: ${formatBrowserError(error)}`);
+                        return null;
+                    });
                     const outputPath = path.join(downloadsDir, `browser-recording-${Date.now()}.webm`);
                     const seconds = Math.max(1, Math.min(60, recordingDurationMs / 1000));
 
@@ -2059,7 +2342,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                         fps,
                         frameCount: Math.max(1, Math.round((recordingDurationMs / 1000) * fps)),
                         viewport: { ...display },
-                        page: { width: display.width, height: display.height, scrollX: 0, scrollY: 0 },
+                        page: metrics ? toBrowserPageMetrics(metrics) : unavailableBrowserPageMetrics(),
                     };
                 }
 
@@ -2112,12 +2395,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                         fps,
                         frameCount,
                         viewport: { width, height },
-                        page: {
-                            width: metrics.pageWidth,
-                            height: metrics.pageHeight,
-                            scrollX: metrics.scrollX,
-                            scrollY: metrics.scrollY,
-                        },
+                        page: toBrowserPageMetrics(metrics),
                     };
                 } finally {
                     if (encoderPage) {
@@ -2600,73 +2878,95 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             },
 
             async scroll(direction: 'up' | 'down' | 'left' | 'right', amount: number = 500) {
+                const activePage = await ensureActivePage(session);
                 if (shouldUseDisplayAutomation()) {
-                    await scrollDisplay(session, direction, amount);
-                    return;
+                    return performScrollWithTelemetry(
+                        activePage,
+                        session,
+                        direction,
+                        'display',
+                        () => scrollDisplay(session, direction, amount),
+                    );
                 }
 
-                const activePage = await ensureActivePage(session);
                 const deltaX = direction === 'right' ? amount : direction === 'left' ? -amount : 0;
                 const deltaY = direction === 'down' ? amount : direction === 'up' ? -amount : 0;
-                await activePage.mouse.wheel(deltaX, deltaY);
+                return performScrollWithTelemetry(
+                    activePage,
+                    session,
+                    direction,
+                    'page',
+                    () => activePage.mouse.wheel(deltaX, deltaY),
+                );
             },
 
             async scrollToBottom() {
+                const activePage = await ensureActivePage(session);
                 if (shouldUseDisplayAutomation()) {
-                    await pressDisplayKey('End');
-                    return;
+                    return performScrollWithTelemetry(
+                        activePage,
+                        session,
+                        'down',
+                        'display',
+                        () => pressDisplayKey('End'),
+                    );
                 }
 
-                const activePage = await ensureActivePage(session);
                 const pointer = session.lastMousePosition;
-                await activePage.evaluate((lastPointer) => {
-                    const maxScrollTop = (element: Element) => Math.max(0, element.scrollHeight - element.clientHeight);
-                    const canScrollVertically = (element: Element) => {
-                        if (!(element instanceof HTMLElement)) return false;
-                        return maxScrollTop(element) > 1;
-                    };
-                    const scrollElementToBottom = (element: Element) => {
-                        if (element instanceof HTMLElement) {
-                            element.scrollTop = element.scrollHeight;
-                            element.dispatchEvent(new Event('scroll', { bubbles: true }));
-                        }
-                    };
-                    const scrollAncestorToBottom = (start: Element | null) => {
-                        let current: Element | null = start;
-                        while (current && current !== document.documentElement) {
-                            if (current === document.body && document.scrollingElement !== document.body) {
+                return performScrollWithTelemetry(
+                    activePage,
+                    session,
+                    'down',
+                    'page',
+                    () => activePage.evaluate((lastPointer) => {
+                        const maxScrollTop = (element: Element) => Math.max(0, element.scrollHeight - element.clientHeight);
+                        const canScrollVertically = (element: Element) => {
+                            if (!(element instanceof HTMLElement)) return false;
+                            return maxScrollTop(element) > 1;
+                        };
+                        const scrollElementToBottom = (element: Element) => {
+                            if (element instanceof HTMLElement) {
+                                element.scrollTop = element.scrollHeight;
+                                element.dispatchEvent(new Event('scroll', { bubbles: true }));
+                            }
+                        };
+                        const scrollAncestorToBottom = (start: Element | null) => {
+                            let current: Element | null = start;
+                            while (current && current !== document.documentElement) {
+                                if (current === document.body && document.scrollingElement !== document.body) {
+                                    current = current.parentElement;
+                                    continue;
+                                }
+                                if (canScrollVertically(current)) {
+                                    scrollElementToBottom(current);
+                                    return true;
+                                }
                                 current = current.parentElement;
-                                continue;
                             }
-                            if (canScrollVertically(current)) {
-                                scrollElementToBottom(current);
-                                return true;
-                            }
-                            current = current.parentElement;
+                            return false;
+                        };
+
+                        const candidates: Element[] = [];
+                        if (lastPointer) {
+                            const pointed = document.elementFromPoint(lastPointer.x, lastPointer.y);
+                            if (pointed) candidates.push(pointed);
                         }
-                        return false;
-                    };
+                        if (document.activeElement) {
+                            candidates.push(document.activeElement);
+                        }
 
-                    const candidates: Element[] = [];
-                    if (lastPointer) {
-                        const pointed = document.elementFromPoint(lastPointer.x, lastPointer.y);
-                        if (pointed) candidates.push(pointed);
-                    }
-                    if (document.activeElement) {
-                        candidates.push(document.activeElement);
-                    }
+                        for (const candidate of candidates) {
+                            if (scrollAncestorToBottom(candidate)) return;
+                        }
 
-                    for (const candidate of candidates) {
-                        if (scrollAncestorToBottom(candidate)) return;
-                    }
-
-                    const root = document.scrollingElement || document.documentElement;
-                    root.scrollTop = root.scrollHeight;
-                    window.scrollTo(0, Math.max(
-                        document.documentElement.scrollHeight,
-                        document.body?.scrollHeight || 0,
-                    ));
-                }, pointer);
+                        const root = document.scrollingElement || document.documentElement;
+                        root.scrollTop = root.scrollHeight;
+                        window.scrollTo(0, Math.max(
+                            document.documentElement.scrollHeight,
+                            document.body?.scrollHeight || 0,
+                        ));
+                    }, pointer),
+                );
             },
 
             async undo() {

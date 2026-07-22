@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils"
 export function RepsPicker({
     initialReps,
     plannedRange,
+    label = "reps",
     onApply,
     onClose,
     className,
@@ -22,6 +23,9 @@ export function RepsPicker({
     initialReps: number
     /** Optional [low, high] target range — drives the quick-pick chip row. */
     plannedRange?: [number, number] | number
+    /** Unit label shown beside the value. Defaults to reps; reusable for
+     *  proprietary machine resistance levels. */
+    label?: string
     onApply: (newReps: number) => void
     onClose: () => void
     className?: string
@@ -44,7 +48,7 @@ export function RepsPicker({
     return (
         <div
             role="dialog"
-            aria-label="Select reps"
+            aria-label={`Select ${label}`}
             className={cn(
                 "z-30 flex w-60 flex-col gap-3 rounded-xl border border-border/70 bg-popover p-3 shadow-xl",
                 className,
@@ -75,7 +79,7 @@ export function RepsPicker({
                         "focus:outline-none focus:ring-2 focus:ring-ring",
                     )}
                 />
-                <span className="text-sm font-medium text-muted-foreground">reps</span>
+                <span className="text-sm font-medium text-muted-foreground">{label}</span>
             </div>
 
             <div className="grid grid-cols-4 gap-1">

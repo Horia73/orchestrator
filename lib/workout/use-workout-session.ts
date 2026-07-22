@@ -36,6 +36,8 @@ import { buildEffectiveWorkout, normalizeAddedGroups } from "./session-plan"
 
 const STORAGE_VERSION = 1
 const STORAGE_KEY_PREFIX = 'workout:session:'
+const MAX_REST_SPAN_MS = 12 * 60 * 60 * 1000
+const STALE_COMPLETED_REST_MS = 12 * 60 * 60 * 1000
 
 /**
  * Per-exercise session log. Mirrors the schema's `logged[]` but lives
@@ -68,6 +70,44 @@ export interface RestState {
     /** Increments each time we (re)start so the bar can replay its enter
      *  animation even if endsAt accidentally matches a previous one. */
     key: number
+}
+
+/**
+ * Validate and repair a persisted rest timer. `startedAt`/`endsAt` are the
+ * source of truth, so an old payload with `durationSec: 0` can be recovered
+ * when its timestamps still describe a real pause.
+ */
+export function normalizePersistedRestState(value: unknown): RestState | undefined {
+    if (!value || typeof value !== 'object') return undefined
+    const candidate = value as Partial<RestState>
+    if (
+        typeof candidate.startedAt !== 'number'
+        || !Number.isFinite(candidate.startedAt)
+        || typeof candidate.endsAt !== 'number'
+        || !Number.isFinite(candidate.endsAt)
+        || candidate.endsAt <= candidate.startedAt
+        || candidate.endsAt - candidate.startedAt > MAX_REST_SPAN_MS
+        || typeof candidate.exerciseId !== 'string'
+        || !candidate.exerciseId.trim()
+        || typeof candidate.exerciseName !== 'string'
+        || !candidate.exerciseName.trim()
+        || typeof candidate.setIndex !== 'number'
+        || !Number.isFinite(candidate.setIndex)
+    ) {
+        return undefined
+    }
+
+    return {
+        durationSec: Math.max(1, Math.round((candidate.endsAt - candidate.startedAt) / 1000)),
+        startedAt: candidate.startedAt,
+        endsAt: candidate.endsAt,
+        exerciseId: candidate.exerciseId,
+        exerciseName: candidate.exerciseName,
+        setIndex: Math.max(0, Math.floor(candidate.setIndex)),
+        key: typeof candidate.key === 'number' && Number.isFinite(candidate.key)
+            ? Math.max(1, Math.floor(candidate.key))
+            : 1,
+    }
 }
 
 export interface RestEvent {
@@ -150,12 +190,12 @@ function coercePersistedSession(raw: unknown, sessionId: string): WorkoutSession
         return EMPTY_STATE(sessionId)
     }
     const restEvents = normalizeRestEvents((parsed as { restEvents?: unknown }).restEvents)
-    let rest = parsed.rest
+    let rest = normalizePersistedRestState(parsed.rest)
     let activeSet = parsed.activeSet
-    // Clear stale rest timer — if the page was closed mid-rest, when we come
-    // back the rest is meaningless; better to drop it than resume an alert
-    // from 6 hours ago.
-    if (rest && rest.endsAt && rest.endsAt < Date.now() - 10 * 60 * 1000) {
+    // Keep an expired pause visible as "Rest done" through ordinary app
+    // backgrounding/reloads. Only discard it when it is clearly from an
+    // abandoned session many hours later.
+    if (rest && rest.endsAt < Date.now() - STALE_COMPLETED_REST_MS) {
         restEvents.push(restToEvent(rest, 'completed', rest.endsAt))
         rest = undefined
     }
@@ -207,6 +247,11 @@ function plannedDefaults(plannedSet: PlannedSet, exerciseKind: Exercise['kind'])
             if (typeof set.reps === 'number') base.actualReps = set.reps
             else if (Array.isArray(set.reps)) base.actualReps = (set.reps as [number, number])[1]
             return base
+        case 'resistance':
+            if (typeof set.load === 'number') base.actualLoad = set.load
+            if (typeof set.reps === 'number') base.actualReps = set.reps
+            else if (Array.isArray(set.reps)) base.actualReps = (set.reps as [number, number])[1]
+            return base
         case 'bodyweight':
             if (typeof set.reps === 'number') base.actualReps = set.reps
             else if (Array.isArray(set.reps)) base.actualReps = (set.reps as [number, number])[1]
@@ -226,6 +271,22 @@ function plannedDefaults(plannedSet: PlannedSet, exerciseKind: Exercise['kind'])
 }
 
 /**
+ * Choose the duration shown in the post-set editor. A running timer is an
+ * observation, so it must win over the programmed target; an already saved
+ * duration remains authoritative when reopening the editor.
+ */
+export function resolveTimedSetDraftDuration(
+    plannedDurationSec: number | undefined,
+    loggedDurationSec: number | undefined,
+    measuredDurationSec: number | undefined,
+    hasActiveTimer: boolean,
+): number | undefined {
+    if (loggedDurationSec !== undefined) return loggedDurationSec
+    if (hasActiveTimer) return measuredDurationSec
+    return plannedDurationSec ?? measuredDurationSec
+}
+
+/**
  * Pick the rest duration to use after a given set: per-set override wins,
  * else exercise.defaultRestSec, else the artifact's group restBetweenSec,
  * else 90s safe default.
@@ -236,6 +297,28 @@ function resolveRestSec(set: PlannedSet, exercise: Exercise, fallbackGroupRest?:
     if (typeof exercise.defaultRestSec === 'number') return exercise.defaultRestSec
     if (typeof fallbackGroupRest === 'number') return fallbackGroupRest
     return 90
+}
+
+/** Build a timestamp-backed rest timer. Zero means an intentional no-rest set
+ * (for example a drop set), so no empty 0:00 bar is created. */
+export function createRestState(
+    durationSec: number,
+    label: { exerciseId: string; exerciseName: string; setIndex: number },
+    key: number,
+    startedAt = Date.now(),
+): RestState | undefined {
+    if (!Number.isFinite(durationSec)) return undefined
+    const cleanDurationSec = Math.max(0, Math.round(durationSec))
+    if (cleanDurationSec === 0) return undefined
+    return {
+        durationSec: cleanDurationSec,
+        startedAt,
+        endsAt: startedAt + cleanDurationSec * 1000,
+        exerciseId: label.exerciseId,
+        exerciseName: label.exerciseName,
+        setIndex: Math.max(0, Math.floor(label.setIndex)),
+        key: Math.max(1, Math.floor(key)),
+    }
 }
 
 function normalizeRestEvents(value: unknown): RestEvent[] {
@@ -410,15 +493,18 @@ function persistSessionState(sessionId: string, session: WorkoutSessionState): v
     }
 }
 
-/** Signature of the meaningful (non-ephemeral) session content. Drives server
- *  autosave dedup so we don't POST on every rest-timer tick or remount. */
-function sessionContentSignature(session: WorkoutSessionState): string {
+/** Signature of all durable session content. Rest/set timers change only on
+ * user actions (not on display ticks), so including them keeps resume state
+ * synchronized without producing timer-churn requests. */
+export function sessionContentSignature(session: WorkoutSessionState): string {
     return JSON.stringify({
         startedAt: session.startedAt,
         completedAt: session.completedAt,
         logsByExerciseId: session.logsByExerciseId,
         addedGroups: session.addedGroups,
         restEvents: session.restEvents,
+        rest: session.rest,
+        activeSet: session.activeSet,
         feedback: session.feedback,
     })
 }
@@ -451,10 +537,22 @@ export function useWorkoutSession(
     opts?: { artifactId?: string },
 ): WorkoutSessionApi {
     const artifactId = opts?.artifactId
-    const [session, setSession] = React.useState<WorkoutSessionState>(() => EMPTY_STATE(sessionId))
+    const [session, setSessionState] = React.useState<WorkoutSessionState>(() => EMPTY_STATE(sessionId))
     const [restoredSessionId, setRestoredSessionId] = React.useState<string | null>(null)
     const isRestored = restoredSessionId === sessionId
     const latestSessionRef = React.useRef(session)
+    // Mirror state into the persistence ref inside the same update. This closes
+    // the small mobile race where pagehide can fire before a normal effect has
+    // copied a just-started rest timer into the ref used by the unload flush.
+    const setSession = React.useCallback<React.Dispatch<React.SetStateAction<WorkoutSessionState>>>((next) => {
+        setSessionState((current) => {
+            const resolved = typeof next === 'function'
+                ? (next as (value: WorkoutSessionState) => WorkoutSessionState)(current)
+                : next
+            latestSessionRef.current = resolved
+            return resolved
+        })
+    }, [])
     // Signature of the last content we pushed to the server, for autosave dedup.
     const lastServerSaveRef = React.useRef<string | null>(null)
     // Gate server writes until we've reconciled with the server copy on mount,
@@ -473,10 +571,6 @@ export function useWorkoutSession(
     const setOrder = React.useMemo(() => buildSetOrder(effectiveWorkout), [effectiveWorkout])
 
     React.useEffect(() => {
-        latestSessionRef.current = session
-    }, [session])
-
-    React.useEffect(() => {
         lastServerSaveRef.current = null
         setServerChecked(!artifactId)
     }, [artifactId])
@@ -488,7 +582,7 @@ export function useWorkoutSession(
         latestSessionRef.current = restored
         setSession(restored)
         setRestoredSessionId(sessionId)
-    }, [sessionId])
+    }, [sessionId, setSession])
 
     // Persist on change with debouncing. We coalesce rapid mutations so a
     // burst of "check, check, check" only writes once.
@@ -573,7 +667,7 @@ export function useWorkoutSession(
         return () => {
             cancelled = true
         }
-    }, [artifactId, isRestored, sessionId])
+    }, [artifactId, isRestored, sessionId, setSession])
 
     // Autosave the in-progress session to the server, debounced. Only meaningful
     // (started) sessions are pushed, and the content signature dedups so rest-
@@ -646,7 +740,7 @@ export function useWorkoutSession(
 
     const start = React.useCallback(() => {
         setSession((s) => (s.startedAt ? s : { ...s, startedAt: new Date().toISOString() }))
-    }, [])
+    }, [setSession])
 
     const finish = React.useCallback((feedback?: WorkoutSessionFeedback) => {
         const nowMs = Date.now()
@@ -661,7 +755,7 @@ export function useWorkoutSession(
                 feedback: cleanFeedback,
             }
         })
-    }, [])
+    }, [setSession])
 
     const reset = React.useCallback(() => {
         setSession(EMPTY_STATE(sessionId))
@@ -672,7 +766,7 @@ export function useWorkoutSession(
                 keepalive: true,
             }).catch(() => undefined)
         }
-    }, [sessionId, artifactId])
+    }, [sessionId, artifactId, setSession])
 
     const ensureLog = (state: WorkoutSessionState, exerciseId: string): ExerciseSessionLog => {
         return state.logsByExerciseId[exerciseId] ?? { sets: [] }
@@ -712,16 +806,17 @@ export function useWorkoutSession(
                     [exercise.id]: { ...prevLog, sets },
                 }
 
-                const rest: RestState | undefined = wantsRest
-                    ? {
-                        durationSec: restSec,
-                        startedAt: nowMs,
-                        endsAt: nowMs + restSec * 1000,
-                        exerciseId: exercise.id,
-                        exerciseName: exercise.name,
-                        setIndex,
-                        key: (s.rest?.key ?? 0) + 1,
-                    }
+                const rest = wantsRest
+                    ? createRestState(
+                        restSec,
+                        {
+                            exerciseId: exercise.id,
+                            exerciseName: exercise.name,
+                            setIndex,
+                        },
+                        (s.rest?.key ?? 0) + 1,
+                        nowMs,
+                    )
                     : s.rest
                 const restEvents = wantsRest && s.rest
                     ? [...(s.restEvents ?? []), restToEvent(s.rest, nowMs >= s.rest.endsAt ? 'completed' : 'replaced', nowMs)]
@@ -734,7 +829,7 @@ export function useWorkoutSession(
                 return { ...s, startedAt, logsByExerciseId, rest, restEvents, activeSet }
             })
         },
-        [],
+        [setSession],
     )
 
     const undoSet = React.useCallback((exerciseId: string, setIndex: number) => {
@@ -755,7 +850,7 @@ export function useWorkoutSession(
                 },
             }
         })
-    }, [])
+    }, [setSession])
 
     const startSet = React.useCallback<WorkoutSessionApi['startSet']>((exercise, setIndex) => {
         const nowMs = Date.now()
@@ -777,7 +872,7 @@ export function useWorkoutSession(
                 },
             }
         })
-    }, [])
+    }, [setSession])
 
     const finishActiveSet = React.useCallback(() => {
         setSession((s) => {
@@ -790,11 +885,11 @@ export function useWorkoutSession(
                 },
             }
         })
-    }, [])
+    }, [setSession])
 
     const cancelActiveSet = React.useCallback(() => {
         setSession((s) => ({ ...s, activeSet: undefined }))
-    }, [])
+    }, [setSession])
 
     const isNextSet = React.useCallback<WorkoutSessionApi['isNextSet']>(
         (exerciseId, setIndex) => nextSet?.exerciseId === exerciseId && nextSet.setIndex === setIndex,
@@ -827,7 +922,7 @@ export function useWorkoutSession(
                 logsByExerciseId,
             }
         })
-    }, [])
+    }, [setSession])
 
     const skipSet = React.useCallback<WorkoutSessionApi['skipSet']>(
         (exerciseId, setIndex, reason) => {
@@ -849,7 +944,7 @@ export function useWorkoutSession(
                 },
             }
         })
-    }, [])
+    }, [setSession])
 
     const setNote = React.useCallback<WorkoutSessionApi['setNote']>((exerciseId, setIndex, note) => {
         const cleanNote = note?.trim() || undefined
@@ -869,7 +964,7 @@ export function useWorkoutSession(
                 },
             }
         })
-    }, [])
+    }, [setSession])
 
     const addSet = React.useCallback<WorkoutSessionApi['addSet']>(
         (exercise, plannedSet) => {
@@ -892,7 +987,7 @@ export function useWorkoutSession(
                 }
             })
         },
-        [],
+        [setSession],
     )
 
     const addExercise = React.useCallback<WorkoutSessionApi['addExercise']>(
@@ -914,7 +1009,7 @@ export function useWorkoutSession(
                 }
             })
         },
-        [workout],
+        [workout, setSession],
     )
 
     const startRest = React.useCallback<WorkoutSessionApi['startRest']>((durationSec, label) => {
@@ -925,18 +1020,10 @@ export function useWorkoutSession(
                 : s
             return {
                 ...withRestClosed,
-                rest: {
-                    durationSec,
-                    startedAt: nowMs,
-                    endsAt: nowMs + durationSec * 1000,
-                    exerciseId: label.exerciseId,
-                    exerciseName: label.exerciseName,
-                    setIndex: label.setIndex,
-                    key: (s.rest?.key ?? 0) + 1,
-                },
+                rest: createRestState(durationSec, label, (s.rest?.key ?? 0) + 1, nowMs),
             }
         })
-    }, [])
+    }, [setSession])
 
     const adjustRest = React.useCallback((deltaSec: number) => {
         setSession((s) => {
@@ -955,11 +1042,15 @@ export function useWorkoutSession(
                 },
             }
         })
-    }, [])
+    }, [setSession])
 
     const skipRest = React.useCallback(() => {
-        setSession((s) => finishRest(s, 'skipped'))
-    }, [])
+        const nowMs = Date.now()
+        setSession((s) => {
+            if (!s.rest) return s
+            return finishRest(s, nowMs >= s.rest.endsAt ? 'completed' : 'skipped', nowMs)
+        })
+    }, [setSession])
 
     const getLogged = React.useCallback(
         (exerciseId: string, setIndex: number): LoggedSet | undefined => {
@@ -967,26 +1058,6 @@ export function useWorkoutSession(
         },
         [session.logsByExerciseId],
     )
-
-    // Auto-clear expired rest state on mount and every ~30s — defense against
-    // a stale rest persisting after a page reload past its endsAt.
-    React.useEffect(() => {
-        const checkExpiry = () => {
-            setSession((s) => {
-                if (!s.rest) return s
-                // Keep the rest visible for 30s after it expires (so the user
-                // sees "Rest done!" even if they were focused elsewhere), then
-                // clear automatically.
-                if (s.rest.endsAt < Date.now() - 30_000) {
-                    return finishRest(s, 'completed', s.rest.endsAt)
-                }
-                return s
-            })
-        }
-        checkExpiry()
-        const id = window.setInterval(checkExpiry, 30_000)
-        return () => window.clearInterval(id)
-    }, [])
 
     return {
         session,
@@ -1047,6 +1118,12 @@ export function isNewPersonalBest(
                 }
             }
             return false
+        }
+        case 'resistance': {
+            if (logged.actualLoad === undefined || logged.actualReps === undefined) return false
+            if (pb.load === undefined || pb.reps === undefined) return false
+            return logged.actualLoad > pb.load
+                || (logged.actualLoad === pb.load && logged.actualReps > pb.reps)
         }
         case 'bodyweight': {
             if (logged.actualReps === undefined || pb.reps === undefined) return false

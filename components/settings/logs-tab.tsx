@@ -731,9 +731,16 @@ function LogChatTranscript({
                 {error && !assistantMessage.content && !hasReasoning(assistantMessage) && (
                     <div className="text-[13px] text-destructive">{error}</div>
                 )}
-                {userMessage && <MessageBubble message={userMessage} compact />}
+                {userMessage && (
+                    <MessageBubble
+                        message={userMessage}
+                        conversationId={row.conversationId}
+                        compact
+                    />
+                )}
                 <MessageBubble
                     message={assistantMessage}
+                    conversationId={row.conversationId}
                     compact
                     isLatestAssistantMessage
                     isStreamingMessage={row.status === "streaming"}

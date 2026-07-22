@@ -8,6 +8,7 @@ import type { BrowserCoordinateSpace, BrowserDownloadFile } from './browser';
 import { formatBrowserAgentTextForLog, redactBrowserAgentText } from './redaction';
 import { getConfiguredTimezone } from '@/lib/config';
 import { formatDateTimeInTimezone } from '@/lib/timezone';
+import { formatBrowserAgentActionUnion, getBrowserAgentPromptActions } from './capabilities';
 
 /**
  * Per-session memory block. Kept OUT of buildSystemPrompt so the system prompt
@@ -48,12 +49,10 @@ export function buildSystemPrompt(
    const timezone = getConfiguredTimezone();
    const dateString = now.toLocaleDateString('ro-RO', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: timezone });
    const localTime = formatDateTimeInTimezone(now, timezone);
-   const baseActions = '"click" | "type" | "key" | "scroll" | "scrollToBottom" | "undo" | "wait" | "waitFor" | "navigate" | "hold" | "drag" | "hover" | "inspectPage" | "inspectAt" | "readPage" | "selectOption" | "setChecked" | "chooseFile" | "dropFiles" | "uploadFile" | "listPageAssets" | "downloadMedia" | "findInPage" | "inspectDiagnostics" | "fetchUrl" | "screenshot" | "recordVideo" | "setViewport" | "closeTab" | "refresh" | "getCurrentUrl" | "getLink" | "pasteLink" | "readClipboard" | "clear" | "goBack" | "goForward" | "listTabs" | "switchTab" | "newTab" | "listDownloads" | "waitForDownloads"';
-   const responseActionList = isAdvancedMode
-      ? `${baseActions} | "ask" | "yield_control"`
-      : escalationEnabled
-         ? `${baseActions} | "done" | "ask" | "error" | "escalate"`
-         : `${baseActions} | "done" | "ask" | "error"`;
+   const responseActionList = formatBrowserAgentActionUnion(getBrowserAgentPromptActions({
+      advancedMode: isAdvancedMode,
+      escalationEnabled,
+   }));
    const modeSpecificActionDocs = isAdvancedMode
       ? `- **ask**: Ask the user for clarification.
 - **yield_control**: Yield control back to the Base Model. Use this when you have cleared the blocker and normal automation can resume. Never return \`escalate\` while in advanced mode.`
@@ -184,7 +183,7 @@ ${coordinateInstructions}
 - **drag**: Click and drag from (x, y) to a second coordinate. Specify \`coordinate\` as start and \`coordinateEnd\` as the destination. You may also specify \`durationMs\` to control drag speed. Useful for sliders, drag-and-drop, and resizing. Do not use drag to scroll the page.
 - **hold**: Long press at (x, y) for a specific duration. Specify \`durationMs\`.
 ${inspectPageDoc}
-- **readPage / inspectAt**: \`readPage\` inventories interactive controls across frames and open shadow roots as short refs such as \`e12\`; \`inspectAt\` identifies the element under one coordinate and returns a ref, metadata, and bounds. Refs go stale after navigation or major DOM changes. Use \`click\`, \`type\`, \`key\`, \`hover\`, \`scroll\`, or \`clear\` with \`ref\`; rerun inspection when a ref is stale.
+- **readPage / inspectAt**: \`readPage\` inventories interactive controls across frames and open shadow roots as short refs such as \`e12\`; \`inspectAt\` identifies the element under one coordinate and returns a ref, metadata, and bounds. Refs go stale after navigation or major DOM changes. Use \`click\`, \`type\`, \`key\`, \`hover\`, \`scroll\`, or \`clear\` with \`ref\`; \`clickRef\` remains an explicit click-only alias. Rerun inspection when a ref is stale.
 - **selectOption / setChecked**: Set native selects or checkbox/radio state by fresh \`ref\`. Provide \`optionValues\` or \`checked\`; the runtime verifies the resulting state.
 - **chooseFile**: Preferred upload action. After the correct upload modal/form is visibly open, provide one workspace-relative \`path\` or atomic \`paths\` list plus the visible chooser button/control as a fresh \`ref\` or \`coordinate\`. The runtime clicks that exact visible control, intercepts the file chooser it opens, and assigns the validated file(s) without exposing an OS dialog. This disambiguates pages with many file inputs.
 - **dropFiles**: For a visible dropzone that genuinely expects dragged files, provide its fresh \`ref\` (use \`inspectAt\` on the visible dropzone if needed) plus \`path\`/\`paths\`. The runtime dispatches a real file drop. Do not use it on an ordinary button.
@@ -265,6 +264,8 @@ Manage tabs like a person would — check OPEN TABS before acting:
 ## 🛑 STOP & THINK: HISTORY CHECK
 ${loopDetectionRule}
 2. **Scroll if needed**: If you don't see what you need, scroll.
+   - Every frame includes semantic document-scroll metadata: scroll percentage, visible document range, remaining content, and top/bottom flags. Use it instead of guessing from the screenshot. If it says scroll is unknown, do not invent a position.
+   - After a targeted scroll, ACTION HISTORY reports the surface that actually moved (document or internal element) and that target's position. Use that result to avoid scrolling the wrong panel or repeating input at an edge.
 3. **Handle Stuck States**: If a coordinate click misses twice, use \`inspectAt\` or \`readPage\` and target a fresh ref. If a ref fails or the surface is canvas/native/closed-shadow UI, return to visible coordinates. For unfinished, blank, loading, or repeatedly wrong states, try one materially different route such as closing an overlay, targeted \`waitFor\`, search, diagnostics, refresh, or direct navigation; then report the blocker instead of looping.
 4. **Long Task Continuity**: Treat earlier action summaries as completed work. Do not restart from the original checklist just because the task is long; verify the current file/page and continue from the latest unfinished step.
 5. **Learn from Mistakes**: If you correct an error or find a workaround, add a "memory" field to your JSON.

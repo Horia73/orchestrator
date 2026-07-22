@@ -218,6 +218,24 @@ const rich = {
                         { distanceM: 1000, targetMetric: '6:00/km' },
                     ],
                 },
+                {
+                    id: 'kinesis-chest-press',
+                    name: 'Kinesis Chest Press',
+                    kind: 'resistance',
+                    loadUnit: 'level',
+                    equipment: ['machine', 'cable'],
+                    muscleGroups: ['chest', 'triceps'],
+                    previous: {
+                        date: '2026-05-20',
+                        bestSet: { load: 6, reps: 10 },
+                        allSets: [{ load: 6, reps: 10 }],
+                    },
+                    personalBest: { load: 7, reps: 8, achievedAt: '2026-05-20' },
+                    planned: [
+                        { load: 6, reps: 10 },
+                        { load: 6, reps: 10 },
+                    ],
+                },
             ],
         },
     ],
@@ -228,13 +246,16 @@ const rich = {
 
 {
     const r = parseWorkoutArtifact(JSON.stringify(rich))
-    check('schema: rich workout parses (all 7 exercise kinds)', r.ok, r)
+    check('schema: rich workout parses (all 8 exercise kinds)', r.ok, r)
     if (r.ok) {
         check('schema: superset preserved', r.value.groups[1].kind === 'superset')
         check('schema: previous snapshot intact', r.value.groups[0].exercises[0].previous?.allSets?.length === 3)
         check('schema: PB present', r.value.groups[0].exercises[0].personalBest?.weightKg === 65)
         check('schema: warmup checklist parsed', r.value.warmup?.items.length === 3)
         check('schema: interval rounds preserved', (r.value.groups[2].exercises[3].planned[0] as { rounds: number }).rounds === 8)
+        const kinesis = r.value.groups[2].exercises[6]
+        check('schema: non-kg resistance unit preserved', kinesis.kind === 'resistance' && kinesis.loadUnit === 'level')
+        check('schema: resistance load preserved', kinesis.kind === 'resistance' && kinesis.planned[0].load === 6)
     }
 }
 
@@ -249,6 +270,24 @@ const rich = {
     const bad = { ...minimal, title: '' }
     const r = parseWorkoutArtifact(JSON.stringify(bad))
     check('schema: empty title rejected', !r.ok && r.error.startsWith('title:'))
+}
+
+{
+    const bad = {
+        ...minimal,
+        groups: [{
+            kind: 'straight',
+            exercises: [{
+                id: 'kinesis-row',
+                name: 'Kinesis Row',
+                kind: 'resistance',
+                muscleGroups: ['lats'],
+                planned: [{ load: 5, reps: 10 }],
+            }],
+        }],
+    }
+    const r = parseWorkoutArtifact(JSON.stringify(bad))
+    check('schema: resistance exercise requires loadUnit', !r.ok, r)
 }
 
 {

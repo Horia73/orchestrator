@@ -2,7 +2,7 @@ import type { IPty } from 'node-pty'
 
 import type { ToolDef, ToolExecutionContext, ToolResult } from '@/lib/ai/agents/types'
 import { MAX_TOOL_DELTA_TEXT_CHARS } from '@/lib/ai/reasoning-limits'
-import { augmentedEnv } from '@/lib/cli/resolve-bin'
+import { agentCommandEnv } from '@/lib/cli/resolve-bin'
 
 import {
     createSecretStreamRedactor,
@@ -248,7 +248,7 @@ async function runRemotePhase(input: {
                 // Deliberately do not inject the sudo secret into the SSH
                 // process environment. It exists only long enough to answer
                 // the exact private sudo prompt below.
-                env: augmentedEnv(process.env) as Record<string, string>,
+                env: agentCommandEnv() as Record<string, string>,
             }) as IPty
         } catch (err) {
             clearTimeout(timer)

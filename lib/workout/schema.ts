@@ -61,8 +61,9 @@ function coerceRepRange(value: unknown): unknown {
 // Design choices that lock the shape in early so it can be versioned cleanly:
 //
 //   - Exercise.kind is a discriminated union. A barbell bench press has
-//     `weightKg` + `reps`; a plank has `durationSec`; an interval run has
-//     `workSec`/`restSec`/`rounds`. Putting one shape with everything
+//     `weightKg` + `reps`; a Kinesis/proprietary machine can use a numeric
+//     `load` with its own `loadUnit`; a plank has `durationSec`; an interval
+//     run has `workSec`/`restSec`/`rounds`. Putting one shape with everything
 //     optional pushed bugs into the renderer ("why is durationSec showing
 //     on bench press?"). The union forces the model to pick a kind and
 //     emit only the fields that make sense.
@@ -305,6 +306,16 @@ const WeightedBwPlannedSetSchema = PlannedSetBaseSchema.extend({
     reps: RepRangeSchema,
 })
 
+/** Machine/cable resistance that is expressed as a level, plate number, or
+ * another device-specific scale rather than a real kg/lb load. The unit lives
+ * on the exercise so it stays consistent across sets. */
+const ResistancePlannedSetSchema = PlannedSetBaseSchema.extend({
+    /** Numeric setting shown by the machine (e.g. Kinesis level 6). Optional
+     *  when the user is choosing resistance by feel/RPE during the first run. */
+    load: num(z.number().min(0).max(1_000_000)).optional(),
+    reps: RepRangeSchema,
+})
+
 /** Isometric hold: plank, hollow hold, L-sit, wall sit. */
 const HoldPlannedSetSchema = PlannedSetBaseSchema.extend({
     /** Hold duration in seconds. */
@@ -345,6 +356,7 @@ export type PlannedSet =
     | z.infer<typeof WeightedPlannedSetSchema>
     | z.infer<typeof BodyweightPlannedSetSchema>
     | z.infer<typeof WeightedBwPlannedSetSchema>
+    | z.infer<typeof ResistancePlannedSetSchema>
     | z.infer<typeof HoldPlannedSetSchema>
     | z.infer<typeof CardioDurPlannedSetSchema>
     | z.infer<typeof CardioDistPlannedSetSchema>
@@ -363,6 +375,9 @@ export const LoggedSetSchema = z.object({
     actualReps: z.number().int().min(0).max(1000).optional(),
     /** Actual weight loaded. For weighted_bw, negative = assistance. */
     actualWeightKg: z.number().min(-500).max(2000).optional(),
+    /** Actual device-specific resistance/load setting for `resistance`
+     *  exercises. This is deliberately not counted as kg/lb tonnage. */
+    actualLoad: z.number().min(0).max(1_000_000).optional(),
     /** Actual hold time. */
     actualDurationSec: z.number().int().min(0).max(36000).optional(),
     /** Actual distance covered. */
@@ -422,6 +437,7 @@ export const PreviousSessionSnapshotSchema = z.object({
      *  for weighted, longest hold, fastest pace, etc.). */
     bestSet: z.object({
         weightKg: num(z.number()).optional(),
+        load: num(z.number()).optional(),
         reps: num(z.number().int()).optional(),
         durationSec: num(z.number().int()).optional(),
         distanceM: num(z.number()).optional(),
@@ -430,6 +446,7 @@ export const PreviousSessionSnapshotSchema = z.object({
     /** All sets from that session, for compact "60/60/57 × 8/8/7" display. */
     allSets: z.array(z.object({
         weightKg: num(z.number()).optional(),
+        load: num(z.number()).optional(),
         reps: num(z.number().int()).optional(),
         durationSec: num(z.number().int()).optional(),
         distanceM: num(z.number()).optional(),
@@ -444,6 +461,7 @@ export type PreviousSessionSnapshot = z.infer<typeof PreviousSessionSnapshotSche
  */
 export const PersonalBestSchema = z.object({
     weightKg: num(z.number()).optional(),
+    load: num(z.number()).optional(),
     reps: num(z.number().int()).optional(),
     durationSec: num(z.number().int()).optional(),
     distanceM: num(z.number()).optional(),
@@ -521,6 +539,15 @@ const WeightedBwExerciseSchema = ExerciseBaseSchema.extend({
     planned: z.array(WeightedBwPlannedSetSchema).min(1).max(40),
 })
 
+/** Proprietary/non-calibrated machine resistance. `loadUnit` is a short label
+ * rendered verbatim ("level", "plate", "%", etc.); values are never
+ * mislabeled or aggregated as kg/lb. */
+const ResistanceExerciseSchema = ExerciseBaseSchema.extend({
+    kind: z.literal('resistance'),
+    loadUnit: z.string().trim().min(1).max(24),
+    planned: z.array(ResistancePlannedSetSchema).min(1).max(40),
+})
+
 /** Hold / isometric exercises. */
 const HoldExerciseSchema = ExerciseBaseSchema.extend({
     kind: z.literal('hold'),
@@ -549,6 +576,7 @@ export const ExerciseSchema = z.discriminatedUnion('kind', [
     WeightedExerciseSchema,
     BodyweightExerciseSchema,
     WeightedBwExerciseSchema,
+    ResistanceExerciseSchema,
     HoldExerciseSchema,
     CardioDurExerciseSchema,
     CardioDistExerciseSchema,

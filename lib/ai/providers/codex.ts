@@ -80,7 +80,10 @@ export class CodexProvider implements AIProvider {
     }
 
     async stream(options: ProviderSendOptions, cb: StreamCallbacks): Promise<void> {
-        const tools = customToolsForCodex(options.tools ?? [])
+        const tools = customToolsForCodex(
+            options.tools ?? [],
+            options.builtins ?? [],
+        )
         const isNativeCoderRun =
             options.toolContext?.callerAgentId === 'coder' &&
             tools.length === 0 &&
@@ -139,6 +142,8 @@ interface RunCodexAppServerArgs {
     cwd?: string
     signal?: AbortSignal
     callbacks: StreamCallbacks
+    /** Test-hook-only child env additions; production provider calls omit it. */
+    spawnEnv?: Record<string, string | undefined>
 }
 
 const APP_SERVER_SESSION_PREFIX = 'appserver:'
@@ -147,7 +152,7 @@ const APP_SERVER_SESSION_PREFIX = 'appserver:'
 // sessions then start fresh and latestUserPromptWithPortableHistory carries the
 // Orchestrator conversation across. Promptless native Coder sessions keep the
 // generic prefix and remain resumable.
-const MANAGED_APP_SERVER_SESSION_PREFIX = 'appserver:managed-policy-v3:'
+const MANAGED_APP_SERVER_SESSION_PREFIX = 'appserver:managed-policy-v5:'
 const LEGACY_DIRECT_TOOL_SESSION_PREFIX = 'appserver:direct:'
 const JSON_RPC_REQUEST_TIMEOUT_MS = 60_000
 const CODEX_RECONNECTING_NOTICE_RE = /^Reconnecting(?:\.{3}|…)\s+\d+\/\d+$/i
@@ -193,6 +198,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
         cwd,
         signal,
         callbacks,
+        spawnEnv,
     } = args
 
     return new Promise<void>(resolve => {
@@ -203,7 +209,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
         try {
             proc = spawn(resolved, procArgs, {
                 stdio: ['pipe', 'pipe', 'pipe'],
-                env: codexCliEnv(),
+                env: codexCliEnv(spawnEnv),
                 cwd: cwd ?? activeRuntimePaths().agentWorkspaceDir,
             })
         } catch (err) {
@@ -1086,19 +1092,21 @@ function buildThreadParams(args: {
                 },
                 shell_tool: allowShell,
                 multi_agent: false,
+                multi_agent_v2: {
+                    // Keep Codex-native agents disabled while replacing the
+                    // provider's explicit-request-only developer message with
+                    // Orchestrator's standing authorization for its own
+                    // delegate_to/delegate_parallel specialists. Codex reads
+                    // this policy only from features.multi_agent_v2.
+                    enabled: false,
+                    multi_agent_mode_hint_text: ORCHESTRATOR_MULTI_AGENT_MODE_HINT,
+                },
                 apps: false,
                 plugins: false,
                 skills: false,
             },
             apps: {
                 _default: { enabled: false },
-            },
-            multi_agent_v2: {
-                // Codex 0.144+ otherwise injects an explicit-request-only
-                // developer message for every non-Ultra run. That policy is
-                // for Codex-native agents; managed runs must instead follow
-                // Orchestrator's own delegation and browser-agent policies.
-                multi_agent_mode_hint_text: ORCHESTRATOR_MULTI_AGENT_MODE_HINT,
             },
             web_search: allowWebSearch ? 'live' : 'disabled',
         }

@@ -1,23 +1,15 @@
-import type { ToolDef } from '@/lib/ai/agents/types'
+import type { ProviderBuiltin, ToolDef } from '@/lib/ai/agents/types'
+import { removeNativeBuiltinToolDuplicates } from '@/lib/ai/tools/registry'
 import type { ContextUsageSnapshot, TokenUsageBreakdown } from '@/lib/types'
 
 export interface AnyObj { [k: string]: unknown }
 
-export function customToolsForCodex(tools: ToolDef[]): ToolDef[] {
-    return tools.filter(tool => !CODEX_NATIVE_DUPLICATE_TOOL_IDS.has(tool.id))
+export function customToolsForCodex(
+    tools: ToolDef[],
+    builtins: ProviderBuiltin[] = [],
+): ToolDef[] {
+    return removeNativeBuiltinToolDuplicates(tools, builtins)
 }
-
-const CODEX_NATIVE_DUPLICATE_TOOL_IDS = new Set([
-    'list_dir',
-    'read_file',
-    'Read',
-    'Write',
-    'Edit',
-    'Bash',
-    'Glob',
-    'Grep',
-    'TodoWrite',
-])
 
 export function toRecord(v: unknown): Record<string, unknown> {
     return v && typeof v === 'object' && !Array.isArray(v)

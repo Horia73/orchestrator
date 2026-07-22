@@ -3,6 +3,7 @@ import {
     listExerciseHistoryIds,
     listRecentSessionSlugs,
     readExerciseHistory,
+    readExerciseImage,
     readSessionLog,
 } from '@/lib/workout/storage'
 import { estimated1RM } from '@/lib/workout/one-rep-max'
@@ -35,8 +36,8 @@ export const getExerciseHistoryTool: ToolDef = {
     description: [
         'Look up the user\'s history for a specific exercise (e.g. "bench-press", "front-squat") to populate `previous` and `personalBest` on the next workout artifact.',
         'Call this for EVERY exercise you intend to include in a workout BEFORE emitting the artifact, so the user sees "Last 60×8 @ RPE 8" context and the renderer can highlight new PRs.',
-        'Returns the personal best, the last few sessions with all sets, set durations, rest periods after sets, average RPE, notes/comments, failures, partial reps, and an estimated 1RM. Read timing, notes, and failed sets before progressing weight; rushed/overlong rests, pain/form-breakdown notes, and repeated high-RPE failures should affect advice.',
-        'Returns `found: false` if the exercise has no recorded history — that\'s a "first time doing this" signal; pick a conservative starting weight (RPE 7).',
+        'Returns the canonical reusable exercise template, its verified image (when saved), personal best, and the last few sessions with all sets/timing/rest/RPE/notes/failures. Reuse the template as-is and change only planned sets/progression/history snapshots for the new session.',
+        'Returns `found: false` if the exercise has no recorded history — that\'s a "first time doing this" signal; pick a conservative first target (RPE 7), using the machine\'s real unit rather than kg when applicable.',
         'Exercise IDs are kebab-case slugs ("bench-press", "rdl", "ohp"). Use the same slug here that you put in the artifact\'s `exercises[].id` field.',
     ].join(' '),
     input_schema: {
@@ -62,6 +63,7 @@ export const listExerciseHistoryTool: ToolDef = {
     description: [
         'List all exercise IDs the user has any logged history for, plus the date of their most recent session at each.',
         'Useful when the user asks for "my usual workout" or you want to bias exercise selection toward moves the user already has progression data on.',
+        'Each entry includes the canonical reusable exercise template and its verified image when one is saved; preserve those fields and change only the new run\'s plan/progression/history snapshots.',
         'Returns up to 200 entries — exercises are pruned only on explicit user request.',
     ].join(' '),
     input_schema: {
@@ -103,13 +105,15 @@ export async function executeGetExerciseHistory(args: Record<string, unknown>): 
     const limit = Math.max(1, Math.min(12, Math.floor(limitRaw)))
 
     const history = readExerciseHistory(exerciseId)
+    const savedImage = readExerciseImage(exerciseId)
     if (!history) {
         return {
             success: true,
             data: {
                 exerciseId,
                 found: false,
-                message: 'No prior history — first time recording this exercise. Pick a conservative starting weight (RPE 7).',
+                verifiedImage: savedImage ? verifiedImageForTool(savedImage) : null,
+                message: 'No prior history — first time recording this exercise. Pick a conservative first target (RPE 7) in the exercise\'s real unit.',
             },
         }
     }
@@ -129,6 +133,7 @@ export async function executeGetExerciseHistory(args: Record<string, unknown>): 
             title: s.title,
             bestSet: {
                 weightKg: s.bestSet.actualWeightKg,
+                load: s.bestSet.actualLoad,
                 reps: s.bestSet.actualReps,
                 durationSec: s.bestSet.actualDurationSec,
                 distanceM: s.bestSet.actualDistanceM,
@@ -137,6 +142,7 @@ export async function executeGetExerciseHistory(args: Record<string, unknown>): 
             },
             allSets: s.allSets.map((set) => ({
                 weightKg: set.actualWeightKg,
+                load: set.actualLoad,
                 reps: set.actualReps,
                 durationSec: set.actualDurationSec,
                 distanceM: set.actualDistanceM,
@@ -178,10 +184,12 @@ export async function executeGetExerciseHistory(args: Record<string, unknown>): 
             name: history.name,
             kind: history.kind,
             muscleGroups: history.muscleGroups,
+            exerciseTemplate: exerciseTemplateForTool(history, savedImage?.url),
+            verifiedImage: savedImage ? verifiedImageForTool(savedImage) : null,
             personalBest: history.personalBest,
             sessions,
             updatedAt: history.updatedAt,
-            hint: 'When generating the next workout, copy personalBest into `exercises[].personalBest` and the latest session into `exercises[].previous`. Apply the progression rule to suggest the next target.',
+            hint: 'Reuse `exerciseTemplate` instead of recreating exercise metadata. Add the new `planned` sets, copy personalBest and the latest session into `previous`, and apply progression. If verifiedImage is present, its URL is already included in the template; do not search again.',
         },
     }
 }
@@ -192,11 +200,14 @@ export async function executeListExerciseHistory(): Promise<ToolResult> {
         const h = readExerciseHistory(id)
         if (!h) return null
         const latest = h.sessions[0]
+        const savedImage = readExerciseImage(id)
         return {
             id,
             name: h.name,
             kind: h.kind,
             muscleGroups: h.muscleGroups,
+            exerciseTemplate: exerciseTemplateForTool(h, savedImage?.url),
+            verifiedImage: savedImage ? verifiedImageForTool(savedImage) : null,
             lastSessionDate: latest?.date ?? null,
             personalBest: h.personalBest,
         }
@@ -209,6 +220,31 @@ export async function executeListExerciseHistory(): Promise<ToolResult> {
             exercises: entries.slice(0, 200),
             total: entries.length,
         },
+    }
+}
+
+function exerciseTemplateForTool(
+    history: NonNullable<ReturnType<typeof readExerciseHistory>>,
+    verifiedImageUrl?: string,
+) {
+    const template = history.definition ?? {
+        id: history.id,
+        name: history.name,
+        kind: history.kind,
+        muscleGroups: history.muscleGroups,
+    }
+    return {
+        ...template,
+        ...(verifiedImageUrl ? { imageUrl: verifiedImageUrl } : {}),
+    }
+}
+
+function verifiedImageForTool(image: NonNullable<ReturnType<typeof readExerciseImage>>) {
+    return {
+        url: image.url,
+        source: image.source,
+        note: image.note,
+        verifiedAt: image.verifiedAt,
     }
 }
 

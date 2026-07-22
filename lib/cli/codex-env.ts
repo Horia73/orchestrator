@@ -3,7 +3,7 @@ import os from 'os'
 import path from 'path'
 
 import { PRIVATE_STATE_DIR } from '@/lib/runtime-paths'
-import { augmentedEnv } from './resolve-bin'
+import { agentCommandEnv } from './resolve-bin'
 
 /**
  * Codex runtime home is SHARED across all profiles, not per-profile.
@@ -81,7 +81,7 @@ export function codexMaintenanceCliEnv(
     }
     fs.mkdirSync(codexHome, { recursive: true })
     return {
-        ...augmentedEnv(extra),
+        ...agentCommandEnv(extra),
         HOME: path.dirname(codexHome),
         CODEX_HOME: codexHome,
     }
@@ -90,7 +90,7 @@ export function codexMaintenanceCliEnv(
 function buildCodexCliEnv(extra?: Record<string, string | undefined>): NodeJS.ProcessEnv {
     const runtimeHome = prepareCodexRuntimeHome()
     return {
-        ...augmentedEnv(extra),
+        ...agentCommandEnv(extra),
         HOME: runtimeHome,
         CODEX_HOME: path.join(runtimeHome, '.codex'),
     }

@@ -8,6 +8,7 @@ import { ArtifactBody } from "@/components/artifacts/artifact-inline"
 import { ArtifactPanel } from "@/components/artifacts/artifact-panel"
 import { ConversationArtifactsProvider } from "@/components/artifacts/use-conversation-artifacts"
 import { WorkoutSurfaceView } from "@/components/workout/workout-surface-view"
+import { useChatStore } from "@/hooks/use-chat-store"
 import type { ArtifactRow } from "@/lib/artifacts/schema"
 import { cn } from "@/lib/utils"
 
@@ -19,8 +20,9 @@ export default function ArtifactFullscreenPage() {
     const params = useParams<{ id: string }>()
     const router = useRouter()
     const searchParams = useSearchParams()
-    // Entry point that opened this viewer. `from=library` makes back/close
-    // return to the Library tab the user came from instead of the source chat.
+    const { newChat } = useChatStore()
+    // Entry point that opened this viewer. Used only as the safe Back fallback
+    // when there is no browser history entry to return to.
     const from = searchParams?.get("from") ?? null
     const [artifact, setArtifact] = React.useState<ArtifactPageRow | null>(null)
     const [error, setError] = React.useState<string | null>(null)
@@ -44,16 +46,17 @@ export default function ArtifactFullscreenPage() {
     )
 
     const handleBack = React.useCallback(() => {
-        router.push(returnHref)
+        if (window.history.length > 1) {
+            router.back()
+            return
+        }
+        router.replace(returnHref)
     }, [returnHref, router])
 
     const handleClose = React.useCallback(() => {
-        try {
-            window.close()
-            if (window.closed) return
-        } catch { /* not opened by script */ }
-        router.push(returnHref)
-    }, [returnHref, router])
+        newChat()
+        router.push("/")
+    }, [newChat, router])
 
     if (error) {
         return (

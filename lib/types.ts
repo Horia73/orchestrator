@@ -178,6 +178,30 @@ export interface ContentSegment {
 
 export type MessageStatus = "ok" | "error" | "aborted"
 
+export type MessageSecretKind =
+  | "api_key"
+  | "token"
+  | "password"
+  | "private_key"
+  | "credential"
+
+/**
+ * Safe chat metadata for a credential captured from user input. The value is
+ * deliberately absent: it lives in the profile-private secret vault and is
+ * revealed only through the guarded reveal endpoint.
+ */
+export interface MessageSecretRef {
+  id: string
+  /** Environment key the model can request through ListEnvVars/Bash env_keys. */
+  key: string
+  /** Short user-facing label, normally the environment key. */
+  label: string
+  kind: MessageSecretKind
+  /** Exact marker replacing the raw value in Message.content. */
+  marker: string
+  capturedAt: number
+}
+
 export type InboxReplyActionStyle = "primary" | "secondary" | "destructive"
 
 /**
@@ -263,6 +287,8 @@ export interface SteeredMessageReasoningEntry {
   userMessageId: string
   /** The user text injected into the running turn. */
   content: string
+  /** Captured secrets referenced by marker in content. Values are never here. */
+  secretRefs?: MessageSecretRef[]
   /** Wall-clock injection time. */
   at: number
   /** Elapsed ms since turn start at injection — drives per-section "Worked for" durations. */
@@ -281,6 +307,8 @@ export interface Message {
   id: string
   role: "user" | "assistant"
   content: string
+  /** Secret markers referenced by content; never contains credential values. */
+  secretRefs?: MessageSecretRef[]
   /** Terminal status for assistant messages; absent while progress is still streaming. */
   status?: MessageStatus
   contentSegments?: ContentSegment[]

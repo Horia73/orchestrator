@@ -36,6 +36,7 @@ import { MAX_AGENT_DEPTH } from "@/lib/ai/agents/types"
 import {
   getToolsForAgent,
   getToolsForBuiltins,
+  getAllowedProviderBuiltins,
   resolveProviderToolSurface,
 } from "@/lib/ai/tools/registry"
 import { extractUploadAttachmentsFromContent } from "@/lib/ai/media-assets"
@@ -143,6 +144,11 @@ import { getAiRunAdmissionBlock } from "@/lib/ai/run-admission"
 import { buildArtifactRepairRuntimeAgent } from "@/lib/ai/agents/artifact-repair"
 import { runWithRequestProfile } from "@/lib/profiles/server"
 import { getActiveProfileId } from "@/lib/profiles/context"
+import { runtimeBuiltinsForProvider } from "@/lib/ai/agents/runtime-agent-config"
+import {
+  contentForModel,
+  protectConversationMessages,
+} from "@/lib/secrets/store"
 
 /** Persist in-progress assistant output periodically so reloads can catch up */
 const STREAM_PROGRESS_PERSIST_INTERVAL_MS = 250
@@ -239,8 +245,8 @@ export async function POST(request: Request) {
       const conversationId =
         typeof body.conversationId === "string" ? body.conversationId : ""
       const messageId = typeof body.messageId === "string" ? body.messageId : ""
-      const requestMessages = requestMessagesFromBody(body)
-      if (!conversationId || !messageId || requestMessages.length === 0) {
+      const rawRequestMessages = requestMessagesFromBody(body)
+      if (!conversationId || !messageId || rawRequestMessages.length === 0) {
         return new Response(
           JSON.stringify({
             error: "Missing conversationId, messageId, or messages",
@@ -248,6 +254,7 @@ export async function POST(request: Request) {
           { status: 400 }
         )
       }
+      const requestMessages = protectConversationMessages(rawRequestMessages)
 
       const requestedFollowUpId =
         typeof body.followUpId === "string" && body.followUpId
@@ -312,6 +319,7 @@ export async function POST(request: Request) {
             id: userMessage.id,
             userMessageId: userMessage.id,
             content: userMessage.content,
+            secretRefs: userMessage.secretRefs,
             attachments: userMessage.attachments,
             source: "user",
             queuedAt,
@@ -593,7 +601,9 @@ export async function POST(request: Request) {
           settings.provider !== "openrouter" ||
           providerDef.models[settings.model]?.capabilities.includes("function_calling")
         const requestedBuiltins = modelSupportsFunctionTools
-          ? orchestrator.builtins
+          ? getAllowedProviderBuiltins(
+              runtimeBuiltinsForProvider(orchestrator, settings.provider)
+            )
           : []
         const candidateTools = modelSupportsFunctionTools
           ? filterIntegrationToolExposure(
@@ -1271,7 +1281,9 @@ export async function POST(request: Request) {
               if (!text) return false
               if (Array.isArray(message.attachments) && message.attachments.length > 0)
                 return false
-              const accepted = await steer(text).catch(() => false)
+              const accepted = await steer(
+                contentForModel({ content: text, secretRefs: message.secretRefs })
+              ).catch(() => false)
               if (!accepted) return false
 
               reasoningPhase += 1
@@ -1283,6 +1295,7 @@ export async function POST(request: Request) {
                 phase: reasoningPhase,
                 userMessageId: message.id,
                 content: text,
+                secretRefs: message.secretRefs,
                 at,
                 elapsedMs: elapsedMs(),
               }
@@ -1291,6 +1304,7 @@ export async function POST(request: Request) {
                 id: message.id,
                 role: "user",
                 content: wrapSteeredMessage(text),
+                secretRefs: message.secretRefs,
                 timestamp: at,
               }
               addMessage(conversationId, persistedUser)
@@ -1528,8 +1542,10 @@ export async function POST(request: Request) {
                           includeLocalPath: includeLocalAttachmentContext,
                         })
                       : ""
-                  const messageContent =
-                    typeof m.content === "string" ? m.content : ""
+                  const messageContent = contentForModel({
+                    content: typeof m.content === "string" ? m.content : "",
+                    secretRefs: m.secretRefs,
+                  })
                   const audioContext =
                     m.role === "user"
                       ? (audioContextByMessageId.get(m.id) ?? "")

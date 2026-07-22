@@ -8,6 +8,7 @@ import "@xterm/xterm/css/xterm.css"
 
 import type { ToolCallReasoningEntry } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { enableTerminalTouchScroll } from "@/components/terminal-touch-scroll"
 
 type ParsedData = Record<string, unknown> | null
 
@@ -27,7 +28,10 @@ export function LiveTerminal({
   data: ParsedData
   className?: string
 }) {
-  const streamText = React.useMemo(() => terminalText(entry, data), [entry, data])
+  const streamText = React.useMemo(() => {
+    const hasOutput = entry.deltas?.some((delta) => delta.text.length > 0) || entry.content.length > 0
+    return hasOutput ? terminalText(entry, data) : "No output yet."
+  }, [entry, data])
 
   return (
     <TerminalOutput
@@ -112,6 +116,7 @@ export function TerminalOutput({
     term.loadAddon(fit)
     term.loadAddon(new WebLinksAddon())
     term.open(containerRef.current)
+    const disableTouchScroll = enableTerminalTouchScroll(term, containerRef.current)
     termRef.current = term
     fitRef.current = fit
     try {
@@ -126,6 +131,7 @@ export function TerminalOutput({
         })
       : null
     return () => {
+      disableTouchScroll()
       scrollDisposable?.dispose()
       term.dispose()
       termRef.current = null

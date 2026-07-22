@@ -17,6 +17,10 @@ import { emitChatEvent } from "./events"
 import { initializeDatabaseSchema } from "./db-schema"
 import { getActiveProfileId, runWithProfileContext } from "@/lib/profiles/context"
 import { activeRuntimePaths, runtimePathsForProfile } from "@/lib/runtime-paths"
+import {
+  protectConversationMessages,
+  protectUserMessage,
+} from "@/lib/secrets/store"
 
 const isProductionBuild =
   process.env.ORCHESTRATOR_BUILD === "1" ||
@@ -161,6 +165,7 @@ interface MessageRow {
   conversationId: string
   role: "user" | "assistant"
   content: string
+  secretRefs: string | null
   status: Message["status"] | null
   contentSegments: string | null
   reasoning: string | null
@@ -207,6 +212,7 @@ function messageFromRow(msgRow: MessageRow): Message {
     id: msgRow.id,
     role: msgRow.role,
     content: msgRow.content,
+    secretRefs: parseJsonField<Message["secretRefs"]>(msgRow.secretRefs),
     status: msgRow.status ?? undefined,
     contentSegments: parseJsonField<Message["contentSegments"]>(
       msgRow.contentSegments
@@ -253,6 +259,7 @@ function slimMessageFromRow(msgRow: MessageRow): Message {
     id: msgRow.id,
     role: msgRow.role,
     content: msgRow.content,
+    secretRefs: parseJsonField<Message["secretRefs"]>(msgRow.secretRefs),
     status: msgRow.status ?? undefined,
     thinkingDuration: msgRow.thinkingDuration ?? undefined,
     durationMs: msgRow.durationMs ?? undefined,
@@ -284,6 +291,7 @@ function slimMessageForClient(message: Message): Message {
     id: message.id,
     role: message.role,
     content: message.content,
+    secretRefs: message.secretRefs,
     status: message.status,
     thinkingDuration: message.thinkingDuration,
     durationMs: message.durationMs,
@@ -953,16 +961,20 @@ export function deleteLibraryAttachments(
 }
 
 export function createConversation(conversation: Conversation) {
-  const latestMessage = conversation.messages.reduce<Message | null>(
+  const storedConversation: Conversation = {
+    ...conversation,
+    messages: protectConversationMessages(conversation.messages),
+  }
+  const latestMessage = storedConversation.messages.reduce<Message | null>(
     (latest, message) =>
       !latest || message.timestamp > latest.timestamp ? message : latest,
     null
   )
   const now = Date.now()
   const initialReadAt =
-    conversation.readAt ??
+    storedConversation.readAt ??
     latestMessage?.timestamp ??
-    conversation.createdAt ??
+    storedConversation.createdAt ??
     now
 
   // Idempotent: the chat route and POST /api/conversations both call this in
@@ -978,8 +990,8 @@ export function createConversation(conversation: Conversation) {
     `)
 
   const insertMsg = db.prepare(`
-        INSERT OR IGNORE INTO messages (id, conversationId, role, content, status, contentSegments, reasoning, thinking, thinkingDuration, durationMs, toolCalls, attachments, replyActions, timestamp)
-        VALUES (@id, @conversationId, @role, @content, @status, @contentSegments, @reasoning, @thinking, @thinkingDuration, @durationMs, @toolCalls, @attachments, @replyActions, @timestamp)
+        INSERT OR IGNORE INTO messages (id, conversationId, role, content, secretRefs, status, contentSegments, reasoning, thinking, thinkingDuration, durationMs, toolCalls, attachments, replyActions, timestamp)
+        VALUES (@id, @conversationId, @role, @content, @secretRefs, @status, @contentSegments, @reasoning, @thinking, @thinkingDuration, @durationMs, @toolCalls, @attachments, @replyActions, @timestamp)
     `)
 
   const refreshConversationSummary = db.prepare(`
@@ -1018,7 +1030,7 @@ export function createConversation(conversation: Conversation) {
       lastMessagePreview: compactPreview(latestMessage?.content),
       lastMessageAt: latestMessage?.timestamp ?? null,
       readAt: initialReadAt,
-      archivedAt: conversation.archivedAt ?? null,
+      archivedAt: storedConversation.archivedAt ?? null,
     })
 
     for (const rawMsg of conv.messages) {
@@ -1028,6 +1040,7 @@ export function createConversation(conversation: Conversation) {
         conversationId: conv.id,
         role: msg.role,
         content: msg.content,
+        secretRefs: msg.secretRefs ? JSON.stringify(msg.secretRefs) : null,
         status: msg.status ?? null,
         contentSegments: msg.contentSegments
           ? JSON.stringify(msg.contentSegments)
@@ -1053,7 +1066,7 @@ export function createConversation(conversation: Conversation) {
     return convResult.changes > 0
   })
 
-  const created = transaction(conversation)
+  const created = transaction(storedConversation)
 
   // Only emit on the run that actually inserted — the racing caller would
   // otherwise double-emit and the UI store would dedup-then-flicker.
@@ -1061,16 +1074,16 @@ export function createConversation(conversation: Conversation) {
     emitChatEvent({
       type: "create_conversation",
       payload: {
-        id: conversation.id,
-        title: conversation.title,
-        createdAt: conversation.createdAt,
+        id: storedConversation.id,
+        title: storedConversation.title,
+        createdAt: storedConversation.createdAt,
         updatedAt: now,
-        messages: conversation.messages.map(slimMessageForClient),
-        messageCount: conversation.messages.length,
+        messages: storedConversation.messages.map(slimMessageForClient),
+        messageCount: storedConversation.messages.length,
         lastMessagePreview: compactPreview(latestMessage?.content),
         lastMessageAt: latestMessage?.timestamp ?? undefined,
         readAt: initialReadAt,
-        archivedAt: conversation.archivedAt ?? null,
+        archivedAt: storedConversation.archivedAt ?? null,
       },
     })
   }
@@ -1220,15 +1233,18 @@ export function markConversationUnread(id: string): number {
 }
 
 export function addMessage(conversationId: string, message: Message) {
-  const storedMessage = sanitizeMessageForPersistence(message)
+  const storedMessage = sanitizeMessageForPersistence(
+    protectUserMessage(message).message
+  )
   const existingMessage = db
     .prepare("SELECT id FROM messages WHERE id = ?")
     .get(storedMessage.id) as { id: string } | undefined
   const insertMsg = db.prepare(`
-        INSERT INTO messages (id, conversationId, role, content, status, contentSegments, reasoning, thinking, thinkingDuration, durationMs, toolCalls, attachments, replyActions, timestamp)
-        VALUES (@id, @conversationId, @role, @content, @status, @contentSegments, @reasoning, @thinking, @thinkingDuration, @durationMs, @toolCalls, @attachments, @replyActions, @timestamp)
+        INSERT INTO messages (id, conversationId, role, content, secretRefs, status, contentSegments, reasoning, thinking, thinkingDuration, durationMs, toolCalls, attachments, replyActions, timestamp)
+        VALUES (@id, @conversationId, @role, @content, @secretRefs, @status, @contentSegments, @reasoning, @thinking, @thinkingDuration, @durationMs, @toolCalls, @attachments, @replyActions, @timestamp)
         ON CONFLICT(id) DO UPDATE SET
             content = excluded.content,
+            secretRefs = excluded.secretRefs,
             status = excluded.status,
             contentSegments = excluded.contentSegments,
             reasoning = excluded.reasoning,
@@ -1270,6 +1286,7 @@ export function addMessage(conversationId: string, message: Message) {
       conversationId: convId,
       role: msg.role,
       content: msg.content,
+      secretRefs: msg.secretRefs ? JSON.stringify(msg.secretRefs) : null,
       status: msg.status ?? null,
       contentSegments: msg.contentSegments
         ? JSON.stringify(msg.contentSegments)

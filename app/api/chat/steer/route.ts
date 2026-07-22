@@ -8,6 +8,7 @@ import { getTurnSteering } from "@/lib/chat-steering"
 import { isSteeredMessageContent } from "@/lib/steered-message"
 import { runWithRequestProfile } from "@/lib/profiles/server"
 import { proxyToConversationOwner, shouldProxyToDurableAiWorker } from '@/lib/ai/durable-worker'
+import { protectUserMessage } from "@/lib/secrets/store"
 
 /**
  * Steering: accept a user message while a turn is still streaming.
@@ -52,19 +53,20 @@ export async function POST(request: Request) {
 
     const conversationId =
       typeof body.conversationId === "string" ? body.conversationId : ""
-    const message = (body.message ?? null) as Message | null
+    const rawMessage = (body.message ?? null) as Message | null
     const hasText =
-      typeof message?.content === "string" && message.content.trim().length > 0
+      typeof rawMessage?.content === "string" && rawMessage.content.trim().length > 0
     const hasAttachments =
-      Array.isArray(message?.attachments) && message.attachments.length > 0
+      Array.isArray(rawMessage?.attachments) && rawMessage.attachments.length > 0
     if (
       !conversationId ||
-      !message?.id ||
-      message.role !== "user" ||
+      !rawMessage?.id ||
+      rawMessage.role !== "user" ||
       (!hasText && !hasAttachments)
     ) {
       return NextResponse.json({ error: "Invalid steer payload" }, { status: 400 })
     }
+    const message = protectUserMessage(rawMessage).message
     const conversation = getConversation(conversationId)
     if (!conversation) {
       return NextResponse.json({ error: "Conversation not found" }, { status: 404 })
@@ -117,6 +119,7 @@ export async function POST(request: Request) {
       id: message.id,
       userMessageId: message.id,
       content: typeof message.content === "string" ? message.content : "",
+      secretRefs: message.secretRefs,
       attachments: Array.isArray(message.attachments)
         ? message.attachments
         : undefined,

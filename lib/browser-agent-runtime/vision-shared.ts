@@ -10,9 +10,11 @@ import { ActionTrace, BrowserDownloadFile, BrowserFrameSnapshot } from './browse
 import { ActionHistoryItem, TabInfo, IterationLimitReview } from './prompts';
 import { redactBrowserAgentText } from './redaction';
 import type { MediaResolutionLevel, ThinkingLevel, VisionProvider } from './config';
+import { BROWSER_AGENT_ACTIONS, type BrowserAgentActionName } from './capabilities';
+import { formatBrowserFrameScrollMetadata } from './scroll-state';
 
 export interface AgentAction {
-    action: 'click' | 'type' | 'key' | 'scroll' | 'scrollToBottom' | 'undo' | 'wait' | 'waitFor' | 'navigate' | 'hold' | 'drag' | 'hover' | 'inspectPage' | 'inspectAt' | 'readPage' | 'clickRef' | 'selectOption' | 'setChecked' | 'chooseFile' | 'dropFiles' | 'uploadFile' | 'listPageAssets' | 'downloadMedia' | 'findInPage' | 'inspectDiagnostics' | 'fetchUrl' | 'screenshot' | 'recordVideo' | 'setViewport' | 'closeTab' | 'refresh' | 'getCurrentUrl' | 'getLink' | 'pasteLink' | 'readClipboard' | 'clear' | 'done' | 'ask' | 'goBack' | 'goForward' | 'listTabs' | 'switchTab' | 'newTab' | 'listDownloads' | 'waitForDownloads' | 'error' | 'escalate' | 'yield_control';
+    action: BrowserAgentActionName;
     sub_objective?: string; // Goal string when escalating task to advanced reasoning model
     coordinate?: [number, number]; // [x, y]
     coordinateEnd?: [number, number]; // [x, y] — end point for drag action
@@ -101,7 +103,7 @@ export type VisionGenerateResponse = { text?: string; usageMetadata?: unknown };
 export const MAX_JSON_PARSE_RETRIES = 3;
 const MAX_MODEL_RESPONSE_LOG_CHARS = 1000;
 
-export const VALID_ACTIONS = ['click', 'type', 'key', 'scroll', 'scrollToBottom', 'undo', 'wait', 'waitFor', 'navigate', 'hold', 'drag', 'hover', 'inspectPage', 'inspectAt', 'readPage', 'clickRef', 'selectOption', 'setChecked', 'chooseFile', 'dropFiles', 'uploadFile', 'listPageAssets', 'downloadMedia', 'findInPage', 'inspectDiagnostics', 'fetchUrl', 'screenshot', 'recordVideo', 'setViewport', 'closeTab', 'refresh', 'getCurrentUrl', 'getLink', 'pasteLink', 'readClipboard', 'clear', 'done', 'ask', 'error', 'goBack', 'goForward', 'listTabs', 'switchTab', 'newTab', 'listDownloads', 'waitForDownloads', 'escalate', 'yield_control'] as const satisfies readonly AgentAction['action'][];
+export const VALID_ACTIONS = BROWSER_AGENT_ACTIONS satisfies readonly AgentAction['action'][];
 const VALID_ACTION_SET = new Set<string>(VALID_ACTIONS);
 
 export const COORDINATE_JSON_SCHEMA = {
@@ -290,8 +292,9 @@ export function buildVisionParts(
                         ? 'previous-frame'
                         : 'page-frame';
         const imageFileLabel = orderedFrames.length > 1 ? ` (image file: frame-${index + 1}.jpg)` : '';
+        const scrollMetadata = formatBrowserFrameScrollMetadata(currentFrame);
         parts.push({
-            text: `Frame ${index + 1}/${orderedFrames.length}${imageFileLabel}: ${label}\nURL: ${currentFrame.url}\nCapture: ${currentFrame.captureMode}\nCoordinate space: ${coordinateSpaceLabel ?? currentFrame.coordinateSpace ?? 'normalized-viewport'}\nViewport: ${currentFrame.viewport.width}x${currentFrame.viewport.height}\nPage: ${currentFrame.page.width}x${currentFrame.page.height}\nScroll: ${currentFrame.page.scrollX}, ${currentFrame.page.scrollY}\nTimestamp: ${currentFrame.timestamp}`,
+            text: `Frame ${index + 1}/${orderedFrames.length}${imageFileLabel}: ${label}\nURL: ${currentFrame.url}\nCapture: ${currentFrame.captureMode}\nCoordinate space: ${coordinateSpaceLabel ?? currentFrame.coordinateSpace ?? 'normalized-viewport'}\nFrame viewport/display dimensions: ${currentFrame.viewport.width}x${currentFrame.viewport.height}\n${scrollMetadata}\nTimestamp: ${currentFrame.timestamp}`,
         });
         parts.push({
             inlineData: {

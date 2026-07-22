@@ -403,7 +403,11 @@ function RunDetailPane({
                 : "border-border/70 bg-background"
             )}
           >
-            <MessageBubble message={runMessage} compact />
+            <MessageBubble
+              message={runMessage}
+              conversationId={run.conversationId ?? undefined}
+              compact
+            />
           </div>
         </ConversationArtifactsProvider>
         {run.conversationId && (

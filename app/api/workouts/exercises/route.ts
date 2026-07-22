@@ -21,6 +21,7 @@ export async function GET() {
                 id,
                 name: h.name,
                 kind: h.kind,
+                loadUnit: h.definition?.loadUnit,
                 muscleGroups: h.muscleGroups,
                 personalBest: h.personalBest,
                 sessionCount: h.sessions.length,

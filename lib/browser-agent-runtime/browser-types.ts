@@ -55,10 +55,38 @@ export interface BrowserPageSessionCapabilities {
 }
 
 export interface BrowserPageMetrics {
-    width: number;
-    height: number;
-    scrollX: number;
-    scrollY: number;
+    /** DOM measurement truth. `unavailable` must never be presented as zero. */
+    measurement: 'dom' | 'unavailable';
+    width: number | null;
+    height: number | null;
+    /** Visible webpage viewport, which differs from a full display screenshot. */
+    viewportWidth: number | null;
+    viewportHeight: number | null;
+    scrollX: number | null;
+    scrollY: number | null;
+}
+
+export interface BrowserScrollSnapshot {
+    target: 'document' | 'element';
+    label: string;
+    tagName: string;
+    role?: string;
+    name?: string;
+    scrollLeft: number;
+    scrollTop: number;
+    scrollWidth: number;
+    scrollHeight: number;
+    clientWidth: number;
+    clientHeight: number;
+}
+
+export interface BrowserScrollResult {
+    available: boolean;
+    inputMode: 'page' | 'display';
+    changed: boolean;
+    before: BrowserScrollSnapshot | null;
+    after: BrowserScrollSnapshot | null;
+    error?: string;
 }
 
 export interface BrowserFrameSnapshot {
@@ -348,8 +376,8 @@ export interface BrowserPageSession {
     clear(): Promise<void>;
     pressKey(key: string, modifiers?: BrowserKeyModifier[]): Promise<void>;
     findInPage(query: string, next?: boolean): Promise<{ found: boolean; count: number }>;
-    scroll(direction: 'up' | 'down' | 'left' | 'right', amount?: number): Promise<void>;
-    scrollToBottom(): Promise<void>;
+    scroll(direction: 'up' | 'down' | 'left' | 'right', amount?: number): Promise<BrowserScrollResult>;
+    scrollToBottom(): Promise<BrowserScrollResult>;
     undo(): Promise<void>;
     navigate(url: string): Promise<void>;
     goBack(): Promise<void>;

@@ -8,6 +8,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links"
 import "@xterm/xterm/css/xterm.css"
 
 import { cn } from "@/lib/utils"
+import { enableTerminalTouchScroll } from "@/components/terminal-touch-scroll"
 
 interface SessionEvent {
     type: "data" | "exit" | "error"
@@ -84,7 +85,10 @@ export function CliTerminal({ sessionId, onExit, onText, className }: CliTermina
     }, [])
 
     const handleTerminalPointerDown = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-        if (event.pointerType === "mouse" && event.button !== 0) return
+        // Touch gestures are for scrolling; mobile typing uses the dedicated
+        // input below. Focusing xterm here opens the software keyboard mid-drag
+        // and makes the terminal feel locked in place.
+        if (event.pointerType !== "mouse" || event.button !== 0) return
         focusTerminal()
     }, [focusTerminal])
 
@@ -169,6 +173,7 @@ export function CliTerminal({ sessionId, onExit, onText, className }: CliTermina
         term.loadAddon(fit)
         term.loadAddon(links)
         term.open(containerRef.current)
+        const disableTouchScroll = enableTerminalTouchScroll(term, containerRef.current)
         const helperTextarea = containerRef.current.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea")
         if (helperTextarea) {
             helperTextarea.setAttribute("autocapitalize", "none")
@@ -191,6 +196,7 @@ export function CliTerminal({ sessionId, onExit, onText, className }: CliTermina
         })
 
         return () => {
+            disableTouchScroll()
             dataDisposable.dispose()
             term.dispose()
             termRef.current = null

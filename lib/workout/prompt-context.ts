@@ -16,7 +16,12 @@ import { formatDuration, formatRepRange, formatWeight } from './format'
 // Pure / string-only — no React, no I/O. Safe to unit-test.
 // ---------------------------------------------------------------------------
 
-function plannedSetLabel(set: PlannedSet, kind: Exercise['kind'], units: WorkoutUnits): string {
+function plannedSetLabel(
+    set: PlannedSet,
+    kind: Exercise['kind'],
+    units: WorkoutUnits,
+    loadUnit?: string,
+): string {
     const s = set as unknown as Record<string, unknown>
     const tag = typeof s.kind === 'string' && s.kind !== 'working' ? ` (${s.kind})` : ''
     let core: string
@@ -35,6 +40,11 @@ function plannedSetLabel(set: PlannedSet, kind: Exercise['kind'], units: Workout
         case 'bodyweight':
             core = `${formatRepRange(s.reps as never)} reps`
             break
+        case 'resistance': {
+            const load = typeof s.load === 'number' ? s.load : '?'
+            core = `${load} ${loadUnit || 'level'}×${formatRepRange(s.reps as never)}`
+            break
+        }
         case 'hold':
             core = formatDuration(s.durationSec as number)
             break
@@ -68,6 +78,11 @@ function loggedSetLabel(set: LoggedSet | undefined, kind: Exercise['kind'], unit
             break
         case 'bodyweight':
             if (set.actualReps !== undefined) core = `${set.actualReps} reps`
+            break
+        case 'resistance':
+            if (set.actualLoad !== undefined && set.actualReps !== undefined) {
+                core = `${set.actualLoad}×${set.actualReps}`
+            } else if (set.actualReps !== undefined) core = `${set.actualReps} reps`
             break
         case 'hold':
         case 'cardio_dur':
@@ -120,7 +135,14 @@ function exerciseLine(exercise: Exercise, session: WorkoutSessionState, units: W
     const equip = exercise.equipment?.length ? exercise.equipment.join('/') : '—'
     const muscles = exercise.muscleGroups.join(',')
     const rest = exercise.defaultRestSec !== undefined ? `; rest ${exercise.defaultRestSec}s` : ''
-    const planned = exercise.planned.map((s) => plannedSetLabel(s, exercise.kind, units)).join(', ')
+    const planned = exercise.planned.map((s) => {
+        return plannedSetLabel(
+            s,
+            exercise.kind,
+            units,
+            exercise.kind === 'resistance' ? exercise.loadUnit : undefined,
+        )
+    }).join(', ')
     const header = `- ${exercise.name} (id: ${exercise.id}, ${exercise.kind}, ${equip}; ${muscles}): ${exercise.planned.length} sets — ${planned}${rest}`
 
     const log = session.logsByExerciseId[exercise.id]
@@ -129,7 +151,12 @@ function exerciseLine(exercise: Exercise, session: WorkoutSessionState, units: W
         lines.push(`  · exercise skipped by user`)
     } else if (log?.sets?.some((s) => s.completed || s.failed || s.skipped)) {
         const logged = exercise.planned
-            .map((_, i) => loggedSetLabel(log.sets[i], exercise.kind, units))
+            .map((_, i) => {
+                const label = loggedSetLabel(log.sets[i], exercise.kind, units)
+                return exercise.kind === 'resistance' && label.includes('×')
+                    ? label.replace('×', ` ${exercise.loadUnit}×`)
+                    : label
+            })
             .join(' | ')
         lines.push(`  · logged: ${logged}`)
     }

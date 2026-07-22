@@ -171,6 +171,7 @@ export async function triggerFollowUpDrain(profileId: string, conversationId: st
             message: {
                 id: claimed.userMessageId,
                 content: claimed.content,
+                secretRefs: claimed.secretRefs,
                 attachments: claimed.attachments as Message['attachments'],
             },
         })
@@ -204,6 +205,7 @@ export async function sweepOrphanedFollowUps(): Promise<void> {
                 message: {
                     id: claimed.userMessageId,
                     content: claimed.content,
+                    secretRefs: claimed.secretRefs,
                     attachments: claimed.attachments as Message['attachments'],
                 },
             })

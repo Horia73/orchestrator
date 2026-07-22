@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { ArrowUp, AudioLines, Mic, Plus, Sparkles, Square } from "lucide-react"
+import { ArrowUp, AudioLines, Mic, Plus, ShieldCheck, Sparkles, Square } from "lucide-react"
 import { useChatStore } from "@/hooks/use-chat-store"
 import type { SendMessageOptions } from "@/hooks/use-chat-store"
 import { FilePreviewModal } from "@/components/file-preview-modal"
@@ -26,6 +26,7 @@ import {
 } from "@/lib/markdown-list-continuation"
 import { cn } from "@/lib/utils"
 import type { Attachment } from "@/lib/types"
+import { detectSecretCandidates } from "@/lib/secrets/detection"
 
 const CHAT_INPUT_FOCUS_EVENT = "chat-input-focus"
 
@@ -157,6 +158,10 @@ export function ChatInput({
         [activeConversationId, conversations]
     )
     const hasContent = draft.value.trim().length > 0 || draft.attachments.length > 0
+    const detectedSecrets = React.useMemo(
+        () => detectSecretCandidates(draft.value),
+        [draft.value]
+    )
     const hasPendingAttachments = draft.attachments.some(a => a.uploading || a.rendering)
     const hasFailedAttachments = draft.attachments.some(a => a.error && !a.uploaded)
     const isStreamingActiveConversation = Boolean(
@@ -280,6 +285,10 @@ export function ChatInput({
     const handleSubmit = React.useCallback(() => {
         const trimmed = draft.value.trim()
         if ((!trimmed && draft.attachments.length === 0) || hasPendingAttachments || hasFailedAttachments) return
+        const isMobileComposer = isMobileKeyboardViewport()
+        const keepMobileComposerFocused =
+            isMobileComposer &&
+            document.activeElement === textareaRef.current
         const uploadedAttachments = draft.attachments.filter(a => a.uploaded).map(a => a.uploaded!)
         const options = buildResolvedSendOptions(trimmed)
         if (onSend) {
@@ -298,12 +307,30 @@ export function ChatInput({
             )
         }
         draft.clear()
-        if (isMobileKeyboardViewport()) {
-            textareaRef.current?.blur()
-        } else {
+        if (keepMobileComposerFocused) {
+            // Keep the visual viewport stable while the newly-sent row glides
+            // into its top anchor. Closing the iOS keyboard in the same frame
+            // made native smooth scrolling restart against a changing viewport,
+            // which painted as a flash followed by several small jumps.
+            window.requestAnimationFrame(() =>
+                focusWithoutViewportScroll(textareaRef.current)
+            )
+        } else if (!isMobileComposer) {
             focusWithoutViewportScroll(textareaRef.current)
         }
     }, [buildResolvedSendOptions, draft, hasFailedAttachments, hasPendingAttachments, onSend, sendMessage])
+
+    const preserveMobileComposerFocus = React.useCallback(
+        (event: React.PointerEvent<HTMLButtonElement>) => {
+            if (!isMobileKeyboardViewport()) return
+            if (document.activeElement !== textareaRef.current) return
+            // A send-button tap should not transfer focus away from the
+            // textarea before onClick runs; retaining focus keeps the iOS
+            // keyboard and visual viewport steady through the send morph.
+            event.preventDefault()
+        },
+        []
+    )
 
     const handleTextChange = React.useCallback(
         (event: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -462,6 +489,23 @@ export function ChatInput({
                     {isRecording && voice.overlay}
                 </div>
 
+                {detectedSecrets.length > 0 && !isRecording && (
+                    <div
+                        className="mx-4 mb-2 flex items-start gap-2 rounded-lg border border-emerald-700/15 bg-emerald-700/7 px-2.5 py-2 text-xs text-emerald-950 dark:border-emerald-300/15 dark:bg-emerald-300/8 dark:text-emerald-100"
+                        role="status"
+                    >
+                        <ShieldCheck className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+                        <span className="min-w-0">
+                            {detectedSecrets.length === 1 ? "Secret detected" : `${detectedSecrets.length} secrets detected`}
+                            {": will be saved and masked in chat as "}
+                            <span className="font-mono font-medium">
+                                {detectedSecrets.slice(0, 3).map((item) => item.suggestedKey).join(", ")}
+                                {detectedSecrets.length > 3 ? "…" : ""}
+                            </span>
+                        </span>
+                    </div>
+                )}
+
                 <div
                     className={cn(
                         "flex items-center justify-between",
@@ -527,6 +571,7 @@ export function ChatInput({
                                 {isStreamingActiveConversation && hasContent && (
                                     <button
                                         type="button"
+                                        onPointerDown={preserveMobileComposerFocus}
                                         onClick={handleSubmit}
                                         disabled={!canSend}
                                         className={cn(
@@ -551,6 +596,7 @@ export function ChatInput({
                                     ) : hasContent ? (
                                         <button
                                             type="button"
+                                            onPointerDown={preserveMobileComposerFocus}
                                             onClick={handleSubmit}
                                             disabled={!canSend}
                                             className={cn(

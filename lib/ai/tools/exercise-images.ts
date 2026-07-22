@@ -10,20 +10,16 @@ import { searchWorkoutImages } from '@/lib/workout/image-search'
 // ---------------------------------------------------------------------------
 // Verified exercise demo-image tools.
 //
-// The renderer's automatic image resolution (/api/workout-images) fuzzy-matches
-// an exercise name against ExerciseDB / a local photo index / a keyless web
-// search AT RENDER TIME, blind — so it routinely shows the wrong movement. These
-// tools move the decision to the model, ONCE per exercise: search for real
+// The renderer intentionally performs NO automatic fuzzy discovery because a
+// blind match routinely shows the wrong movement. These tools put the decision
+// with the model, ONCE per exercise: search for real
 // candidates, confirm one matches the exact prescribed movement/machine, and
 // persist it. From then on the route serves the saved image for that exercise
 // id and never fuzzy-guesses again.
 //
-// The model cannot see pixels through a tool result (tool results are plain
-// data), so "confirm" means a deliberate match on the candidate's canonical
-// name + equipment given full knowledge of the exercise being prescribed — far
-// stronger than the renderer's blind top-pick. When a candidate must be checked
-// visually, the model can hand the URL to browser_agent; the common case is
-// served by the named-candidate match.
+// Tool results are plain data, so the model must hand the chosen URL to a visual
+// browser/image tool before saving it. Canonical name + equipment narrows the
+// shortlist; pixel-level confirmation is the final gate.
 // ---------------------------------------------------------------------------
 
 export const GET_EXERCISE_IMAGE_TOOL_ID = 'GetExerciseImage'
@@ -38,7 +34,7 @@ export const getExerciseImageTool: ToolDef = {
     description: [
         'Look up the verified demo image already saved for an exercise (by its kebab-case slug, e.g. "chest-press-machine").',
         'Call this FIRST for every exercise before searching — a verified image is saved once and reused forever, so most exercises already have one and need no further work.',
-        'Returns `found: true` with the saved image URL when one exists (bake it into the artifact `exercises[].imageUrl` and move on), or `found: false` when the exercise has no verified image yet — that is your cue to SearchExerciseImages then SaveExerciseImage.',
+        'Returns `found: true` with the saved image URL when one exists (bake it into the artifact `exercises[].imageUrl` and move on), or `found: false` when the exercise has no verified image yet — that is your cue to SearchExerciseImages, visually inspect the best candidate, then SaveExerciseImage.',
     ].join(' '),
     input_schema: {
         type: 'object',
@@ -59,7 +55,7 @@ export const searchExerciseImagesTool: ToolDef = {
     description: [
         'Search for real demo-image/GIF candidates for an exercise so you can pick the ONE that actually depicts the prescribed movement/machine, then persist it with SaveExerciseImage.',
         'Returns two lists: `exerciseDbCandidates` (each carries the exact canonical exercise `name` — match it against the movement + equipment you are prescribing; this is your primary signal) and `webCandidates` (still images from a keyless web search, url + attribution only).',
-        'You cannot see the pixels here — choose by name/equipment fit, not by guessing. If none clearly match, widen or rephrase the query (English movement names match best), or hand a URL to browser_agent to confirm visually. Do NOT save a candidate you are not confident depicts the right exercise.',
+        'Use canonical name/equipment to shortlist, then ALWAYS hand the chosen URL to browser_agent (or another visual image tool) and inspect the pixels before saving. If it is wrong, inspect another result or rephrase the query. Do NOT save an uninspected candidate.',
     ].join(' '),
     input_schema: {
         type: 'object',
@@ -94,8 +90,8 @@ export const saveExerciseImageTool: ToolDef = {
     name: SAVE_EXERCISE_IMAGE_TOOL_ID,
     description: [
         'Persist the verified demo image for an exercise so it is reused across every future session — save it ONCE per exercise/machine.',
-        'Only call this after you are confident the URL depicts the exact prescribed movement (a matching ExerciseDB candidate name, or a URL you confirmed visually). The renderer serves this saved image before any fuzzy fallback.',
-        'Pass the exercise slug and the direct image/GIF URL; include a short `note` describing what confirmed the match (e.g. "ExerciseDB: Cable Lateral Raise, cable machine").',
+        'Only call this after you visually inspected the URL and confirmed it depicts the exact prescribed movement/machine. The renderer serves this saved image and never substitutes a fuzzy fallback.',
+        'Pass the exercise slug and direct image/GIF URL; include a short `note` describing the visual confirmation (e.g. "Inspected GIF: standing cable lateral raise, single handle").',
     ].join(' '),
     input_schema: {
         type: 'object',
@@ -118,10 +114,10 @@ export const saveExerciseImageTool: ToolDef = {
             },
             note: {
                 type: 'string',
-                description: 'Optional short confirmation note explaining why this image matches.',
+                description: 'Required short audit note stating what you visually confirmed in the image/GIF.',
             },
         },
-        required: ['exerciseId', 'url'],
+        required: ['exerciseId', 'url', 'note'],
     },
     tags: ['workout', 'workout-history'],
 }
@@ -144,7 +140,7 @@ export async function executeGetExerciseImage(args: Record<string, unknown>): Pr
             data: {
                 exerciseId,
                 found: false,
-                message: 'No verified image saved yet. Call SearchExerciseImages, pick the candidate that matches this exact movement/machine, then SaveExerciseImage so it is reused forever.',
+                message: 'No verified image saved yet. Call SearchExerciseImages, visually inspect the best candidate, then SaveExerciseImage so it is reused forever.',
             },
         }
     }
@@ -194,7 +190,7 @@ export async function executeSearchExerciseImages(args: Record<string, unknown>)
                 query,
                 exerciseDbCandidates,
                 webCandidates,
-                hint: 'Pick the candidate whose name/equipment matches the exact movement you are prescribing, then call SaveExerciseImage with its url. If nothing matches, rephrase the query or leave the exercise without an image (better than a wrong one).',
+                hint: 'Shortlist by name/equipment, visually inspect the chosen URL, then call SaveExerciseImage. If it is wrong, inspect another candidate or rephrase the query; leaving it blank is better than saving the wrong demo.',
             },
         }
     } catch (err) {
@@ -212,12 +208,16 @@ export async function executeSaveExerciseImage(args: Record<string, unknown>): P
     if (!isSaveableImageUrl(url)) {
         return { success: false, error: 'url must be a direct https image/GIF URL (or an /api/uploads path).' }
     }
+    const note = typeof args.note === 'string' ? args.note.trim().slice(0, 300) : ''
+    if (!note) {
+        return { success: false, error: 'note is required: state what you visually confirmed before saving this image.' }
+    }
     const record: ExerciseImageRecord = {
         id: exerciseId,
         url,
         name: typeof args.name === 'string' ? args.name.trim().slice(0, 120) || undefined : undefined,
         source: typeof args.source === 'string' ? args.source.trim().slice(0, 120) || undefined : undefined,
-        note: typeof args.note === 'string' ? args.note.trim().slice(0, 300) || undefined : undefined,
+        note,
         verifiedAt: new Date().toISOString(),
     }
     try {
@@ -232,7 +232,7 @@ export async function executeSaveExerciseImage(args: Record<string, unknown>): P
             saved: true,
             exerciseId,
             url,
-            message: 'Saved. This image now shows for this exercise in every future session; the renderer serves it before any fuzzy fallback. Bake it into the current artifact `exercises[].imageUrl` too.',
+            message: 'Saved. This verified image now shows for this exercise in every future session; the renderer will not replace it with a fuzzy fallback. Bake it into the current artifact `exercises[].imageUrl` too.',
         },
     }
 }

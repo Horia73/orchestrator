@@ -90,7 +90,10 @@ export function PdfViewer({
     const [pages, setPages] = React.useState<PdfPage[]>([])
     const [totalPages, setTotalPages] = React.useState(0)
     const [loading, setLoading] = React.useState(true)
-    const [sidebarOpen, setSidebarOpen] = React.useState(true)
+    // null follows the responsive default: thumbnails open on desktop and
+    // collapsed on phones. Once the user toggles it, preserve that explicit
+    // choice even if the viewport changes.
+    const [sidebarOpen, setSidebarOpen] = React.useState<boolean | null>(null)
     const [activePage, setActivePage] = React.useState(0)
     const [zoom, setZoom] = React.useState(1)
     const [rotation, setRotation] = React.useState(0)
@@ -103,6 +106,16 @@ export function PdfViewer({
     const [passwordPrompt, setPasswordPrompt] = React.useState<null | { incorrect: boolean }>(null)
     const [passwordInput, setPasswordInput] = React.useState("")
     const passwordCallbackRef = React.useRef<((password: string) => void) | null>(null)
+
+    const toggleSidebar = React.useCallback(() => {
+        setSidebarOpen((current) => {
+            if (current !== null) return !current
+            // Match the CSS responsive default at interaction time. Keeping
+            // the first render CSS-only avoids a post-hydration icon/sidebar
+            // swap that reads as a flash on mobile.
+            return window.matchMedia("(max-width: 767px)").matches
+        })
+    }, [])
 
     // Render pages
     React.useEffect(() => {
@@ -333,13 +346,22 @@ export function PdfViewer({
                 <div className="flex min-w-0 flex-1 items-center gap-2">
                     <button
                         type="button"
-                        onClick={() => setSidebarOpen(!sidebarOpen)}
+                        onClick={toggleSidebar}
                         className={toolbarBtnCls}
-                        aria-label={sidebarOpen ? "Hide thumbnails" : "Show thumbnails"}
-                        aria-pressed={sidebarOpen}
-                        title={sidebarOpen ? "Hide thumbnails" : "Show thumbnails"}
+                        aria-label={sidebarOpen === null ? "Toggle thumbnails" : sidebarOpen ? "Hide thumbnails" : "Show thumbnails"}
+                        aria-pressed={sidebarOpen ?? undefined}
+                        title={sidebarOpen === null ? "Toggle thumbnails" : sidebarOpen ? "Hide thumbnails" : "Show thumbnails"}
                     >
-                        {sidebarOpen ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />}
+                        {sidebarOpen === null ? (
+                            <>
+                                <PanelLeftClose className="hidden size-4 md:block" />
+                                <PanelLeftOpen className="size-4 md:hidden" />
+                            </>
+                        ) : sidebarOpen ? (
+                            <PanelLeftClose className="size-4" />
+                        ) : (
+                            <PanelLeftOpen className="size-4" />
+                        )}
                     </button>
                     <FileText className="size-4 shrink-0 text-pdf-text-muted" />
                     <span className="truncate text-sm font-medium text-pdf-text" title={filename}>
@@ -429,7 +451,11 @@ export function PdfViewer({
                 <aside
                     className={cn(
                         "flex shrink-0 flex-col overflow-hidden bg-pdf-sidebar transition-[width] duration-200 ease-in-out",
-                        sidebarOpen ? "w-36 border-r border-pdf-border" : "w-0"
+                        sidebarOpen === null
+                            ? "w-0 md:w-36 md:border-r md:border-pdf-border"
+                            : sidebarOpen
+                              ? "w-36 border-r border-pdf-border"
+                              : "w-0"
                     )}
                 >
                     <div className="flex flex-col gap-1 overflow-y-auto p-2 w-36">
