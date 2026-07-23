@@ -1247,11 +1247,10 @@ function ReasoningEntryList({
         reasoning.some(entry => entry.type === "agent_call") ? "Parent agent" : undefined
     )
 
-    // Agents spawned by another agent in this same reasoning list (their
-    // parentRunId is a sibling agent_call's runId) are nested sub-agents. They
-    // belong inside that parent agent's workspace panel, not inline at the top
-    // level — so skip them here. Direct sub-agents of the turn carry a
-    // parentRunId that is the message id, never another agent's runId.
+    // Finished nested agents live inside their direct parent's workspace panel.
+    // A queued/running descendant is also surfaced inline while live: hiding it
+    // until its parent panel happened to be opened made real work look absent.
+    // Once settled it returns to the normal nested-only presentation.
     const agentRunIds = new Set<string>()
     for (const entry of reasoning) {
         if (entry.type === "agent_call") agentRunIds.add(entry.runId)
@@ -1262,7 +1261,10 @@ function ReasoningEntryList({
 
         if (
             entry.type === "agent_call" &&
-            ((entry.parentRunId && agentRunIds.has(entry.parentRunId)) ||
+            ((entry.parentRunId &&
+                agentRunIds.has(entry.parentRunId) &&
+                entry.status !== "running" &&
+                !entry.queued) ||
                 hiddenAgentRunIds?.has(entry.runId))
         ) {
             continue

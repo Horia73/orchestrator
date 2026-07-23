@@ -28,11 +28,14 @@ async function main(): Promise<void> {
     const {
         createAgentThread,
         createConversation,
+        addAgentThreadMessage,
+        getDatabaseForProfile,
         getConversation,
     } = await import('@/lib/db')
     const { clearChatStream, registerChatStream } = await import('@/lib/chat-streams')
     const { clearFollowUps, peekFollowUps } = await import('@/lib/chat-followups')
     const { getActiveProfileId } = await import('@/lib/profiles/context')
+    const { executeDelegateTo } = await import('@/lib/ai/tools/delegate-to')
 
     const conversationId = 'async_delegation_smoke'
     createConversation({
@@ -53,6 +56,78 @@ async function main(): Promise<void> {
         createdByAgentId: 'orchestrator',
         title,
     })
+
+    // Detached batches are conversation-level wakes, so only the root may own
+    // one. A sub-agent must wait synchronously for its direct children.
+    let nestedLaunchRejected = false
+    try {
+        await startAsyncDelegationBatch({
+            ctx: { ...ctx, depth: 1, callerAgentId: 'researcher', agentThreadId: 'nested-parent' },
+            jobs: [{
+                agentId: 'researcher',
+                agentThreadId: 'nested-child',
+                prompt: 'must not launch',
+                run: async () => ({ success: true }),
+            }],
+            maxConcurrency: 1,
+            wakeOnComplete: true,
+        })
+    } catch (error) {
+        nestedLaunchRejected = /Nested async delegation is not allowed/.test(String(error))
+    }
+    check(nestedLaunchRejected, 'nested async launch is rejected before any child starts')
+
+    // Defensive migration behavior: an old nested row may still be present on
+    // disk after an upgrade. Its completion must never enqueue into the root
+    // conversation.
+    const legacyParent = makeThread('legacy nested parent')
+    const legacyBatchId = 'adb_legacy_nested_scope'
+    const now = Date.now()
+    getDatabaseForProfile().prepare(`
+        INSERT INTO async_delegation_batches (
+            id, conversationId, createdByAgentId, parentAgentThreadId,
+            parentRequestId, status, maxConcurrency, wakeOnComplete,
+            startedAt, endedAt, notifiedAt, collectedAt
+        ) VALUES (?, ?, ?, ?, ?, 'ok', 1, 1, ?, ?, NULL, NULL)
+    `).run(
+        legacyBatchId,
+        conversationId,
+        'researcher',
+        legacyParent.id,
+        'legacy-parent-request',
+        now - 10,
+        now,
+    )
+    await notifyAsyncDelegationCompletion(getActiveProfileId(), legacyBatchId)
+    check(
+        asyncDelegationTestHooks.getBatch(legacyBatchId)?.wakeOnComplete === 0,
+        'legacy nested completion wake is suppressed',
+    )
+    check(
+        !getConversation(conversationId)?.messages.some(message => message.content.includes(legacyBatchId)),
+        'legacy nested completion notice does not leak into the root conversation',
+    )
+
+    const foreignBranch = createAgentThread({
+        conversationId,
+        agentId: 'researcher',
+        createdByAgentId: 'researcher',
+        parentAgentThreadId: legacyParent.id,
+        title: 'foreign sibling branch',
+    })
+    addAgentThreadMessage(foreignBranch.id, {
+        role: 'assistant',
+        content: 'private foreign-branch result',
+    })
+    const crossBranchForward = await executeDelegateTo({
+        agent_id: 'researcher',
+        prompt: 'try to consume another branch',
+        context_thread_ids: [foreignBranch.id],
+    }, ctx)
+    check(
+        !crossBranchForward.success && /different parent agent/.test(crossBranchForward.error ?? ''),
+        'context forwarding cannot cross parent-agent branches',
+    )
 
     // One child: the launch must resolve while the child is still blocked.
     let releaseSingle!: () => void

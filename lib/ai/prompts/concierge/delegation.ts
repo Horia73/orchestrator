@@ -91,7 +91,7 @@ When runtime permits and the work splits cleanly, run independent channels in pa
 
 Prefer \`delegate_parallel\` for 2-6 independent channels. Each job still needs its own stop boundary and thread choice.
 
-Synchronous delegation is the default: you sleep until the child or batch returns. Use \`run_async=true\` only when you can name useful parent work that is genuinely independent of the child result and will do it immediately; never use async merely because the child may be slow. When that independent work ends, if the batch is still running, call \`manage_delegations\` with \`action="detach"\` and end the turn so \`wake_on_complete=true\` resumes the task automatically. Do not poll or chain short waits to babysit it. If no independent work exists, delegate synchronously. Cancel obsolete work and never abandon a running async batch.
+Delegation from concierge is synchronous only. Nested \`run_async\` and \`manage_delegations\` are unavailable: wait for the child or batch so every result returns only to you, its direct parent, before you continue the workflow.
 
 Do not parallelize actions that could create duplicate bookings/orders or inconsistent external state.
 </parallelism_policy>

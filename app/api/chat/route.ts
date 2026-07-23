@@ -1123,13 +1123,23 @@ export async function POST(request: Request) {
         event: AgentRunEvent,
         send: (data: Record<string, unknown>) => void
       ) => {
-        if (event.type === "agent_start") {
+        if (event.type === "agent_queued" || event.type === "agent_start") {
           if (streamMode === "content") {
             reasoningPhase += 1
             streamMode = "reasoning"
           }
           const existing = findAgentEntry(event.runId)
-          if (!existing) {
+          if (existing?.type === "agent_call") {
+            existing.toolCallId = event.toolCallId
+            existing.parentRunId = event.parentRunId
+            existing.agentThreadId = event.agentThreadId
+            existing.assignedName = event.assignedName
+            existing.taskLabel = event.taskLabel
+            existing.status = "running"
+            existing.startedAt = event.startedAt
+            existing.queued = event.type === "agent_queued"
+            if (event.type === "agent_start") existing.prompt = event.prompt
+          } else {
             accReasoning.push({
               type: "agent_call",
               id: `agent_${event.runId}`,
@@ -1144,8 +1154,12 @@ export async function POST(request: Request) {
               kind: event.kind,
               agentThreadId: event.agentThreadId,
               title: `${event.agentName}`,
-              prompt: event.prompt,
+              prompt:
+                event.type === "agent_start"
+                  ? event.prompt
+                  : (event.taskLabel ?? "Waiting for an available agent slot."),
               status: "running",
+              queued: event.type === "agent_queued",
               startedAt: event.startedAt,
               content: "",
               contentSegments: [],

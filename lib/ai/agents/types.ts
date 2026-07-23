@@ -297,9 +297,8 @@ export type AgentRunStatus = "running" | "ok" | "error" | "aborted"
 export type AgentRunEvent =
   | {
       /** Emitted when a run is admitted to the concurrency gate's queue (it had
-       *  to wait for a slot). The UI shows a "queued" card that the matching
-       *  agent_start (same runId) replaces with the running card. Transient —
-       *  never persisted. */
+       *  to wait for a slot). The UI shows a persisted "queued" card that the
+       *  matching agent_start (same runId) replaces with the running card. */
       type: "agent_queued"
       runId: string
       parentRunId?: string

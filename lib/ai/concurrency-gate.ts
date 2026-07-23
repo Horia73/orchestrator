@@ -19,7 +19,7 @@
 //     Claude agents at once tripped a 529, so claude is capped well under that.
 //     Env override: AGENT_MAX_PROVIDER_<NAME> (e.g. AGENT_MAX_PROVIDER_CLAUDE).
 //   • tree budget  — max agents a single top-level run may spawn across its
-//     whole sub-tree. Default 100. Backstop against runaway recursion: when
+//     whole sub-tree. Default 12. Backstop against runaway recursion: when
 //     hit, delegate_to degrades gracefully instead of queueing forever.
 //
 // Staggered admission ("pe rand"): fresh agent starts are spaced by ~800ms (and
@@ -235,7 +235,7 @@ function createState(): GateState {
         treeSpawns: new Map<string, number>(),
         treeRetainers: new Map<string, number>(),
         treeOwnerReleasePending: new Set<string>(),
-        treeBudget: envInt('AGENT_TREE_BUDGET', 100),
+        treeBudget: envInt('AGENT_TREE_BUDGET', 12),
         nextAdmitAt: 0,
     }
 }

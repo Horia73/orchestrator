@@ -154,8 +154,8 @@ function main() {
   for (const [name, prompt] of [["researcher", RESEARCHER_PROMPT], ["concierge", CONCIERGE_PROMPT]] as const) {
     assert.match(
       prompt,
-      /run_async=true[\s\S]*action="detach"[\s\S]*Do not poll or chain short waits/,
-      `${name} must detach instead of babysitting an async child`
+      /synchronous(?: only| from)[\s\S]*Nested `run_async`[\s\S]*direct parent/,
+      `${name} must keep nested delegation synchronous and parent-scoped`
     )
   }
   for (const file of [

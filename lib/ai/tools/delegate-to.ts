@@ -43,7 +43,7 @@ export const delegateToTool: ToolDef = {
     name: 'delegate_to',
     description: [
         'Delegate a task to a specialist sub-agent and wait for its final answer.',
-        'Set run_async=true only when you have concrete useful parent work on a different independent slice that you will do immediately. The call then returns a batch_id and agent_thread_id while the child keeps running. When your independent work ends, detach any still-running batch for an automatic completion wake and end the turn; do not poll or chain short waits. Async mode does NOT suspend your parent turn.',
+        'The depth-0 root orchestrator may set run_async=true only when it has concrete useful work on a different independent slice that it will do immediately. Delegated agents must use the synchronous default: nested async batches are rejected so completion cannot escape the direct parent thread.',
         'Use this when the task is outside your remit, when a specialist would do better, or when you want a fresh perspective on your own output.',
         'Returns the sub-agent\'s complete response, output length metadata, and agent_thread_id. The complete response is also persisted in the agent thread; if a UI preview is clipped, do not treat that as data loss. Pass thread_id to continue an existing parent↔agent thread; omit it to create a new one.',
         'To let the sub-agent see a file directly (image, PDF, document), pass attachment_ids — upload ids from the current user message or from find_past_uploads; the files are forwarded into its turn for providers that support them.',
@@ -88,7 +88,7 @@ export const delegateToTool: ToolDef = {
             context_thread_ids: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Optional agent_thread_ids whose final output should be forwarded verbatim into this sub-agent\'s turn as <forwarded_context> (e.g. a researcher thread you want the worker to build on). The threads must belong to this conversation. Use this instead of pasting a prior agent\'s result into the prompt.',
+                description: 'Optional direct-child agent_thread_ids whose final output should be forwarded verbatim into this sub-agent\'s turn as <forwarded_context> (e.g. a researcher thread you want the worker to build on). Each thread must belong to this conversation and this exact parent-agent/thread scope; cross-branch forwarding is rejected.',
             },
             browser_session_mode: {
                 type: 'string',
@@ -114,7 +114,7 @@ export const delegateParallelTool: ToolDef = {
     name: 'delegate_parallel',
     description: [
         'Delegate multiple independent tasks to specialist sub-agents concurrently and wait for all final answers.',
-        'Set run_async=true only when the jobs overlap with concrete useful parent work on a different slice that you will do immediately. When that slice ends, detach a still-running batch for an automatic completion wake and end the turn; do not poll or chain short waits. Async mode does NOT suspend the parent.',
+        'Only the depth-0 root orchestrator may set run_async=true, and only while doing concrete useful work on a different independent slice. Delegated agents must use the synchronous default: nested async batches are rejected so completion cannot escape the direct parent thread.',
         'Use only for workstreams that do not depend on each other and do not mutate the same files or external systems.',
         'Each job returns its complete response, output length metadata, and agent_thread_id. The complete response is also persisted in the agent thread; if a UI preview is clipped, do not treat that as data loss. Each job may pass thread_id to continue an existing parent↔agent thread, or omit it to create a new one.',
         'Prefer researcher for open web discovery, availability checks, comparisons, rankings, and vendor/product lookup. Browser_agent jobs must be bounded execution/verification tasks on known pages/sites, not open-ended research/discovery/comparison; include a complete action contract and stop boundary. For loading/API diagnostics, request inspectDiagnostics and same-origin fetchUrl results. Reuse thread_id for the same browser flow; use separate threads only for independent flows. For browser_agent only, incognito is a parent-controlled launch mode: start a fresh thread with browser_session_mode="incognito" on the job when clean/private state is required. Never ask a persistent browser_agent job to switch modes from inside the browser. Do not parallelize browser jobs that can create duplicate orders/bookings/sends or mutate the same external account.',
@@ -126,7 +126,7 @@ export const delegateParallelTool: ToolDef = {
         properties: {
             jobs: {
                 type: 'array',
-                description: 'Independent delegation jobs. Maximum 10 per call; default concurrency is 10.',
+                description: 'Independent delegation jobs. Maximum 6 per call; default concurrency is 6.',
                 items: {
                     type: 'object',
                     properties: {
@@ -162,7 +162,7 @@ export const delegateParallelTool: ToolDef = {
                         context_thread_ids: {
                             type: 'array',
                             items: { type: 'string' },
-                            description: 'Optional agent_thread_ids whose final output is forwarded verbatim into this job\'s sub-agent turn as <forwarded_context> (e.g. hand a researcher thread to worker without retyping it).',
+                            description: 'Optional direct-child agent_thread_ids whose final output is forwarded verbatim into this job\'s sub-agent turn. Each must belong to this exact parent-agent/thread scope; cross-branch forwarding is rejected.',
                         },
                         browser_session_mode: {
                             type: 'string',
@@ -175,7 +175,7 @@ export const delegateParallelTool: ToolDef = {
             },
             max_concurrency: {
                 type: 'integer',
-                description: 'Optional concurrency limit. Defaults to 10 and is capped at 10.',
+                description: 'Optional concurrency limit. Defaults to 6 and is capped at 6.',
             },
             run_async: {
                 type: 'boolean',
@@ -227,6 +227,12 @@ export async function executeDelegateTo(
 ): Promise<ToolResult> {
     const plan = planDelegation(args, ctx)
     if (!plan.ok) return { success: false, error: plan.error }
+    if (args.run_async === true && ctx!.depth > 0) {
+        return {
+            success: false,
+            error: 'Nested async delegation is not allowed. Delegate synchronously so the result returns only to this direct parent agent.',
+        }
+    }
     const prepared = materializeDelegation(plan)
 
     // Per-tree spawn budget: a runaway recursion (agents endlessly spawning more
@@ -311,6 +317,12 @@ export async function executeDelegateParallel(
         return {
             success: false,
             error: `Delegation refused: depth ${ctx.depth} would exceed cap of ${MAX_AGENT_DEPTH}. Solve the task directly.`,
+        }
+    }
+    if (args.run_async === true && ctx.depth > 0) {
+        return {
+            success: false,
+            error: 'Nested async delegation is not allowed. Delegate synchronously so every result returns only to its direct parent agent.',
         }
     }
 
@@ -470,6 +482,12 @@ export async function executeManageDelegations(
     ctx?: ToolExecutionContext,
 ): Promise<ToolResult> {
     if (!ctx) return { success: false, error: 'manage_delegations requires an execution context.' }
+    if (ctx.depth > 0) {
+        return {
+            success: false,
+            error: 'Async delegation management is available only to the depth-0 root orchestrator.',
+        }
+    }
     const action = typeof args.action === 'string' ? args.action : ''
     if (action === 'list') {
         const batches = listAsyncDelegationBatchesForCaller(ctx, 12)
@@ -570,7 +588,7 @@ export async function executeManageDelegations(
 // Max jobs per delegate_parallel call. The *global* concurrency gate
 // (lib/ai/concurrency-gate.ts) is what actually bounds how many run at once, so
 // this is just the per-call request ceiling.
-const MAX_PARALLEL_DELEGATIONS = 10
+const MAX_PARALLEL_DELEGATIONS = 6
 
 function decoratePreparedDelegationResult(
     result: ToolResult,
@@ -891,6 +909,18 @@ function resolveDelegationContext(
         if (!thread) return { ok: false, error: `Unknown context thread: ${id}` }
         if (thread.conversationId !== ctx.conversationId) {
             return { ok: false, error: `Context thread ${id} does not belong to this conversation.` }
+        }
+        if (thread.createdByAgentId !== ctx.callerAgentId) {
+            return {
+                ok: false,
+                error: `Context thread ${id} belongs to a different parent agent and cannot cross into this branch.`,
+            }
+        }
+        if ((thread.parentAgentThreadId ?? null) !== (ctx.agentThreadId ?? null)) {
+            return {
+                ok: false,
+                error: `Context thread ${id} is outside this direct parent thread scope.`,
+            }
         }
         const lastOutput = [...getAgentThreadMessages(id)]
             .reverse()

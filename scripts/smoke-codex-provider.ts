@@ -139,8 +139,8 @@ assert.match(
 )
 assert.match(
   managedThreadConfig.features?.multi_agent_v2?.multi_agent_mode_hint_text ?? "",
-  /Use run_async=true only for concrete independent parent work[\s\S]*detach a still-running batch[\s\S]*instead of polling or chaining short waits/,
-  "Managed Codex runs must detach completed parent slices instead of babysitting async children"
+  /run_async is available only to the depth-0 root[\s\S]*delegated children must[\s\S]*delegate synchronously/,
+  "Managed Codex runs must keep detached completion wakes at the root"
 )
 const nativeCoderThreadParams = codexProviderTestHooks.buildThreadParams({
   model: "gpt-5.6-sol",
@@ -166,7 +166,7 @@ assert.equal(
   "Managed sessions born before the standing delegation policy must refresh with portable history"
 )
 const managedSessionId = codexProviderTestHooks.encodeAppServerSessionId("managed-thread", false)
-assert.equal(managedSessionId, "appserver:managed-policy-v5:managed-thread")
+assert.equal(managedSessionId, "appserver:managed-policy-v6:managed-thread")
 assert.deepEqual(
   codexProviderTestHooks.decodeAppServerSessionId(managedSessionId, false),
   { threadId: "managed-thread" },
@@ -218,6 +218,7 @@ const send = value => process.stdout.write(JSON.stringify(value) + "\\n")
 const parentViolation = process.env.FAKE_PARENT_VIOLATION === "1"
 const asyncDelegation = process.env.FAKE_ASYNC_DELEGATION === "1"
 const codeModeWait = process.env.FAKE_CODE_MODE_WAIT === "1"
+const interleavedMessages = process.env.FAKE_INTERLEAVED_MESSAGES === "1"
 const rl = readline.createInterface({ input: process.stdin })
 rl.on("line", line => {
   const message = JSON.parse(line)
@@ -268,6 +269,31 @@ rl.on("line", line => {
   if (message.method === "turn/start") {
     send({ id: message.id, result: { turn: { id: "fake-turn" } } })
     send({ method: "turn/started", params: { turn: { id: "fake-turn" } } })
+    if (interleavedMessages) {
+      send({ method: "item/started", params: { turnId: "fake-turn", item: {
+        id: "message-a", type: "agentMessage",
+      } } })
+      send({ method: "item/started", params: { turnId: "fake-turn", item: {
+        id: "message-b", type: "agentMessage",
+      } } })
+      send({ method: "item/agentMessage/delta", params: {
+        turnId: "fake-turn", itemId: "message-a", delta: "First message.",
+      } })
+      send({ method: "item/agentMessage/delta", params: {
+        turnId: "fake-turn", itemId: "message-b", delta: "Second message.",
+      } })
+      send({ method: "item/agentMessage/delta", params: {
+        turnId: "stale-turn", itemId: "stale-message", delta: "MUST NOT LEAK",
+      } })
+      send({ method: "item/completed", params: { turnId: "fake-turn", item: {
+        id: "message-a", type: "agentMessage", text: "First message.",
+      } } })
+      send({ method: "item/completed", params: { turnId: "fake-turn", item: {
+        id: "message-b", type: "agentMessage", text: "Second message.",
+      } } })
+      send({ method: "turn/completed", params: { turn: { id: "fake-turn", status: "completed" } } })
+      return
+    }
     send({ method: "item/started", params: { item: {
       id: "pre-delegation-reasoning", type: "reasoning",
     } } })
@@ -350,7 +376,7 @@ rl.on("line", line => {
   assert.deepEqual(errors, [], "A direct namespaced delegation must finish without provider errors")
   assert.equal(content.join(""), "DONE", "The parent may resume only after the delegation item completes")
   assert.deepEqual(toolCalls, ["delegate_to"], "The direct path must not create an exec/wait/shell wrapper")
-  assert.deepEqual(sessions, ["appserver:managed-policy-v5:legacy-thread"])
+  assert.deepEqual(sessions, ["appserver:managed-policy-v6:legacy-thread"])
   const capture = JSON.parse(readFileSync(capturePath, "utf8")) as {
     method: string
     params: {
@@ -407,6 +433,38 @@ rl.on("line", line => {
     codeModeWaitThinking.join(""),
     "Delegate synchronously.",
     "Internal wait-loop reasoning must stay out of the user-visible thinking stream"
+  )
+
+  const orderedContent: string[] = []
+  const orderedErrors: string[] = []
+  process.env.FAKE_INTERLEAVED_MESSAGES = "1"
+  try {
+    await codexProviderTestHooks.runCodexAppServer({
+      bin: fakeCodex,
+      prompt: "Exercise overlapping message items.",
+      model: "gpt-5.6-sol",
+      tools: [],
+      builtins: [],
+      nativeCoderRun: false,
+      spawnEnv: { FAKE_INTERLEAVED_MESSAGES: "1" },
+      callbacks: {
+        onThinking() {},
+        onThinkingDone() {},
+        onContent(text) { orderedContent.push(text) },
+        onToolCall() {},
+        onToolResult() {},
+        onDone() {},
+        onError(error) { orderedErrors.push(error) },
+      },
+    })
+  } finally {
+    delete process.env.FAKE_INTERLEAVED_MESSAGES
+  }
+  assert.deepEqual(orderedErrors, [], "Overlapping message items must remain a valid turn")
+  assert.equal(
+    orderedContent.join(""),
+    "First message.Second message.",
+    "Agent message items must serialize by item order and ignore foreign-turn deltas"
   )
 
   const violationErrors: string[] = []

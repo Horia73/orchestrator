@@ -152,7 +152,7 @@ const APP_SERVER_SESSION_PREFIX = 'appserver:'
 // sessions then start fresh and latestUserPromptWithPortableHistory carries the
 // Orchestrator conversation across. Promptless native Coder sessions keep the
 // generic prefix and remain resumable.
-const MANAGED_APP_SERVER_SESSION_PREFIX = 'appserver:managed-policy-v5:'
+const MANAGED_APP_SERVER_SESSION_PREFIX = 'appserver:managed-policy-v6:'
 const LEGACY_DIRECT_TOOL_SESSION_PREFIX = 'appserver:direct:'
 const JSON_RPC_REQUEST_TIMEOUT_MS = 60_000
 const CODEX_RECONNECTING_NOTICE_RE = /^Reconnecting(?:\.{3}|…)\s+\d+\/\d+$/i
@@ -168,9 +168,9 @@ const ORCHESTRATOR_MULTI_AGENT_MODE_HINT = [
     'agent work; do not require the user to repeat it in the current message.',
     'When delegate_to or delegate_parallel is exposed, follow the Orchestrator',
     '<delegation_policy>, <browser_agent_policy>, <agent_boundaries>, and runtime_context;',
-    'synchronous delegation suspends the parent. Use run_async=true only for concrete independent',
-    'parent work you will do immediately; when that work ends, detach a still-running batch for',
-    'wake_on_complete and end the turn instead of polling or chaining short waits.',
+    'synchronous delegation suspends the parent. run_async is available only to the depth-0 root',
+    'orchestrator for concrete independent work it will do immediately; delegated children must',
+    'delegate synchronously and cannot detach work or wake the root conversation.',
     'Do not invent or use Codex-native sub-agents.',
 ].join(' ')
 
@@ -247,7 +247,18 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
         const firedToolResults = new Set<string>()
         const firedCompactions = new Set<string>()
         const rawWebToolCalls = new Map<string, { name: string; args: Record<string, unknown> }>()
-        const messageTextByItem = new Map<string, string>()
+        // app-server can overlap multiple agentMessage items in one turn. Their
+        // delta notifications are independently ordered per item, not globally;
+        // forwarding every delta immediately splices words from two messages
+        // together and persists unreadable output. Keep one ordered lane per
+        // item and only advance to the next item after the previous completes.
+        const agentMessageOrder: string[] = []
+        const agentMessages = new Map<string, {
+            text: string
+            emittedChars: number
+            completed: boolean
+        }>()
+        let nextAgentMessageIndex = 0
         const blockingDelegations = new Set<string>()
         const activeReasoningItems = new Set<string>()
         const delegationWaitReasoningItems = new Set<string>()
@@ -454,6 +465,67 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                 shutdown('SIGTERM')
             }
             return true
+        }
+
+        const ensureAgentMessage = (itemId: string) => {
+            let message = agentMessages.get(itemId)
+            if (!message) {
+                message = { text: '', emittedChars: 0, completed: false }
+                agentMessages.set(itemId, message)
+                agentMessageOrder.push(itemId)
+            }
+            return message
+        }
+
+        const flushOrderedAgentMessages = () => {
+            while (nextAgentMessageIndex < agentMessageOrder.length) {
+                const itemId = agentMessageOrder[nextAgentMessageIndex]
+                const message = agentMessages.get(itemId)
+                if (!message) {
+                    nextAgentMessageIndex += 1
+                    continue
+                }
+                if (message.text.length > message.emittedChars) {
+                    callbacks.onContent(message.text.slice(message.emittedChars))
+                    message.emittedChars = message.text.length
+                }
+                if (!message.completed) return
+                nextAgentMessageIndex += 1
+            }
+        }
+
+        const appendAgentMessageDelta = (itemId: string, delta: string) => {
+            const message = ensureAgentMessage(itemId)
+            message.text += delta
+            flushOrderedAgentMessages()
+        }
+
+        const completeAgentMessage = (itemId: string, completedText: string) => {
+            const message = ensureAgentMessage(itemId)
+            if (completedText) {
+                if (message.emittedChars === 0) {
+                    // A queued item has not reached the UI yet, so its canonical
+                    // completed payload can safely replace any partial deltas.
+                    message.text = completedText
+                } else if (completedText.startsWith(message.text)) {
+                    message.text = completedText
+                } else if (!message.text.startsWith(completedText)) {
+                    // Already-emitted text cannot be retracted. Fail closed on
+                    // the divergent suffix rather than duplicating/corrupting it.
+                    rememberDiagnostic(`agentMessage ${itemId} completed text diverged from streamed deltas`)
+                }
+            }
+            message.completed = true
+            flushOrderedAgentMessages()
+        }
+
+        const belongsToActiveTurn = (params?: AnyObj): boolean => {
+            const eventTurnId = firstString(
+                params?.turnId,
+                (params?.turn as AnyObj | undefined)?.id,
+                (params?.item as AnyObj | undefined)?.turnId,
+            )
+            return !eventTurnId || (Boolean(activeTurnId) && eventTurnId === activeTurnId)
         }
 
         signal?.addEventListener('abort', onAbort, { once: true })
@@ -700,11 +772,10 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                 case 'item/agentMessage/delta': {
                     const itemId = typeof params?.itemId === 'string' ? params.itemId : undefined
                     const delta = typeof params?.delta === 'string' ? params.delta : ''
-                    if (!delta) return
-                    if (itemId) messageTextByItem.set(itemId, (messageTextByItem.get(itemId) ?? '') + delta)
+                    if (!itemId || !delta || !belongsToActiveTurn(params)) return
                     if (stopParentActivityDuringDelegation('agent message')) return
                     closeThinking()
-                    callbacks.onContent(delta)
+                    appendAgentMessageDelta(itemId, delta)
                     return
                 }
                 case 'item/reasoning/textDelta':
@@ -756,10 +827,14 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                     firePlanUpdate(params)
                     return
                 case 'item/started':
-                    handleItemStarted(params?.item as AnyObj | undefined)
+                    if (belongsToActiveTurn(params)) {
+                        handleItemStarted(params?.item as AnyObj | undefined)
+                    }
                     return
                 case 'item/completed':
-                    handleItemCompleted(params?.item as AnyObj | undefined)
+                    if (belongsToActiveTurn(params)) {
+                        handleItemCompleted(params?.item as AnyObj | undefined)
+                    }
                     return
                 case 'rawResponseItem/completed':
                     handleRawResponseItemCompleted(params?.item as AnyObj | undefined)
@@ -779,8 +854,13 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                     return
                 }
                 case 'turn/completed': {
-                    retractSteering()
                     const turn = params?.turn as AnyObj | undefined
+                    if (activeTurnId && typeof turn?.id === 'string' && turn.id !== activeTurnId) return
+                    retractSteering()
+                    // Defensive fallback for an app-server version that closes
+                    // a turn without item/completed for its final message.
+                    for (const message of agentMessages.values()) message.completed = true
+                    flushOrderedAgentMessages()
                     if (typeof turn?.durationMs === 'number') finalDurationMs = turn.durationMs
                     if (turn?.status === 'failed') {
                         const err = turn.error as AnyObj | undefined
@@ -816,6 +896,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
             if (itemType !== 'dynamicToolCall' && stopParentActivityDuringDelegation(itemType ?? 'tool')) {
                 return
             }
+            if (itemType === 'agentMessage') ensureAgentMessage(item.id)
             if (itemType === 'reasoning') activeReasoningItems.add(item.id)
             if (itemType === 'commandExecution') {
                 fireToolCall(item.id, 'shell', {
@@ -847,16 +928,10 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
             if (itemType === 'agentMessage') {
                 const text = typeof item.text === 'string' ? item.text : ''
                 if (stopParentActivityDuringDelegation('agent message')) {
-                    if (text) messageTextByItem.set(item.id, text)
                     return
                 }
-                const seen = messageTextByItem.get(item.id) ?? ''
-                if (text && text.length > seen.length && text.startsWith(seen)) {
-                    callbacks.onContent(text.slice(seen.length))
-                } else if (text && !seen) {
-                    callbacks.onContent(text)
-                }
                 closeThinking()
+                completeAgentMessage(item.id, text)
                 return
             }
 

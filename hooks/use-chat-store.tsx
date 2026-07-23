@@ -1743,6 +1743,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                   type: "SET_STREAMING",
                   isStreaming: true,
                   conversationId: eventConversationId,
+                  messageId: msg.id,
+                  snapshot: msg,
                   status: recoveryStreamingStatus(),
                 })
               }

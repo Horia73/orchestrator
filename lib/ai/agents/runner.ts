@@ -301,7 +301,8 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
     const canDelegate = (runtimeTarget.canCallAgents?.length ?? 0) > 0 && subDepth < MAX_AGENT_DEPTH
     const baseTools = getToolsForAgent(runtimeTarget.tools).filter(tool => {
         // Do not advertise an unusable delegation tool at the depth cap.
-        if (tool.id !== 'delegate_to' && tool.id !== 'delegate_parallel' && tool.id !== 'manage_delegations') return true
+        if (tool.id === 'manage_delegations') return false
+        if (tool.id !== 'delegate_to' && tool.id !== 'delegate_parallel') return true
         return canDelegate
     })
     // Gate integration operational tools, then remove custom schemas that
@@ -319,7 +320,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
         ? filterReadOnlyIfNeeded(
             filterIntegrationToolExposure(
                 dedupeTools(canDelegate
-                    ? [...baseTools, ...getToolsForBuiltins(runtimeTarget.builtins), ...getToolsForAgent(['delegate_to', 'delegate_parallel', 'manage_delegations'])]
+                    ? [...baseTools, ...getToolsForBuiltins(runtimeTarget.builtins), ...getToolsForAgent(['delegate_to', 'delegate_parallel'])]
                     : [...baseTools, ...getToolsForBuiltins(runtimeTarget.builtins)]),
                 {
                     conversationId: parentCtx.conversationId,

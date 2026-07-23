@@ -187,6 +187,9 @@ export async function startAsyncDelegationBatch(args: {
     wakeOnComplete?: boolean
 }): Promise<AsyncDelegationLaunchResult> {
     if (args.jobs.length === 0) throw new Error('An async delegation batch needs at least one job.')
+    if (args.ctx.depth > 0 || args.ctx.agentThreadId) {
+        throw new Error('Nested async delegation is not allowed; child results must return synchronously to their direct parent agent.')
+    }
 
     const profileContext = getActiveProfileContext()
     const profileId = getActiveProfileId()
@@ -505,6 +508,21 @@ export async function notifyAsyncDelegationCompletion(profileId: string, batchId
     await runWithProfileContext({ profileId }, async () => {
         const batch = getBatch(batchId)
         if (!batch || batch.status === 'running' || !batch.wakeOnComplete || batch.notifiedAt) return
+
+        // Completion wakes are conversation-level. A nested batch belongs to
+        // an agent thread, so enqueueing here would leak its completion notice
+        // into the root conversation (and potentially another active parent).
+        // New nested async launches are rejected above; suppress legacy rows
+        // defensively during restart recovery too.
+        if (batch.parentAgentThreadId) {
+            activeDb().prepare(`
+                UPDATE async_delegation_batches
+                SET wakeOnComplete = 0
+                WHERE id = @id
+            `).run({ id: batchId })
+            console.warn(`[async-delegations] suppressed nested completion wake for ${batchId}`)
+            return
+        }
 
         const claimedAt = Date.now()
         const claimed = activeDb().prepare(`
