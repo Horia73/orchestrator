@@ -1277,7 +1277,7 @@ function buildToolTitle(toolName: string, args: Record<string, unknown> | undefi
     }
     if (toolName === 'manage_delegations') {
         const action = typeof args?.action === 'string' ? args.action : 'manage'
-        return `${action[0]?.toUpperCase() ?? ''}${action.slice(1)} async delegations`
+        return `${action[0]?.toUpperCase() ?? ''}${action.slice(1)} delegations`
     }
     if (toolName === 'RunActivatedIntegrationTool') {
         return typeof args?.tool_id === 'string' ? `Run ${args.tool_id}` : 'Run integration tool'

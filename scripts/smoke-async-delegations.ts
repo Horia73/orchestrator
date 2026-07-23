@@ -36,6 +36,11 @@ async function main(): Promise<void> {
     const { clearFollowUps, peekFollowUps } = await import('@/lib/chat-followups')
     const { getActiveProfileId } = await import('@/lib/profiles/context')
     const {
+        beginSynchronousDelegation,
+        listSynchronousDelegationsForCaller,
+        synchronousDelegationTestHooks,
+    } = await import('@/lib/ai/synchronous-delegations')
+    const {
         delegateAsyncTool,
         delegateParallelTool,
         delegateToTool,
@@ -72,6 +77,58 @@ async function main(): Promise<void> {
         run_async: true,
     }, ctx)
     check(!legacyAsyncRejected.success && /synchronous/.test(legacyAsyncRejected.error ?? ''), 'legacy run_async cannot bypass synchronous delegate_to')
+
+    // A live user steer may temporarily wake the root while a structurally
+    // synchronous child still owns the original delegate tool call. The
+    // management surface must expose and selectively cancel that work without
+    // turning sync delegation into async-by-default behavior.
+    let interventionSlotReleases = 0
+    const interventionCtx = {
+        ...ctx,
+        permit: {
+            releaseForChildren() { interventionSlotReleases += 1 },
+            async reacquireForResume() {},
+            dispose() {},
+        },
+    }
+    const synchronous = beginSynchronousDelegation({
+        ctx: interventionCtx,
+        tool: 'delegate_to',
+        jobs: [{
+            agentId: 'researcher',
+            agentThreadId: 'sync-intervention-thread',
+            assignedName: 'Mara',
+            taskLabel: 'live intervention fixture',
+        }],
+    })
+    const syncList = await executeManageDelegations({ action: 'list' }, interventionCtx)
+    const activeSynchronous = (syncList.data as {
+        active_synchronous?: Array<{ batch_id?: string; kind?: string; status?: string }>
+    } | undefined)?.active_synchronous ?? []
+    check(
+        syncList.success
+            && activeSynchronous.length === 1
+            && activeSynchronous[0]?.batch_id === synchronous.id
+            && activeSynchronous[0]?.kind === 'synchronous',
+        'steered root can inspect its active synchronous delegation',
+    )
+    const syncSleep = await executeManageDelegations({ action: 'sleep' }, interventionCtx)
+    check(
+        syncSleep.success && interventionSlotReleases === 1 && !synchronous.signal.aborted,
+        'steered root can return to sleep without cancelling child work or retaining an active slot',
+    )
+    const syncCancel = await executeManageDelegations({
+        action: 'cancel',
+        batch_id: synchronous.id,
+    }, interventionCtx)
+    check(syncCancel.success && synchronous.signal.aborted, 'steered root can cancel obsolete synchronous child work')
+    check(
+        listSynchronousDelegationsForCaller(interventionCtx)[0]?.status === 'cancelling',
+        'cancelled synchronous work stays visible until its delegate call settles',
+    )
+    synchronous.finish()
+    check(listSynchronousDelegationsForCaller(interventionCtx).length === 0, 'settled synchronous delegation leaves the intervention registry')
+    synchronousDelegationTestHooks.clear()
 
     // Detached batches are conversation-level wakes, so only the root may own
     // one. A sub-agent must wait synchronously for its direct children.

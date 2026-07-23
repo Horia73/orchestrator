@@ -24,6 +24,12 @@ import {
 } from '@/lib/ai/async-delegations'
 import { getActiveProfileId } from '@/lib/profiles/context'
 import { distinctAssignedName } from '@/lib/agent-label'
+import {
+    beginSynchronousDelegation,
+    cancelSynchronousDelegation,
+    listSynchronousDelegationsForCaller,
+    type SynchronousDelegationSnapshot,
+} from '@/lib/ai/synchronous-delegations'
 
 // Lazy import for runner: it pulls in tools/registry, and we sit inside that
 // graph too. Eager top-level import causes a circular evaluation deadlock —
@@ -203,8 +209,8 @@ export const manageDelegationsTool: ToolDef = {
     id: 'manage_delegations',
     name: 'manage_delegations',
     description: [
-        'Manage async specialist batches launched by delegate_async.',
-        'list shows recent batches in this caller/thread scope. collect returns current state and persisted results without blocking. wait blocks efficiently for up to max_wait_ms and returns results if settled. cancel stops queued/running children. detach remains for older unarmed batches; new delegate_async batches arm one completion wake automatically.',
+        'Manage async specialist batches launched by delegate_async and synchronous child work exposed during an explicit user-steering intervention.',
+        'list shows recent async batches plus active synchronous delegations in this caller/thread scope. collect returns async state and persisted results without blocking. wait blocks efficiently for up to max_wait_ms and returns async results if settled. cancel stops either an async batch or an active synchronous delegation. sleep returns a user-steered parent to its dormant synchronous wait without cancelling the child. detach remains for older unarmed async batches; new delegate_async batches arm one completion wake automatically.',
         'Do not poll, babysit with status checks, or chain short waits. Collect settled results, use one intentional bounded wait only for a concrete same-turn dependency, or cancel obsolete work.',
     ].join(' '),
     input_schema: {
@@ -212,12 +218,12 @@ export const manageDelegationsTool: ToolDef = {
         properties: {
             action: {
                 type: 'string',
-                enum: ['list', 'collect', 'wait', 'detach', 'cancel'],
+                enum: ['list', 'collect', 'wait', 'detach', 'cancel', 'sleep'],
                 description: 'Operation to perform.',
             },
             batch_id: {
                 type: 'string',
-                description: 'Async batch id returned by a delegation launch. Required except for list.',
+                description: 'Async batch id, or active synchronous batch id returned by list when action=cancel. Required except for list and sleep.',
             },
             max_wait_ms: {
                 type: 'integer',
@@ -245,6 +251,12 @@ export async function executeDelegateTo(
     const plan = planDelegation(args, ctx)
     if (!plan.ok) return { success: false, error: plan.error }
     const prepared = materializeDelegation(plan)
+    const active = beginSynchronousDelegation({
+        ctx,
+        tool: 'delegate_to',
+        jobs: [synchronousJobSnapshot(prepared)],
+    })
+    const childContext: ToolExecutionContext = { ...ctx, signal: active.signal }
 
     // Release-while-waiting: this agent is now idle awaiting its child, so give
     // up its active slot for the duration and reclaim it before resuming. This
@@ -253,11 +265,15 @@ export async function executeDelegateTo(
     ctx.permit?.releaseForChildren()
     try {
         return decoratePreparedDelegationResult(
-            await runPreparedDelegation(prepared, ctx),
+            await runPreparedDelegation(prepared, childContext),
             prepared,
         )
     } finally {
-        await ctx.permit?.reacquireForResume()
+        try {
+            await ctx.permit?.reacquireForResume()
+        } finally {
+            active.finish()
+        }
     }
 }
 
@@ -277,6 +293,12 @@ export async function executeDelegateParallel(
     const preparedBatch = prepareDelegationBatch(args, ctx, 'delegate_parallel')
     if (!preparedBatch.ok) return { success: false, error: preparedBatch.error }
     const { jobs, concurrency } = preparedBatch
+    const active = beginSynchronousDelegation({
+        ctx,
+        tool: 'delegate_parallel',
+        jobs: jobs.map(synchronousJobSnapshot),
+    })
+    const childContext: ToolExecutionContext = { ...ctx, signal: active.signal }
 
     // Release-while-waiting: the delegating agent is idle until every job
     // returns, so it gives up its active slot for the duration (reclaimed in the
@@ -286,7 +308,7 @@ export async function executeDelegateParallel(
     let results: Array<Record<string, unknown>>
     try {
         results = await mapWithConcurrency(jobs, concurrency, async (job, index) => {
-            const result = await runPreparedDelegation(job, ctx)
+            const result = await runPreparedDelegation(job, childContext)
             const data = result.data && typeof result.data === 'object' && !Array.isArray(result.data)
                 ? withDelegationOutputMetadata(result.data as Record<string, unknown>, job.thread.id)
                 : result.data
@@ -310,7 +332,11 @@ export async function executeDelegateParallel(
             }
         })
     } finally {
-        await ctx.permit?.reacquireForResume()
+        try {
+            await ctx.permit?.reacquireForResume()
+        } finally {
+            active.finish()
+        }
     }
 
     const failed = results.filter(result => !result.success)
@@ -399,23 +425,55 @@ export async function executeManageDelegations(
     if (ctx.depth > 0) {
         return {
             success: false,
-            error: 'Async delegation management is available only to the depth-0 root orchestrator.',
+            error: 'Delegation management is available only to the depth-0 root orchestrator.',
         }
     }
     const action = typeof args.action === 'string' ? args.action : ''
     if (action === 'list') {
         const batches = listAsyncDelegationBatchesForCaller(ctx, 12)
+        const synchronous = listSynchronousDelegationsForCaller(ctx)
         return {
             success: true,
             data: {
                 batches: batches.map(batch => serializeAsyncDelegationBatch(batch)),
-                note: batches.length === 0 ? 'No async delegation batches in this caller/thread scope.' : undefined,
+                active_synchronous: synchronous.map(serializeSynchronousDelegation),
+                note: batches.length === 0 && synchronous.length === 0
+                    ? 'No delegation batches in this caller/thread scope.'
+                    : undefined,
+            },
+        }
+    }
+
+    if (action === 'sleep') {
+        const synchronous = listSynchronousDelegationsForCaller(ctx)
+        if (synchronous.length === 0) {
+            return { success: false, error: 'No active synchronous delegation is waiting for this parent.' }
+        }
+        ctx.permit?.releaseForChildren()
+        return {
+            success: true,
+            data: {
+                active_synchronous: synchronous.map(serializeSynchronousDelegation),
+                note: 'The parent released its active slot and returned to the dormant synchronous wait. Child work continues unchanged.',
             },
         }
     }
 
     const batchId = typeof args.batch_id === 'string' ? args.batch_id.trim() : ''
     if (!batchId) return { success: false, error: `batch_id is required for action '${action || '(missing)'}'.` }
+    if (action === 'cancel' && batchId.startsWith('sdb_')) {
+        const cancelled = cancelSynchronousDelegation(batchId, ctx)
+        if (!cancelled) {
+            return { success: false, error: `Unknown active synchronous delegation in this caller/thread scope: ${batchId}` }
+        }
+        return {
+            success: true,
+            data: {
+                ...serializeSynchronousDelegation(cancelled),
+                note: 'Cancellation signal sent; the synchronous delegate tool will return after its running children stop.',
+            },
+        }
+    }
     const batch = getAsyncDelegationBatchForCaller(batchId, ctx)
     if (!batch) return { success: false, error: `Unknown async delegation batch in this caller/thread scope: ${batchId}` }
 
@@ -494,7 +552,7 @@ export async function executeManageDelegations(
         }
     }
 
-    return { success: false, error: `Unknown action: ${action || '(missing)'}. Use list, collect, wait, detach, or cancel.` }
+    return { success: false, error: `Unknown action: ${action || '(missing)'}. Use list, collect, wait, detach, cancel, or sleep.` }
 }
 
 // Max jobs per delegate_parallel call. The *global* concurrency gate
@@ -625,6 +683,32 @@ type PreparedDelegation =
         attachments?: Attachment[]
         browserSessionMode?: BrowserSessionMode
     }
+
+function synchronousJobSnapshot(prepared: PreparedDelegation) {
+    return {
+        agentId: prepared.target.id,
+        agentThreadId: prepared.thread.id,
+        assignedName: prepared.assignedName,
+        taskLabel: prepared.thread.title,
+    }
+}
+
+function serializeSynchronousDelegation(entry: SynchronousDelegationSnapshot): Record<string, unknown> {
+    return {
+        batch_id: entry.id,
+        kind: entry.kind,
+        tool: entry.tool,
+        status: entry.status,
+        started_at: entry.startedAt,
+        jobs: entry.jobs.map(job => ({
+            agent_id: job.agentId,
+            agent_name: job.assignedName,
+            task: job.taskLabel,
+            agent_thread_id: job.agentThreadId,
+            status: entry.status,
+        })),
+    }
+}
 
 type DelegationPlan =
     | {

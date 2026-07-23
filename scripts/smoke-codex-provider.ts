@@ -157,7 +157,7 @@ assert.equal(
   "Managed sessions born before the standing delegation policy must refresh with portable history"
 )
 const managedSessionId = codexProviderTestHooks.encodeAppServerSessionId("managed-thread", false)
-assert.equal(managedSessionId, "appserver:managed-policy-v7:managed-thread")
+assert.equal(managedSessionId, "appserver:managed-policy-v8:managed-thread")
 assert.deepEqual(
   codexProviderTestHooks.decodeAppServerSessionId(managedSessionId, false),
   { threadId: "managed-thread" },
@@ -207,6 +207,7 @@ import { writeFileSync } from "node:fs"
 
 const send = value => process.stdout.write(JSON.stringify(value) + "\\n")
 const parentViolation = process.env.FAKE_PARENT_VIOLATION === "1"
+const steeredIntervention = process.env.FAKE_STEERED_INTERVENTION === "1"
 const asyncDelegation = process.env.FAKE_ASYNC_DELEGATION === "1"
 const nativeCollaboration = process.env.FAKE_NATIVE_COLLABORATION === "1"
 const codeModeWait = process.env.FAKE_CODE_MODE_WAIT === "1"
@@ -256,6 +257,25 @@ rl.on("line", line => {
   if (message.method === "turn/interrupt") {
     send({ id: message.id, result: {} })
     send({ method: "turn/completed", params: { turn: { id: "fake-turn", status: "interrupted" } } })
+    return
+  }
+  if (message.method === "turn/steer") {
+    if (process.env.FAKE_INTERVENTION_CAPTURE) {
+      writeFileSync(process.env.FAKE_INTERVENTION_CAPTURE, JSON.stringify(message.params))
+    }
+    send({ id: message.id, result: {} })
+    if (steeredIntervention) {
+      send({ method: "item/started", params: { item: {
+        id: "intervention-shell", type: "commandExecution", command: "git status --short", cwd: "/tmp",
+      } } })
+      send({ method: "item/commandExecution/outputDelta", params: {
+        itemId: "intervention-shell", delta: "M package.json\\n",
+      } })
+      send({ method: "item/completed", params: { item: {
+        id: "intervention-shell", type: "commandExecution", command: "git status --short", cwd: "/tmp",
+        status: "completed", exitCode: 0, aggregatedOutput: "M package.json\\n",
+      } } })
+    }
     return
   }
   if (message.method === "turn/start") {
@@ -378,7 +398,7 @@ rl.on("line", line => {
   assert.deepEqual(errors, [], "A direct namespaced delegation must finish without provider errors")
   assert.equal(content.join(""), "DONE", "The parent may resume only after the delegation item completes")
   assert.deepEqual(toolCalls, ["delegate_to"], "The direct path must not create an exec/wait/shell wrapper")
-  assert.deepEqual(sessions, ["appserver:managed-policy-v7:legacy-thread"])
+  assert.deepEqual(sessions, ["appserver:managed-policy-v8:legacy-thread"])
   const capture = JSON.parse(readFileSync(capturePath, "utf8")) as {
     method: string
     params: {
@@ -500,6 +520,61 @@ rl.on("line", line => {
     violationToolCalls,
     ["delegate_to"],
     "Forbidden parent shell activity must be interrupted before it reaches the UI/tool log"
+  )
+
+  const interventionErrors: string[] = []
+  const interventionToolCalls: string[] = []
+  const interventionContent: string[] = []
+  const interventionCapture = join(directToolFixtureRoot, "intervention.json")
+  let steerDuringDelegation: ((text: string) => Promise<boolean>) | null = null
+  let interventionDelivery: Promise<boolean> | null = null
+  process.env.FAKE_STEERED_INTERVENTION = "1"
+  try {
+    await codexProviderTestHooks.runCodexAppServer({
+      bin: fakeCodex,
+      prompt: "Exercise an explicit user intervention over synchronous delegation.",
+      model: "gpt-5.6-sol",
+      tools: [delegateToTool],
+      builtins: [],
+      nativeCoderRun: false,
+      spawnEnv: {
+        FAKE_STEERED_INTERVENTION: "1",
+        FAKE_INTERVENTION_CAPTURE: interventionCapture,
+      },
+      callbacks: {
+        onThinking() {},
+        onThinkingDone() {},
+        onSteeringAvailable(steer) { steerDuringDelegation = steer },
+        onContent(text) { interventionContent.push(text) },
+        onToolCall(call) {
+          interventionToolCalls.push(call.name)
+          if (call.name === "delegate_to" && steerDuringDelegation) {
+            interventionDelivery = steerDuringDelegation("Change course while the child is running.")
+          }
+        },
+        onToolResult() {},
+        onDone() {},
+        onError(error) { interventionErrors.push(error) },
+      },
+    })
+  } finally {
+    delete process.env.FAKE_STEERED_INTERVENTION
+  }
+  assert.equal(await interventionDelivery, true, "Steering must land while synchronous delegation is pending")
+  assert.deepEqual(interventionErrors, [], "Explicit user steering must not trip the spontaneous-resume guard")
+  assert.equal(interventionContent.join(""), "DONE")
+  assert.deepEqual(
+    interventionToolCalls,
+    ["delegate_to", "shell"],
+    "A steered parent may act during the scoped intervention window"
+  )
+  const interventionParams = JSON.parse(readFileSync(interventionCapture, "utf8")) as {
+    input?: Array<{ text?: string }>
+  }
+  assert.match(
+    interventionParams.input?.[0]?.text ?? "",
+    /orchestrator_user_intervention[\s\S]*manage_delegations[\s\S]*Change course/,
+    "Steering over synchronous work must carry the bounded intervention contract"
   )
 
   const asyncErrors: string[] = []

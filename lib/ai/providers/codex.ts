@@ -152,7 +152,7 @@ const APP_SERVER_SESSION_PREFIX = 'appserver:'
 // sessions then start fresh and latestUserPromptWithPortableHistory carries the
 // Orchestrator conversation across. Promptless native Coder sessions keep the
 // generic prefix and remain resumable.
-const MANAGED_APP_SERVER_SESSION_PREFIX = 'appserver:managed-policy-v7:'
+const MANAGED_APP_SERVER_SESSION_PREFIX = 'appserver:managed-policy-v8:'
 const LEGACY_DIRECT_TOOL_SESSION_PREFIX = 'appserver:direct:'
 const JSON_RPC_REQUEST_TIMEOUT_MS = 60_000
 const CODEX_RECONNECTING_NOTICE_RE = /^Reconnecting(?:\.{3}|…)\s+\d+\/\d+$/i
@@ -229,7 +229,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
             timer: ReturnType<typeof setTimeout>
         }>()
 
-        const inflightTools = new Map<string, { name: string }>()
+        const inflightTools = new Map<string, { name: string; arguments: Record<string, unknown> }>()
         const firedToolCalls = new Set<string>()
         const firedToolResults = new Set<string>()
         const firedCompactions = new Set<string>()
@@ -250,6 +250,12 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
         const activeReasoningItems = new Set<string>()
         const delegationWaitReasoningItems = new Set<string>()
         let parentActivityViolation = false
+        // A synchronous parent stays dormant by default. An explicit user
+        // steer is the sole exception: it opens a temporary intervention
+        // window so the root can inspect/cancel obsolete child work or do a
+        // small course correction while the original delegate call remains
+        // pending. Spontaneous provider activity still fails closed below.
+        let parentInterventionAllowed = false
         let thinkingStartedAt: number | null = null
         let thinkingTotalMs = 0
         let syntheticRawWebCallCount = 0
@@ -274,14 +280,44 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
             callbacks.onSteeringAvailable(async (text: string) => {
                 const trimmed = text.trim()
                 if (!trimmed || finished || aborted || !activeThreadId || !activeTurnId) return false
+                const opensDelegationIntervention = blockingDelegations.size > 0
+                    && !parentInterventionAllowed
+                if (opensDelegationIntervention) {
+                    parentInterventionAllowed = true
+                    try {
+                        // The synchronous executor released this parent's one
+                        // global active permit while sleeping. Explicit user
+                        // steering makes it active again, so admission must be
+                        // reacquired before the provider is allowed to resume.
+                        await toolContext?.permit?.reacquireForResume()
+                    } catch (err) {
+                        parentInterventionAllowed = false
+                        rememberDiagnostic(`steering admission failed: ${err instanceof Error ? err.message : String(err)}`)
+                        return false
+                    }
+                }
+                const steeredText = blockingDelegations.size > 0
+                    ? [
+                        '<orchestrator_user_intervention>',
+                        'A synchronous Orchestrator delegation is still running. This explicit user message temporarily wakes the root parent without changing the default synchronous behavior.',
+                        'Decide whether the new instruction makes current child work obsolete. Use manage_delegations action="list" to inspect active_synchronous entries and action="cancel" with that batch_id only when work should stop. Otherwise do not duplicate it; perform only useful intervention work, then call manage_delegations action="sleep" to release your active slot and return to waiting for the original delegate result. Never claim the pending child has finished.',
+                        '</orchestrator_user_intervention>',
+                        '',
+                        trimmed,
+                    ].join('\n')
+                    : trimmed
                 try {
                     await request('turn/steer', {
                         threadId: activeThreadId,
-                        input: [{ type: 'text', text: trimmed, text_elements: [] }],
+                        input: [{ type: 'text', text: steeredText, text_elements: [] }],
                         expectedTurnId: activeTurnId,
                     })
                     return true
                 } catch (err) {
+                    if (opensDelegationIntervention) {
+                        parentInterventionAllowed = false
+                        if (blockingDelegations.size > 0) toolContext?.permit?.releaseForChildren()
+                    }
                     rememberDiagnostic(`turn/steer failed: ${err instanceof Error ? err.message : String(err)}`)
                     return false
                 }
@@ -323,7 +359,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
         const fireToolCall = (id: string, name: string, callArgs: Record<string, unknown>) => {
             if (firedToolCalls.has(id)) return
             firedToolCalls.add(id)
-            inflightTools.set(id, { name })
+            inflightTools.set(id, { name, arguments: callArgs })
             callbacks.onToolCall({ id, name, arguments: callArgs })
         }
 
@@ -431,6 +467,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
         const stopParentActivityDuringDelegation = (activity: string): boolean => {
             if (parentActivityViolation) return true
             if (blockingDelegations.size === 0) return false
+            if (parentInterventionAllowed) return false
 
             parentActivityViolation = true
             const message = [
@@ -679,9 +716,15 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                 return
             }
 
+            // Mark the parent dormant before surfacing the card. A user can
+            // steer immediately after seeing that event; the steering callback
+            // must already know this is an intervention over synchronous work.
+            if (blocksParentOutput && tool) blockingDelegations.add(callId)
             fireToolCall(callId, surfacedName, callArgs)
 
             if (!tool) {
+                blockingDelegations.delete(callId)
+                if (blockingDelegations.size === 0) parentInterventionAllowed = false
                 const error = `Unknown tool: ${toolName}`
                 respond(requestId, {
                     contentItems: [{ type: 'inputText', text: error }],
@@ -690,7 +733,6 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                 return
             }
 
-            if (blocksParentOutput) blockingDelegations.add(callId)
             try {
                 const result = await executeTool(tool, callArgs, toolContext
                     ? { ...toolContext, currentToolCallId: callId }
@@ -897,7 +939,9 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                 fireToolCall(item.id, name, toRecord(item.arguments))
             } else if (itemType === 'dynamicToolCall') {
                 const name = typeof item.tool === 'string' ? item.tool : 'tool'
-                if (!BLOCKING_DELEGATION_TOOLS.has(name) && stopParentActivityDuringDelegation(`dynamic tool ${name}`)) {
+                const blocksParentOutput = BLOCKING_DELEGATION_TOOLS.has(name)
+                if (blocksParentOutput) blockingDelegations.add(item.id)
+                if (!blocksParentOutput && stopParentActivityDuringDelegation(`dynamic tool ${name}`)) {
                     return
                 }
                 fireToolCall(item.id, name, toRecord(item.arguments))
@@ -970,11 +1014,18 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                 if (!BLOCKING_DELEGATION_TOOLS.has(name) && stopParentActivityDuringDelegation(`dynamic tool ${name}`)) {
                     return
                 }
+                const callArgs = inflightTools.get(item.id)?.arguments ?? toRecord(item.arguments)
+                const returnsToSynchronousWait = name === 'manage_delegations'
+                    && callArgs.action === 'sleep'
                 const ok = item.success !== false && item.status !== 'failed'
                 const text = contentItemsToText(item.contentItems) || (ok ? '' : 'Tool call failed')
                 if (!firedToolCalls.has(item.id)) fireToolCall(item.id, name, toRecord(item.arguments))
                 fireToolResult(item.id, name, ok, text)
+                if (ok && returnsToSynchronousWait && blockingDelegations.size > 0) {
+                    parentInterventionAllowed = false
+                }
                 blockingDelegations.delete(item.id)
+                if (blockingDelegations.size === 0) parentInterventionAllowed = false
                 return
             }
 
