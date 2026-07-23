@@ -13,7 +13,7 @@ import type {
     VideoGenJob,
 } from './types'
 import { MAX_AGENT_DEPTH } from './types'
-import { acquireRun, releaseTree, type GatePriority, type RunPermit } from '@/lib/ai/concurrency-gate'
+import { acquireRun, type GatePriority, type RunPermit } from '@/lib/ai/concurrency-gate'
 import { getAgent } from './registry'
 import { AUDIO_CONTEXT_AGENT_ID, AUDIO_TRANSCRIPT_AGENT_ID } from './audio-context-agent'
 import { resolveRuntimeAgentConfig, runtimeBuiltinsForProvider } from './runtime-agent-config'
@@ -115,12 +115,10 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
     // replies, microscript wakes, repairs) flows through here, so this is the
     // single point that bounds how many agents run at once. depth 0 ⇒ this run's
     // parent is synthetic, i.e. it is a top-level run that also takes a `main`
-    // slot. The permit + rootRunId thread into the run's tool context so nested
-    // delegate_to calls can release/re-acquire the slot and honour the tree
-    // budget. See lib/ai/concurrency-gate.ts.
+    // slot. The permit threads into nested tool contexts so delegate_to calls
+    // can release/re-acquire active capacity without a cumulative tree quota.
+    // See lib/ai/concurrency-gate.ts.
     const isTopLevel = args.parentCtx.depth === 0
-    const rootRunId = args.parentCtx.rootRunId ?? `root_${randomUUID()}`
-    const ownsTree = isTopLevel || !args.parentCtx.rootRunId
     const priority: GatePriority = isTopLevel ? 'background' : 'interactive'
     // Resolve the runtimes up front so the gate can apply the per-provider
     // rate-limit cap (the primary candidate's backend is what this run hits).
@@ -129,26 +127,47 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
     // be shown while the gate makes us wait; the first attempt reuses it so the
     // queued card flips to the running card in place.
     const queuedRunId = `sub_${randomUUID()}`
-    const permit = await acquireRun({
-        topLevel: isTopLevel,
-        priority,
-        provider: runtimes[0]?.provider,
-        onQueued: () =>
+    let queued = false
+    let permit: RunPermit
+    try {
+        permit = await acquireRun({
+            topLevel: isTopLevel,
+            priority,
+            provider: runtimes[0]?.provider,
+            depth: args.parentCtx.depth + 1,
+            signal: args.parentCtx.signal,
+            onQueued: () => {
+                queued = true
+                emitAgent(args.parentCtx, {
+                    type: 'agent_queued',
+                    runId: queuedRunId,
+                    parentRunId: args.parentCtx.parentAgentRunId,
+                    toolCallId: args.parentCtx.currentToolCallId,
+                    agentId: args.target.id,
+                    agentName: args.target.name,
+                    assignedName: args.assignedName,
+                    taskLabel: args.taskLabel,
+                    kind: args.target.kind,
+                    agentThreadId: args.agentThreadId,
+                    depth: args.parentCtx.depth + 1,
+                    startedAt: Date.now(),
+                })
+            },
+        })
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        if (queued) {
             emitAgent(args.parentCtx, {
-                type: 'agent_queued',
+                type: 'agent_done',
                 runId: queuedRunId,
-                parentRunId: args.parentCtx.parentAgentRunId,
-                toolCallId: args.parentCtx.currentToolCallId,
-                agentId: args.target.id,
-                agentName: args.target.name,
-                assignedName: args.assignedName,
-                taskLabel: args.taskLabel,
-                kind: args.target.kind,
-                agentThreadId: args.agentThreadId,
-                depth: args.parentCtx.depth + 1,
-                startedAt: Date.now(),
-            }),
-    })
+                status: 'aborted',
+                endedAt: Date.now(),
+                content: '',
+                error: message,
+            })
+        }
+        return { success: false, error: message }
+    }
     try {
         let lastResult: ToolResult | null = null
         const attempts: Array<{ provider: string; model: string; retry: number; error: string }> = []
@@ -160,7 +179,7 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
                 // (matches the queued card). Retries and fallbacks get fresh ids
                 // so each failed model call remains inspectable in Logs.
                 const providedRunId = index === 0 && retryIndex === 0 ? queuedRunId : undefined
-                const result = await runTextSubAgentAttempt(args, runtime, permit, rootRunId, providedRunId)
+                const result = await runTextSubAgentAttempt(args, runtime, permit, providedRunId)
                 if (result.success) return result
                 lastResult = result
                 attempts.push({
@@ -203,7 +222,6 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
         return lastResult
     } finally {
         permit.dispose()
-        if (ownsTree) releaseTree(rootRunId)
     }
 }
 
@@ -216,7 +234,7 @@ function stripSubAgentPrefix(error: string, agentId: string): string {
         : error
 }
 
-async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: RuntimeAgentSettings, permit?: RunPermit, rootRunId?: string, providedRunId?: string): Promise<ToolResult> {
+async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: RuntimeAgentSettings, permit?: RunPermit, providedRunId?: string): Promise<ToolResult> {
     const { target, prompt, parentCtx, agentThreadId, cwd, attachments } = args
     const runtimeTarget = resolveRuntimeAgentConfig(target, runtime.provider)
     const prevSession = agentThreadId ? getAgentThreadInteractionId(agentThreadId, runtime.provider, runtime.model) : null
@@ -344,14 +362,14 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
         parentRequestId: subRequestId,
         signal: parentCtx.signal,
         parentAgentRunId: subRequestId,
+        callerAssignedName: args.assignedName,
         onAgentEvent: parentCtx.onAgentEvent,
         appOrigin: parentCtx.appOrigin,
         preactivatedCapabilities: parentCtx.preactivatedCapabilities,
         toolSurfaceMode: parentCtx.toolSurfaceMode,
-        // Concurrency-gate handles for nested delegations (release-while-waiting
-        // + per-tree spawn budget). See lib/ai/concurrency-gate.ts.
+        // Concurrency-gate handles for nested delegations (release active work
+        // while waiting; resident CLI process capacity stays held per depth).
         permit,
-        rootRunId,
     }
 
     const threadMessages = agentThreadId ? getAgentThreadMessages(agentThreadId) : []
@@ -785,18 +803,17 @@ export async function runMediaSubAgent(args: RunMediaSubAgentArgs): Promise<Tool
     // consume CPU/RAM/quota, so they take a concurrency-gate slot like any other
     // agent run. depth 0 ⇒ top-level (also takes a `main` slot).
     const isTopLevel = args.parentCtx.depth === 0
-    const rootRunId = args.parentCtx.rootRunId ?? `root_${randomUUID()}`
-    const ownsTree = isTopLevel || !args.parentCtx.rootRunId
     const permit = await acquireRun({
         topLevel: isTopLevel,
         priority: isTopLevel ? 'background' : 'interactive',
         provider: resolveAgentRuntimeSettings(args.target).provider,
+        depth: args.parentCtx.depth + 1,
+        signal: args.parentCtx.signal,
     })
     try {
         return await runMediaSubAgentInner(args)
     } finally {
         permit.dispose()
-        if (ownsTree) releaseTree(rootRunId)
     }
 }
 

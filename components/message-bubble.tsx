@@ -21,6 +21,7 @@ import { useTrapWheel } from "@/components/use-trap-wheel"
 import type { ArtifactRow } from "@/lib/artifacts/schema"
 import { appPath } from "@/lib/app-path"
 import { agentFullLabel } from "@/lib/agent-label"
+import { isNestedAgentRun } from "@/lib/agent-hierarchy"
 import {
     browserAgentRunPauseKind,
     browserSessionIdFromRunContent,
@@ -1247,10 +1248,9 @@ function ReasoningEntryList({
         reasoning.some(entry => entry.type === "agent_call") ? "Parent agent" : undefined
     )
 
-    // Finished nested agents live inside their direct parent's workspace panel.
-    // A queued/running descendant is also surfaced inline while live: hiding it
-    // until its parent panel happened to be opened made real work look absent.
-    // Once settled it returns to the normal nested-only presentation.
+    // Every nested agent lives exclusively inside its direct parent's workspace
+    // panel. Showing a live descendant here as well duplicates it on the root
+    // timeline and destroys the visual tree/ownership boundary.
     const agentRunIds = new Set<string>()
     for (const entry of reasoning) {
         if (entry.type === "agent_call") agentRunIds.add(entry.runId)
@@ -1261,10 +1261,7 @@ function ReasoningEntryList({
 
         if (
             entry.type === "agent_call" &&
-            ((entry.parentRunId &&
-                agentRunIds.has(entry.parentRunId) &&
-                entry.status !== "running" &&
-                !entry.queued) ||
+            (isNestedAgentRun(entry, agentRunIds) ||
                 hiddenAgentRunIds?.has(entry.runId))
         ) {
             continue

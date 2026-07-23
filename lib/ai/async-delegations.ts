@@ -2,7 +2,6 @@ import { randomUUID } from 'crypto'
 
 import type { ToolExecutionContext, ToolResult } from '@/lib/ai/agents/types'
 import { clearAgentRun, registerAgentRun } from '@/lib/agent-runs'
-import { releaseAsyncTree, retainTreeForAsync } from '@/lib/ai/concurrency-gate'
 import { getDatabaseForProfile, getConversation, addMessage } from '@/lib/db'
 import { enqueueFollowUp } from '@/lib/chat-followups'
 import { getActiveChatStream } from '@/lib/chat-streams'
@@ -251,7 +250,6 @@ export async function startAsyncDelegationBatch(args: {
         conversationId: args.ctx.conversationId,
         startedAt: now,
     }, { alreadyAdmitted: true })
-    retainTreeForAsync(args.ctx.rootRunId)
 
     const controller = new AbortController()
     const onParentAbort = () => {
@@ -290,7 +288,6 @@ export async function startAsyncDelegationBatch(args: {
                         ...args.ctx,
                         signal: controller.signal,
                         permit: undefined,
-                        rootRunId: args.ctx.rootRunId,
                     })
                 } catch (error) {
                     result = {
@@ -313,7 +310,6 @@ export async function startAsyncDelegationBatch(args: {
         } finally {
             finalizeBatch(batchId, controller.signal.aborted)
             clearAgentRun(batchId)
-            releaseAsyncTree(args.ctx.rootRunId)
             runtimeBatches.delete(runtimeKey(profileId, batchId))
             args.ctx.signal?.removeEventListener('abort', onParentAbort)
             await notifyAsyncDelegationCompletion(profileId, batchId)

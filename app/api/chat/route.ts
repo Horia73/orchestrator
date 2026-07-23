@@ -151,7 +151,12 @@ import {
 } from "@/lib/secrets/store"
 
 /** Persist in-progress assistant output periodically so reloads can catch up */
-const STREAM_PROGRESS_PERSIST_INTERVAL_MS = 250
+// Direct SSE carries token-level progress to the watching client. Durable
+// snapshots are recovery checkpoints, not another token stream: rewriting the
+// growing assistant/agent tree on every chunk caused extreme SQLite and block
+// write amplification during broad research. One checkpoint per second keeps
+// reconnect recovery current while bounding DB writes independently of fan-out.
+const STREAM_PROGRESS_PERSIST_INTERVAL_MS = 1_000
 /** SSE comment keepalive cadence. Long tool calls can be event-silent for
  *  minutes; without bytes on the wire the client cannot tell "model is busy"
  *  from "mobile radio silently died", and its stall watchdog (which frees a
@@ -1230,6 +1235,7 @@ export async function POST(request: Request) {
           const entry = findAgentEntry(event.runId)
           if (entry?.type === "agent_call") {
             entry.status = event.status
+            entry.queued = false
             entry.endedAt = event.endedAt
             if (typeof event.content === "string") entry.content = event.content
             if (event.contentSegments) entry.contentSegments = event.contentSegments
@@ -1243,7 +1249,11 @@ export async function POST(request: Request) {
         }
 
         send(event as unknown as Record<string, unknown>)
-        persistAssistantProgress({ force: true })
+        const forceSnapshot =
+          event.type === "agent_queued" ||
+          event.type === "agent_start" ||
+          event.type === "agent_done"
+        persistAssistantProgress({ force: forceSnapshot })
         if (
           event.type === "agent_tool_call" ||
           event.type === "agent_tool_result" ||

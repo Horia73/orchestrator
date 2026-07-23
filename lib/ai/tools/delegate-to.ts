@@ -3,7 +3,6 @@ import path from 'path'
 
 import type { AgentKind, ToolDef, ToolExecutionContext, ToolResult } from '@/lib/ai/agents/types'
 import { MAX_AGENT_DEPTH } from '@/lib/ai/agents/types'
-import { tryReserveTreeSpawn, agentGateLimits } from '@/lib/ai/concurrency-gate'
 import { getAgent } from '@/lib/ai/agents/registry'
 import { getEffectiveAgentSettings } from '@/lib/config'
 import { createAgentThread, getAgentThread, getAgentThreadMessages, type AgentThread } from '@/lib/db'
@@ -24,6 +23,7 @@ import {
     waitForAsyncDelegationBatch,
 } from '@/lib/ai/async-delegations'
 import { getActiveProfileId } from '@/lib/profiles/context'
+import { distinctAssignedName } from '@/lib/agent-label'
 
 // Lazy import for runner: it pulls in tools/registry, and we sit inside that
 // graph too. Eager top-level import causes a circular evaluation deadlock —
@@ -62,7 +62,7 @@ export const delegateToTool: ToolDef = {
             },
             agent_name: {
                 type: 'string',
-                description: 'A short, human first name to give this sub-agent run (e.g. "Marty", "Lena") so the user can tell parallel agents apart. Shown next to the role as "Researcher Marty". Keep it to a single given name. Reuse the same name when continuing the same thread_id.',
+                description: 'A short, human first name to give this sub-agent run (e.g. "Marty", "Lena") so the user can tell agents apart. Shown next to the role as "Researcher Marty". It must differ from your own assigned name and sibling names. Keep it to a single given name. Reuse the same name when continuing the same thread_id.',
             },
             prompt: {
                 type: 'string',
@@ -136,7 +136,7 @@ export const delegateParallelTool: ToolDef = {
                         },
                         agent_name: {
                             type: 'string',
-                            description: 'A short, human first name for this sub-agent run (e.g. "Marty", "Lena") so the user can tell parallel agents apart. Shown next to the role as "Researcher Marty". Give each job in the batch a distinct name.',
+                            description: 'A short, human first name for this sub-agent run (e.g. "Marty", "Lena") so the user can tell parallel agents apart. Shown next to the role as "Researcher Marty". It must differ from your own assigned name and every sibling name.',
                         },
                         prompt: {
                             type: 'string',
@@ -234,17 +234,6 @@ export async function executeDelegateTo(
         }
     }
     const prepared = materializeDelegation(plan)
-
-    // Per-tree spawn budget: a runaway recursion (agents endlessly spawning more
-    // agents) is capped so a single top-level run cannot flood the queue. When
-    // exhausted, the caller is told to finish the work itself — graceful
-    // degradation instead of an unbounded backlog.
-    if (!tryReserveTreeSpawn(ctx?.rootRunId)) {
-        return {
-            success: false,
-            error: `Delegation limit reached: this task has already spawned its maximum of ${agentGateLimits.treeBudget} sub-agents. Do NOT retry delegation — finish the remaining work yourself with your own tools, or wrap up and report what you have. This is a hard cap, not a transient error.`,
-        }
-    }
 
     if (args.run_async === true) {
         try {
@@ -344,6 +333,11 @@ export async function executeDelegateParallel(
     if (invalid && !invalid.ok) return { success: false, error: invalid.error }
 
     const validPlans = plans.filter((item): item is Extract<DelegationPlan, { ok: true }> => item.ok)
+    const reservedNames = new Set<string | undefined>([ctx.callerAssignedName])
+    for (const plan of validPlans) {
+        plan.assignedName = distinctAssignedName(plan.assignedName, reservedNames)
+        if (plan.assignedName) reservedNames.add(plan.assignedName)
+    }
     const seenThreadIds = new Set<string>()
     for (const plan of validPlans) {
         if (!plan.thread?.id) continue
@@ -359,14 +353,6 @@ export async function executeDelegateParallel(
     const concurrency = Math.max(1, Math.min(requestedConcurrency, MAX_PARALLEL_DELEGATIONS, jobs.length))
 
     if (args.run_async === true) {
-        for (let index = 0; index < jobs.length; index++) {
-            if (!tryReserveTreeSpawn(ctx.rootRunId)) {
-                return {
-                    success: false,
-                    error: `Delegation limit reached before async job ${index + 1}: this task has already spawned its maximum of ${agentGateLimits.treeBudget} sub-agents. Do NOT retry delegation; finish the remaining work yourself.`,
-                }
-            }
-        }
         try {
             const launched = await startAsyncDelegationBatch({
                 ctx,
@@ -420,25 +406,6 @@ export async function executeDelegateParallel(
     let results: Array<Record<string, unknown>>
     try {
         results = await mapWithConcurrency(jobs, concurrency, async (job, index) => {
-            // Per-tree spawn budget: stop a runaway recursion from flooding the
-            // queue. An over-budget job degrades to a clear error so the agent
-            // finishes that branch itself instead of spawning forever.
-            if (!tryReserveTreeSpawn(ctx.rootRunId)) {
-                return {
-                    index,
-                    success: false,
-                    agentId: job.target.id,
-                    agentThreadId: job.thread.id,
-                    agent_thread_id: job.thread.id,
-                    output: undefined,
-                    outputChars: 0,
-                    output_chars: 0,
-                    fullOutputSaved: false,
-                    full_output_saved: false,
-                    data: undefined,
-                    error: `Delegation limit reached: this task has already spawned its maximum of ${agentGateLimits.treeBudget} sub-agents. Do NOT retry — handle this part yourself with your own tools. This is a hard cap, not a transient error.`,
-                }
-            }
             const result = await runPreparedDelegation(job, ctx)
             const data = result.data && typeof result.data === 'object' && !Array.isArray(result.data)
                 ? withDelegationOutputMetadata(result.data as Record<string, unknown>, job.thread.id)
@@ -693,7 +660,10 @@ function planDelegation(args: Record<string, unknown>, ctx?: ToolExecutionContex
     const prompt = args.prompt
     const threadId = args.thread_id
     const threadTitle = args.thread_title
-    const assignedName = sanitizeAssignedName(args.agent_name)
+    const assignedName = distinctAssignedName(
+        sanitizeAssignedName(args.agent_name),
+        [ctx.callerAssignedName],
+    )
     const cwdPlan = normalizeDelegationCwd(args.cwd)
     if (!cwdPlan.ok) return { ok: false, error: cwdPlan.error }
     const attachmentsPlan = resolveDelegationAttachments(args.attachment_ids)

@@ -69,6 +69,8 @@ export interface ToolExecutionContext {
   currentToolCallId?: string
   /** Parent agent run id for nested-agent UI. */
   parentAgentRunId?: string
+  /** Persona name assigned to the caller; children must not reuse it. */
+  callerAssignedName?: string
   /** Emits agent-run lifecycle/transcript events to the chat route. */
   onAgentEvent?: (event: AgentRunEvent) => void | Promise<void>
   /** Emits live tool output before the final tool result is available. */
@@ -92,9 +94,6 @@ export interface ToolExecutionContext {
   /** Concurrency-gate slot held by this agent run. delegate_to releases it while
    *  awaiting children and re-acquires it before resuming (deadlock-free fan-out). */
   permit?: RunPermit
-  /** Id of the top-level run that owns this call tree. Used to enforce the
-   *  per-tree spawn budget across nested delegations. */
-  rootRunId?: string
 }
 
 // ---------------------------------------------------------------------------

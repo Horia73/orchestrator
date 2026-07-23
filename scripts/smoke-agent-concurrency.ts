@@ -11,8 +11,8 @@
  *   3. Nested fan-out is DEADLOCK-FREE — a 1 → 10 → 5 tree completes even when
  *      the caps are far smaller than the tree (parents release their slot while
  *      awaiting children).
- *   4. The per-tree spawn budget degrades gracefully (over-budget spawns are
- *      rejected, the run still completes).
+ *   4. Large trees are not rejected by a cumulative quota; they drain through
+ *      the bounded active pools and complete under backpressure.
  *
  * Run with: npx tsx scripts/smoke-agent-concurrency.ts
  */
@@ -22,10 +22,6 @@ process.env.AGENT_RAMP_MS = '0'
 
 import {
     acquireRun,
-    releaseAsyncTree,
-    releaseTree,
-    retainTreeForAsync,
-    tryReserveTreeSpawn,
     __setGateCapacitiesForTest,
     __setProviderCapForTest,
     getAgentGateStats,
@@ -50,7 +46,8 @@ let liveTotal = 0
 let maxTotal = 0
 let liveMain = 0
 let maxMain = 0
-let budgetRejections = 0
+let completedRuns = 0
+const maxResidentsByDepth = new Map<number, number>()
 
 function enterTotal() {
     liveTotal++
@@ -71,13 +68,22 @@ interface ChildPlan {
 async function simulateAgent(opts: {
     depth: number
     isTopLevel: boolean
-    rootRunId: string
     plan: ChildPlan | null
+    provider?: string
 }): Promise<void> {
     const permit = await acquireRun({
         topLevel: opts.isTopLevel,
         priority: opts.isTopLevel ? 'background' : 'interactive',
+        provider: opts.provider,
+        depth: opts.depth,
     })
+    if (opts.provider === 'codex') {
+        const active = getAgentGateStats().residents[`codex:${opts.depth}`]?.active ?? 0
+        maxResidentsByDepth.set(
+            opts.depth,
+            Math.max(maxResidentsByDepth.get(opts.depth) ?? 0, active),
+        )
+    }
     enterTotal()
     if (opts.isTopLevel) {
         liveMain++
@@ -89,16 +95,12 @@ async function simulateAgent(opts: {
         if (opts.plan && opts.plan.count > 0) {
             const children: Array<() => Promise<void>> = []
             for (let i = 0; i < opts.plan.count; i++) {
-                if (!tryReserveTreeSpawn(opts.rootRunId)) {
-                    budgetRejections++
-                    continue
-                }
                 children.push(() =>
                     simulateAgent({
                         depth: opts.depth + 1,
                         isTopLevel: false,
-                        rootRunId: opts.rootRunId,
                         plan: opts.plan!.next,
+                        provider: opts.provider,
                     })
                 )
             }
@@ -119,8 +121,8 @@ async function simulateAgent(opts: {
     } finally {
         leaveTotal()
         if (opts.isTopLevel) liveMain--
+        completedRuns++
         permit.dispose()
-        if (opts.isTopLevel) releaseTree(opts.rootRunId)
     }
 }
 
@@ -129,7 +131,8 @@ function resetCounters() {
     maxTotal = 0
     liveMain = 0
     maxMain = 0
-    budgetRejections = 0
+    completedRuns = 0
+    maxResidentsByDepth.clear()
 }
 
 async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | 'TIMEOUT'> {
@@ -150,11 +153,11 @@ async function main() {
     // A naive "gate everything" semaphore would DEADLOCK here. Release-while-
     // waiting must let it complete with peak active ≤ caps.
     console.log('Scenario 1 — deep fan-out (1→10→5) under tiny caps (main=2,total=3):')
-    __setGateCapacitiesForTest(2, 3, 1000)
+    __setGateCapacitiesForTest(2, 3)
     resetCounters()
     const plan1: ChildPlan = { count: 10, next: { count: 5, next: null } }
     const r1 = await withTimeout(
-        simulateAgent({ depth: 0, isTopLevel: true, rootRunId: 'tree1', plan: plan1 }),
+        simulateAgent({ depth: 0, isTopLevel: true, plan: plan1 }),
         15_000
     )
     check('completed (no deadlock)', r1 !== 'TIMEOUT')
@@ -162,30 +165,18 @@ async function main() {
     check('main never exceeded cap (2)', maxMain <= 2, `peak=${maxMain}`)
     check('counters drained to zero', liveTotal === 0 && liveMain === 0, `total=${liveTotal} main=${liveMain}`)
 
-    // ---- Scenario 1b: detached descendant keeps the tree budget alive ------
-    // An intermediate parent may finish before its async child. The parent's
-    // owner release must be deferred until the detached lease is returned.
-    const asyncRoot = 'tree_async_lease'
-    check('async lease fixture reserves root spawn', tryReserveTreeSpawn(asyncRoot))
-    retainTreeForAsync(asyncRoot)
-    releaseTree(asyncRoot)
-    check('owner release waits for detached async child', getAgentGateStats().liveTrees === 1)
-    releaseAsyncTree(asyncRoot)
-    check('final async child release clears root budget', getAgentGateStats().liveTrees === 0)
-
     // ---- Scenario 2: many top-level runs at once ----------------------------
     // 8 independent top-level runs (each delegating 4) with main=3/total=6.
     // Verifies the main cap throttles top-level stampede.
     console.log('\nScenario 2 — 8 concurrent top-level runs (main=3,total=6):')
-    __setGateCapacitiesForTest(3, 6, 1000)
+    __setGateCapacitiesForTest(3, 6)
     resetCounters()
     const r2 = await withTimeout(
         Promise.all(
-            Array.from({ length: 8 }, (_, i) =>
+            Array.from({ length: 8 }, () =>
                 simulateAgent({
                     depth: 0,
                     isTopLevel: true,
-                    rootRunId: `top_${i}`,
                     plan: { count: 4, next: null },
                 })
             )
@@ -198,20 +189,37 @@ async function main() {
     check('reached the main cap (throttling actually engaged)', maxMain === 3, `peak=${maxMain}`)
     check('counters drained to zero', liveTotal === 0 && liveMain === 0, `total=${liveTotal} main=${liveMain}`)
 
-    // ---- Scenario 3: per-tree budget degrades gracefully --------------------
-    // A 1→10→10 tree (~110 spawns) under a budget of 12. Over-budget delegations
-    // are rejected; the run still completes.
-    console.log('\nScenario 3 — runaway tree (1→10→10) under budget=12:')
-    __setGateCapacitiesForTest(4, 8, 12)
+    // ---- Scenario 3: cumulative tree size is unlimited ----------------------
+    // A 1→10→10 tree (111 total runs) must fully drain through an active cap of
+    // 8. No completed child consumes a lifetime quota and no branch is rejected.
+    // Codex residency is capped independently at each depth, which bounds RAM
+    // without blocking the next depth's children.
+    console.log('\nScenario 3 — large Codex tree (1→10→10), unlimited cumulative size:')
+    __setGateCapacitiesForTest(4, 8)
     resetCounters()
     const plan3: ChildPlan = { count: 10, next: { count: 10, next: null } }
     const r3 = await withTimeout(
-        simulateAgent({ depth: 0, isTopLevel: true, rootRunId: 'runaway', plan: plan3 }),
+        simulateAgent({
+            depth: 1,
+            isTopLevel: true,
+            plan: plan3,
+            provider: 'codex',
+        }),
         15_000
     )
     check('completed (no deadlock)', r3 !== 'TIMEOUT')
-    check('budget rejected the overflow', budgetRejections > 0, `rejections=${budgetRejections}`)
+    check('all 111 runs completed', completedRuns === 111, `completed=${completedRuns}`)
     check('total-active never exceeded cap (8)', maxTotal <= 8, `peak=${maxTotal}`)
+    check(
+        'Codex resident processes stayed at ≤2 per depth',
+        Array.from(maxResidentsByDepth.values()).every(peak => peak <= 2),
+        JSON.stringify(Object.fromEntries(maxResidentsByDepth)),
+    )
+    check(
+        'all three delegation-depth pools made progress',
+        [1, 2, 3].every(depth => (maxResidentsByDepth.get(depth) ?? 0) > 0),
+        JSON.stringify(Object.fromEntries(maxResidentsByDepth)),
+    )
     check('counters drained to zero', liveTotal === 0 && liveMain === 0, `total=${liveTotal} main=${liveMain}`)
 
     // ---- Scenario 4: per-provider rate-limit cap ----------------------------
@@ -219,7 +227,7 @@ async function main() {
     // provider cap of 3 — at most 3 may hit that backend at once (so a burst
     // can't trip the upstream 429/529).
     console.log('\nScenario 4 — per-provider cap (claude=3) with generous total (20):')
-    __setGateCapacitiesForTest(20, 20, 1000)
+    __setGateCapacitiesForTest(20, 20)
     __setProviderCapForTest('claude', 3)
     let claudeLive = 0
     let claudeMax = 0
@@ -249,7 +257,7 @@ async function main() {
     // a slot must each get an onQueued callback; the 2 that start immediately
     // must not.
     console.log('\nScenario 5 — onQueued fires for waiting runs (total=2, 5 runs):')
-    __setGateCapacitiesForTest(2, 2, 1000)
+    __setGateCapacitiesForTest(2, 2)
     let onQueuedCount = 0
     const r5 = await withTimeout(
         Promise.all(
@@ -273,11 +281,46 @@ async function main() {
     check('completed', r5 !== 'TIMEOUT')
     check('onQueued fired for the 3 runs that waited', onQueuedCount === 3, `fired=${onQueuedCount}`)
 
-    // ---- Scenario 6: gate accounting returns to idle ------------------------
+    // ---- Scenario 6: cancellation removes a queued run ---------------------
+    console.log('\nScenario 6 — cancelled queued admission is removed immediately:')
+    __setGateCapacitiesForTest(1, 1)
+    const blocker = await acquireRun({ topLevel: false, priority: 'interactive' })
+    const abortController = new AbortController()
+    let cancelledQueued = false
+    const cancelled = acquireRun({
+        topLevel: false,
+        priority: 'interactive',
+        signal: abortController.signal,
+        onQueued: () => {
+            cancelledQueued = true
+        },
+    }).then(
+        permit => {
+            permit.dispose()
+            return false
+        },
+        error => error instanceof Error && error.name === 'AbortError',
+    )
+    await sleep(2)
+    abortController.abort()
+    check('cancelled waiter rejected as AbortError', await cancelled)
+    check('cancelled waiter had entered the queue', cancelledQueued)
+    check('cancelled waiter was removed from the queue', getAgentGateStats().totalQueued === 0)
+    blocker.dispose()
+
+    // A removed waiter must not consume the next released slot.
+    const afterCancel = await withTimeout(
+        acquireRun({ topLevel: false, priority: 'interactive' }),
+        1_000,
+    )
+    check('next legitimate run starts normally', afterCancel !== 'TIMEOUT')
+    if (afterCancel !== 'TIMEOUT') afterCancel.dispose()
+
+    // ---- Scenario 7: gate accounting returns to idle ------------------------
     const stats = getAgentGateStats()
     check(
         'gate idle after all runs',
-        stats.totalActive === 0 && stats.mainActive === 0 && stats.liveTrees === 0,
+        stats.totalActive === 0 && stats.mainActive === 0,
         JSON.stringify(stats)
     )
 

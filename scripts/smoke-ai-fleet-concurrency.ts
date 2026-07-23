@@ -6,7 +6,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 interface ChildMessage {
-    type: 'acquired' | 'released' | 'error'
+    type: 'acquired' | 'active_released' | 'released' | 'error'
     workerId: string
     error?: string
 }
@@ -16,14 +16,24 @@ async function childMain() {
     const workerId = process.env.ORCHESTRATOR_AI_WORKER_ID || 'unknown'
     try {
         const permit = await acquireFleetRun({
-            topLevel: true,
-            provider: 'claude',
-            limits: { total: 1, main: 1, provider: 1 },
+            topLevel: false,
+            provider: 'codex',
+            depth: 1,
+            residentProvider: 'codex',
+            limits: { total: 1, main: 1, provider: 1, residentPerDepth: 1 },
         })
         process.send?.({ type: 'acquired', workerId } satisfies ChildMessage)
         await new Promise<void>(resolve => {
             process.once('message', message => {
-                if (message === 'release') resolve()
+                if (message === 'release-active') {
+                    permit.releaseForChildren()
+                    process.send?.({ type: 'active_released', workerId } satisfies ChildMessage)
+                    process.once('message', next => {
+                        if (next === 'release') resolve()
+                    })
+                } else if (message === 'release') {
+                    resolve()
+                }
             })
         })
         permit.dispose()
@@ -88,7 +98,16 @@ async function parentMain() {
             return message
         })
         await new Promise(resolve => setTimeout(resolve, 350))
-        assert.equal(greenAcquired, false, 'green bypassed the fleet-wide total/provider/main cap')
+        assert.equal(greenAcquired, false, 'green bypassed the fleet-wide active/resident cap')
+
+        blue.send('release-active')
+        assert.deepEqual(await nextMessage(blue), { type: 'active_released', workerId: 'blue' })
+        await new Promise(resolve => setTimeout(resolve, 350))
+        assert.equal(
+            greenAcquired,
+            false,
+            'green bypassed the resident cap after the parent released active capacity',
+        )
 
         blue.send('release')
         assert.deepEqual(await nextMessage(blue), { type: 'released', workerId: 'blue' })

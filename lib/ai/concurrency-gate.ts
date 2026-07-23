@@ -4,7 +4,7 @@
 // the Node server because ~30 agents ran at once and the main process heap
 // ballooned to 9 GB. There was no global cap. Beyond the crash, even 3-4 agents
 // streaming at once starve the single Node event loop enough that the SSE
-// connection drops ("reconnecting"). This gate bounds concurrency on THREE
+// connection drops ("reconnecting"). This gate bounds concurrency on three
 // independent axes, each guarding a distinct failure mode:
 //
 //   • total pool   — concurrent ACTIVE agents at ANY depth. Guards RAM (crash)
@@ -18,9 +18,15 @@
 //     google / browser). Guards the upstream API rate limit (429/529): 10
 //     Claude agents at once tripped a 529, so claude is capped well under that.
 //     Env override: AGENT_MAX_PROVIDER_<NAME> (e.g. AGENT_MAX_PROVIDER_CLAUDE).
-//   • tree budget  — max agents a single top-level run may spawn across its
-//     whole sub-tree. Default 12. Backstop against runaway recursion: when
-//     hit, delegate_to degrades gracefully instead of queueing forever.
+//
+// There is deliberately no cumulative per-tree spawn quota. Large trees are
+// backpressured by these active-run semaphores: excess children wait in the
+// queue and start as capacity returns. Delegation depth and per-call shape stay
+// bounded separately, but completed work never consumes a lifetime allowance.
+// CLI app-server providers also have a small resident-process pool PER DEPTH.
+// Their parent process stays in RAM while a synchronous tool call awaits a
+// child; separate depth pools bound that memory without a hold-and-wait
+// deadlock (depth N parents never consume depth N+1 child capacity).
 //
 // Staggered admission ("pe rand"): fresh agent starts are spaced by ~800ms (and
 // further when the event loop is already lagging) so a fan-out burst doesn't
@@ -31,8 +37,8 @@
 // slots for the duration (`releaseForChildren`) and re-acquires them at the
 // highest priority before resuming (`reacquireForResume`). The slots are thus
 // always available to the agents actually doing work — no hold-and-wait cycle.
-// All acquisitions use the same order (provider → main → total), so there is no
-// lock-ordering deadlock either.
+// All acquisitions use the same order (resident-depth → provider → main →
+// total), so there is no lock-ordering deadlock either.
 //
 // All state lives on globalThis so it survives Next.js hot reloads.
 
@@ -65,6 +71,14 @@ interface Waiter {
     priority: number
     seq: number
     resolve: () => void
+    signal?: AbortSignal
+    onAbort?: () => void
+}
+
+function gateAbortError(): Error {
+    const error = new Error('Agent run cancelled while waiting for capacity.')
+    error.name = 'AbortError'
+    return error
 }
 
 /** Counting semaphore with a priority waiter queue. A released permit is handed
@@ -86,13 +100,27 @@ class PrioritySemaphore {
         return this.waiters.length
     }
 
-    acquire(priority: number): Promise<void> {
+    acquire(priority: number, signal?: AbortSignal): Promise<void> {
+        if (signal?.aborted) return Promise.reject(gateAbortError())
         if (this.inUse < this.capacity) {
             this.inUse++
             return Promise.resolve()
         }
-        return new Promise<void>(resolve => {
-            const waiter: Waiter = { priority, seq: this.seqCounter++, resolve }
+        return new Promise<void>((resolve, reject) => {
+            const waiter: Waiter = {
+                priority,
+                seq: this.seqCounter++,
+                resolve,
+                signal,
+            }
+            if (signal) {
+                waiter.onAbort = () => {
+                    const index = this.waiters.indexOf(waiter)
+                    if (index >= 0) this.waiters.splice(index, 1)
+                    reject(gateAbortError())
+                }
+                signal.addEventListener('abort', waiter.onAbort, { once: true })
+            }
             // Insert keeping the queue sorted: priority desc, then seq asc.
             let i = this.waiters.length
             while (i > 0) {
@@ -107,6 +135,9 @@ class PrioritySemaphore {
     release(): void {
         const next = this.waiters.shift()
         if (next) {
+            if (next.signal && next.onAbort) {
+                next.signal.removeEventListener('abort', next.onAbort)
+            }
             // Transfer the permit directly — inUse is unchanged (still held, now
             // by the woken waiter).
             next.resolve()
@@ -157,7 +188,9 @@ function providerCap(provider: string): number {
         claude: 5,
         'claude-code': 5,
         anthropic: 5,
-        codex: 6,
+        // Keep simultaneous streaming/model work conservative; the separate
+        // resident-per-depth pool below bounds waiting app-server processes.
+        codex: 3,
         openai: 6,
         google: 8,
         gemini: 8,
@@ -165,6 +198,21 @@ function providerCap(provider: string): number {
     }
     const envName = `AGENT_MAX_PROVIDER_${key.replace(/[^a-z0-9]+/g, '_').toUpperCase()}`
     const fallback = defaults[key] ?? envInt('AGENT_MAX_PROVIDER_DEFAULT', 4)
+    return envInt(envName, fallback)
+}
+
+/** CLI providers keep an app-server process alive while a dynamic tool call is
+ * awaiting a child. API providers finish their HTTP stream before our local
+ * tool loop, so they do not need this second, lifetime-long admission pool. */
+function providerResidentDepthCap(provider: string): number | null {
+    const key = provider.toLowerCase()
+    const defaults: Record<string, number> = {
+        codex: 2,
+        'claude-code': 2,
+    }
+    const fallback = defaults[key]
+    if (!fallback) return null
+    const envName = `AGENT_MAX_RESIDENT_${key.replace(/[^a-z0-9]+/g, '_').toUpperCase()}_PER_DEPTH`
     return envInt(envName, fallback)
 }
 
@@ -209,14 +257,8 @@ interface GateState {
     main: PrioritySemaphore
     total: PrioritySemaphore
     providers: Map<string, PrioritySemaphore>
-    /** rootRunId -> agents spawned across this top-level run's whole sub-tree. */
-    treeSpawns: Map<string, number>
-    /** Detached async children keep the root budget alive after an intermediate
-     *  parent run finishes. The owner release is deferred until every lease is
-     *  returned. */
-    treeRetainers: Map<string, number>
-    treeOwnerReleasePending: Set<string>
-    treeBudget: number
+    /** Process-resident CLI runs, keyed by provider + delegation depth. */
+    residents: Map<string, PrioritySemaphore>
     /** Timestamp (ms) the next fresh admission is allowed — drives the ramp. */
     nextAdmitAt: number
 }
@@ -232,10 +274,7 @@ function createState(): GateState {
         main: new PrioritySemaphore(limits.main),
         total: new PrioritySemaphore(limits.total),
         providers: new Map<string, PrioritySemaphore>(),
-        treeSpawns: new Map<string, number>(),
-        treeRetainers: new Map<string, number>(),
-        treeOwnerReleasePending: new Set<string>(),
-        treeBudget: envInt('AGENT_TREE_BUDGET', 12),
+        residents: new Map<string, PrioritySemaphore>(),
         nextAdmitAt: 0,
     }
 }
@@ -245,10 +284,10 @@ const state: GateState = globalForGate.__orchestratorAgentGate ?? createState()
 if (!globalForGate.__orchestratorAgentGate) {
     globalForGate.__orchestratorAgentGate = state
 }
-// Hot-reload/backward compatibility for a process whose global gate predates
-// async tree leases.
-state.treeRetainers ??= new Map<string, number>()
-state.treeOwnerReleasePending ??= new Set<string>()
+// Development hot reload can preserve a gate created by the previous module
+// shape. Production workers restart, but keeping HMR compatible prevents a
+// confusing local-only crash after this field was introduced.
+state.residents ??= new Map<string, PrioritySemaphore>()
 
 function getProviderSemaphore(provider: string): PrioritySemaphore {
     const key = provider.toLowerCase()
@@ -256,6 +295,22 @@ function getProviderSemaphore(provider: string): PrioritySemaphore {
     if (!sem) {
         sem = new PrioritySemaphore(providerCap(key))
         state.providers.set(key, sem)
+    }
+    return sem
+}
+
+function residentKey(provider: string, depth: number): string {
+    return `${provider.toLowerCase()}:${Math.max(0, Math.floor(depth))}`
+}
+
+function getResidentSemaphore(provider: string, depth: number): PrioritySemaphore | null {
+    const cap = providerResidentDepthCap(provider)
+    if (cap === null) return null
+    const key = residentKey(provider, depth)
+    let sem = state.residents.get(key)
+    if (!sem) {
+        sem = new PrioritySemaphore(cap)
+        state.residents.set(key, sem)
     }
     return sem
 }
@@ -281,13 +336,13 @@ function reserveRampSlot(): number {
 
 /** A held slot for one agent run. Always `dispose()` it in a finally. */
 export interface RunPermit {
-    /** Release the total + provider slots while this agent awaits delegated
-     *  children, so the children can run. Idempotent. */
+    /** Release active total + provider slots while this agent awaits delegated
+     *  children. A process-resident CLI slot stays held. Idempotent. */
     releaseForChildren(): void
     /** Re-acquire the total + provider slots (highest priority) before resuming
      *  the agent's own turn after its children finished. No-op if still held. */
     reacquireForResume(): Promise<void>
-    /** Final release of every slot this run holds (total + main + provider). */
+    /** Final release of every slot this run holds, including CLI residency. */
     dispose(): void
 }
 
@@ -299,6 +354,10 @@ interface AcquireOpts {
     /** Backend this run will call (claude/codex/google/browser). Gated by the
      *  per-provider rate-limit cap. Omit for runs with no upstream call. */
     provider?: string
+    /** Delegation depth of this run (root conversation is 0, children 1-3). */
+    depth?: number
+    /** Stop queued admission immediately when the owning tree is cancelled. */
+    signal?: AbortSignal
     /** Fired once if this run has to WAIT before it can start (a pool is at
      *  capacity, or the staggered ramp is spacing it out). Lets the UI show a
      *  "queued" indicator until the run is admitted. */
@@ -306,17 +365,21 @@ interface AcquireOpts {
 }
 
 /** Acquire the slots for one agent run. Resolves once the agent may start.
- *  Acquisition order is fixed (ramp → provider → main → total) so concurrent
- *  acquisitions can never deadlock on lock ordering. */
+ *  Acquisition order is fixed (ramp → resident-depth → provider → main →
+ *  total) so concurrent acquisitions cannot deadlock on lock ordering. */
 export async function acquireRun(opts: AcquireOpts): Promise<RunPermit> {
     const prio = PRIORITY[opts.priority]
 
     const providerSem = opts.provider ? getProviderSemaphore(opts.provider) : null
+    const residentSem = opts.provider
+        ? getResidentSemaphore(opts.provider, opts.depth ?? 0)
+        : null
 
     // Will this run have to wait? (a pool is saturated, or the ramp is spacing
     // it out). If so, tell the caller so the UI can show a "queued" card.
     const willBlock =
         (providerSem ? providerSem.active >= providerSem.capacity : false) ||
+        (residentSem ? residentSem.active >= residentSem.capacity : false) ||
         (opts.topLevel ? state.main.active >= state.main.capacity : false) ||
         state.total.active >= state.total.capacity
     // Stagger fresh starts so a fan-out burst doesn't slam the event loop.
@@ -328,22 +391,32 @@ export async function acquireRun(opts: AcquireOpts): Promise<RunPermit> {
             /* never let an observer hook break admission */
         }
     }
-    if (rampWait > 0) await new Promise<void>(r => setTimeout(r, rampWait))
-
-    if (providerSem) await providerSem.acquire(prio)
-    let holdsProvider = Boolean(providerSem)
-
+    let holdsResident = false
+    let holdsProvider = false
     let holdsMain = false
-    if (opts.topLevel) {
-        await state.main.acquire(prio)
-        holdsMain = true
-    }
-
-    await state.total.acquire(prio)
-    let holdsTotal = true
+    let holdsTotal = false
 
     let fleetPermit
     try {
+        if (rampWait > 0) await abortableDelay(rampWait, opts.signal)
+
+        // A resident lease is held until dispose(), including while the parent
+        // awaits children. Acquire it before the active provider lease.
+        if (residentSem) {
+            await residentSem.acquire(prio, opts.signal)
+            holdsResident = true
+        }
+        if (providerSem) {
+            await providerSem.acquire(prio, opts.signal)
+            holdsProvider = true
+        }
+        if (opts.topLevel) {
+            await state.main.acquire(prio, opts.signal)
+            holdsMain = true
+        }
+        await state.total.acquire(prio, opts.signal)
+        holdsTotal = true
+
         fleetPermit = await acquireFleetRun({
             topLevel: opts.topLevel,
             provider: opts.provider,
@@ -351,13 +424,20 @@ export async function acquireRun(opts: AcquireOpts): Promise<RunPermit> {
                 total: state.total.capacity,
                 main: state.main.capacity,
                 provider: opts.provider ? providerCap(opts.provider) : state.total.capacity,
+                residentPerDepth: opts.provider
+                    ? providerResidentDepthCap(opts.provider) ?? undefined
+                    : undefined,
             },
+            depth: opts.depth,
+            residentProvider: residentSem ? opts.provider : undefined,
+            signal: opts.signal,
             onQueued: opts.onQueued,
         })
     } catch (error) {
-        state.total.release()
+        if (holdsTotal) state.total.release()
         if (holdsMain) state.main.release()
         if (holdsProvider && providerSem) providerSem.release()
+        if (holdsResident && residentSem) residentSem.release()
         throw error
     }
 
@@ -374,16 +454,33 @@ export async function acquireRun(opts: AcquireOpts): Promise<RunPermit> {
             }
         },
         async reacquireForResume() {
+            if (opts.signal?.aborted) throw gateAbortError()
             // Same order as acquisition: provider before total.
-            if (providerSem && !holdsProvider) {
-                await providerSem.acquire(PRIORITY.resume)
-                holdsProvider = true
+            let acquiredProviderNow = false
+            let acquiredTotalNow = false
+            try {
+                if (providerSem && !holdsProvider) {
+                    await providerSem.acquire(PRIORITY.resume, opts.signal)
+                    holdsProvider = true
+                    acquiredProviderNow = true
+                }
+                if (!holdsTotal) {
+                    await state.total.acquire(PRIORITY.resume, opts.signal)
+                    holdsTotal = true
+                    acquiredTotalNow = true
+                }
+                await fleetPermit.reacquireForResume()
+            } catch (error) {
+                if (acquiredTotalNow && holdsTotal) {
+                    holdsTotal = false
+                    state.total.release()
+                }
+                if (acquiredProviderNow && holdsProvider && providerSem) {
+                    holdsProvider = false
+                    providerSem.release()
+                }
+                throw error
             }
-            if (!holdsTotal) {
-                await state.total.acquire(PRIORITY.resume)
-                holdsTotal = true
-            }
-            await fleetPermit.reacquireForResume()
         },
         dispose() {
             fleetPermit.dispose()
@@ -399,53 +496,28 @@ export async function acquireRun(opts: AcquireOpts): Promise<RunPermit> {
                 holdsProvider = false
                 providerSem.release()
             }
+            if (holdsResident && residentSem) {
+                holdsResident = false
+                residentSem.release()
+            }
         },
     }
 }
 
-/** Reserve a spawn slot in the given top-level run's tree budget. Returns false
- *  when the tree has already spawned `treeBudget` agents — the caller should
- *  then solve the task directly instead of delegating. */
-export function tryReserveTreeSpawn(rootRunId: string | undefined): boolean {
-    if (!rootRunId) return true // untracked caller — never block legitimate work
-    const spawned = state.treeSpawns.get(rootRunId) ?? 0
-    if (spawned >= state.treeBudget) return false
-    state.treeSpawns.set(rootRunId, spawned + 1)
-    return true
-}
-
-/** Drop a finished top-level run's tree-budget counter. Call once when the
- *  top-level run completes (in its finally). */
-export function releaseTree(rootRunId: string | undefined): void {
-    if (!rootRunId) return
-    if ((state.treeRetainers.get(rootRunId) ?? 0) > 0) {
-        state.treeOwnerReleasePending.add(rootRunId)
-        return
-    }
-    state.treeSpawns.delete(rootRunId)
-    state.treeOwnerReleasePending.delete(rootRunId)
-}
-
-/** Keep one root tree's spawn budget alive while detached async descendants
- *  outlive the parent agent that originally owned the tree. */
-export function retainTreeForAsync(rootRunId: string | undefined): void {
-    if (!rootRunId) return
-    state.treeRetainers.set(rootRunId, (state.treeRetainers.get(rootRunId) ?? 0) + 1)
-}
-
-/** Return a detached async lease. If the owner already finished, this final
- *  release also drops the tree budget counter. */
-export function releaseAsyncTree(rootRunId: string | undefined): void {
-    if (!rootRunId) return
-    const next = Math.max(0, (state.treeRetainers.get(rootRunId) ?? 0) - 1)
-    if (next > 0) {
-        state.treeRetainers.set(rootRunId, next)
-        return
-    }
-    state.treeRetainers.delete(rootRunId)
-    if (state.treeOwnerReleasePending.delete(rootRunId)) {
-        state.treeSpawns.delete(rootRunId)
-    }
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+    if (!signal) return new Promise(resolve => setTimeout(resolve, ms))
+    if (signal.aborted) return Promise.reject(gateAbortError())
+    return new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+            signal.removeEventListener('abort', onAbort)
+            resolve()
+        }, ms)
+        const onAbort = () => {
+            clearTimeout(timer)
+            reject(gateAbortError())
+        }
+        signal.addEventListener('abort', onAbort, { once: true })
+    })
 }
 
 export const agentGateLimits = {
@@ -455,9 +527,6 @@ export const agentGateLimits = {
     get total() {
         return state.total.capacity
     },
-    get treeBudget() {
-        return state.treeBudget
-    },
 }
 
 /** Live snapshot for observability (e.g. the /monitor page). */
@@ -466,19 +535,22 @@ export function getAgentGateStats() {
     for (const [name, sem] of state.providers) {
         providers[name] = { active: sem.active, queued: sem.queued, cap: sem.capacity }
     }
+    const residents: Record<string, { active: number; queued: number; cap: number }> = {}
+    for (const [name, sem] of state.residents) {
+        residents[name] = { active: sem.active, queued: sem.queued, cap: sem.capacity }
+    }
     return {
         mainActive: state.main.active,
         mainQueued: state.main.queued,
         totalActive: state.total.active,
         totalQueued: state.total.queued,
-        liveTrees: state.treeSpawns.size,
         loopLagMs: Math.round(loopLagMs() * 10) / 10,
         providers,
+        residents,
         fleet: getFleetConcurrencyStats(),
         limits: {
             main: state.main.capacity,
             total: state.total.capacity,
-            treeBudget: state.treeBudget,
             cores: state.limits.cores,
             totalMB: state.limits.totalMB,
             ramCap: state.limits.ramCap,
@@ -489,18 +561,20 @@ export function getAgentGateStats() {
 
 /** Test-only: override capacities so a smoke can exercise small pools without
  *  touching env. Not used by production code. */
-export function __setGateCapacitiesForTest(main: number, total: number, treeBudget: number): void {
+export function __setGateCapacitiesForTest(main: number, total: number): void {
     state.main.capacity = main
     state.total.capacity = total
-    state.treeBudget = treeBudget
-    state.treeSpawns.clear()
-    state.treeRetainers.clear()
-    state.treeOwnerReleasePending.clear()
     state.providers.clear()
+    state.residents.clear()
     state.nextAdmitAt = 0
 }
 
 /** Test-only: set a per-provider cap. */
 export function __setProviderCapForTest(provider: string, cap: number): void {
     state.providers.set(provider.toLowerCase(), new PrioritySemaphore(cap))
+}
+
+/** Test-only: set the resident cap for one provider/depth pool. */
+export function __setProviderResidentDepthCapForTest(provider: string, depth: number, cap: number): void {
+    state.residents.set(residentKey(provider, depth), new PrioritySemaphore(cap))
 }

@@ -3379,6 +3379,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                     const agent = findAgent(runId)
                     if (agent?.type === "agent_call") {
                       agent.status = data.status ?? agent.status
+                      agent.queued = false
                       agent.endedAt =
                         typeof data.endedAt === "number"
                           ? data.endedAt

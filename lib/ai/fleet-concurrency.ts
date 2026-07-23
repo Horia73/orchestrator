@@ -14,11 +14,17 @@ interface FleetLimits {
     total: number
     main: number
     provider: number
+    residentPerDepth?: number
 }
 
 interface FleetAcquireOptions {
     topLevel: boolean
     provider?: string
+    /** Delegation depth for process-resident CLI providers. */
+    depth?: number
+    /** Provider whose process remains resident while a tool waits on children. */
+    residentProvider?: string
+    signal?: AbortSignal
     limits: FleetLimits
     onQueued?: () => void
 }
@@ -56,6 +62,7 @@ if (!globalForFleet.__orchestratorFleetConcurrency) {
  * double RAM or provider limits. */
 export async function acquireFleetRun(opts: FleetAcquireOptions): Promise<FleetRunPermit> {
     if (!fleetGateEnabled()) return noopPermit()
+    if (opts.signal?.aborted) throw fleetAbortError()
     const db = fleetDb()
     const leaseId = randomUUID()
     let queued = false
@@ -69,9 +76,15 @@ export async function acquireFleetRun(opts: FleetAcquireOptions): Promise<FleetR
         }
     }
 
-    while (!tryAcquire(db, leaseId, opts, true)) {
+    while (true) {
+        if (opts.signal?.aborted) throw fleetAbortError()
+        if (tryAcquire(db, leaseId, opts, true)) break
         notifyQueued()
-        await delay(POLL_MS)
+        await delay(POLL_MS, opts.signal)
+    }
+    if (opts.signal?.aborted) {
+        db.prepare(`DELETE FROM leases WHERE id = ? AND ownerId = ?`).run(leaseId, state.ownerId)
+        throw fleetAbortError()
     }
 
     let disposed = false
@@ -85,9 +98,19 @@ export async function acquireFleetRun(opts: FleetAcquireOptions): Promise<FleetR
         },
         async reacquireForResume() {
             if (disposed || holdsTotalAndProvider) return
-            while (!tryAcquire(db, leaseId, opts, false)) {
+            if (opts.signal?.aborted) throw fleetAbortError()
+            while (true) {
+                if (opts.signal?.aborted) throw fleetAbortError()
+                if (tryAcquire(db, leaseId, opts, false)) break
                 notifyQueued()
-                await delay(POLL_MS)
+                await delay(POLL_MS, opts.signal)
+            }
+            if (opts.signal?.aborted) {
+                db.prepare(`
+                    UPDATE leases SET holdsTotal = 0, provider = NULL
+                    WHERE id = ? AND ownerId = ?
+                `).run(leaseId, state.ownerId)
+                throw fleetAbortError()
             }
             holdsTotalAndProvider = true
         },
@@ -104,8 +127,17 @@ export function getFleetConcurrencyStats(): {
     totalActive: number
     mainActive: number
     providers: Record<string, number>
+    residentProviders: Record<string, Record<string, number>>
 } {
-    if (!fleetGateEnabled()) return { enabled: false, totalActive: 0, mainActive: 0, providers: {} }
+    if (!fleetGateEnabled()) {
+        return {
+            enabled: false,
+            totalActive: 0,
+            mainActive: 0,
+            providers: {},
+            residentProviders: {},
+        }
+    }
     const db = fleetDb()
     reapStaleOwners(db)
     const row = db.prepare(`
@@ -123,11 +155,23 @@ export function getFleetConcurrencyStats(): {
     `).all() as Array<{ provider: string; active: number }>) {
         providers[provider.provider] = provider.active
     }
+    const residentProviders: Record<string, Record<string, number>> = {}
+    for (const row of db.prepare(`
+        SELECT residentProvider, residentDepth, COUNT(*) AS active
+        FROM leases
+        WHERE residentProvider IS NOT NULL AND residentDepth IS NOT NULL
+        GROUP BY residentProvider, residentDepth
+    `).all() as Array<{ residentProvider: string; residentDepth: number; active: number }>) {
+        const byDepth = residentProviders[row.residentProvider] ?? {}
+        byDepth[String(row.residentDepth)] = row.active
+        residentProviders[row.residentProvider] = byDepth
+    }
     return {
         enabled: true,
         totalActive: row.totalActive,
         mainActive: row.mainActive,
         providers,
+        residentProviders,
     }
 }
 
@@ -158,10 +202,28 @@ function fleetDb(): Database.Database {
             ownerId TEXT NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
             holdsTotal INTEGER NOT NULL,
             holdsMain INTEGER NOT NULL,
-            provider TEXT
+            provider TEXT,
+            residentProvider TEXT,
+            residentDepth INTEGER
         );
         CREATE INDEX IF NOT EXISTS idx_fleet_leases_owner ON leases(ownerId);
         CREATE INDEX IF NOT EXISTS idx_fleet_leases_provider ON leases(provider);
+    `)
+    // Existing production fleet databases predate resident-process accounting.
+    // Add the nullable columns in place; live leases remain valid and naturally
+    // count as non-resident until their owning generation drains.
+    const leaseColumns = new Set(
+        (db.pragma('table_info(leases)') as Array<{ name: string }>).map(column => column.name)
+    )
+    if (!leaseColumns.has('residentProvider')) {
+        addLeaseColumn(db, 'residentProvider TEXT')
+    }
+    if (!leaseColumns.has('residentDepth')) {
+        addLeaseColumn(db, 'residentDepth INTEGER')
+    }
+    db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_fleet_leases_resident
+        ON leases(residentProvider, residentDepth)
     `)
     state.db = db
     heartbeat(db)
@@ -178,6 +240,18 @@ function fleetDb(): Database.Database {
         })
     }
     return db
+}
+
+function addLeaseColumn(db: Database.Database, definition: string): void {
+    try {
+        db.exec(`ALTER TABLE leases ADD COLUMN ${definition}`)
+    } catch (error) {
+        // Two freshly started generations can observe the old schema together.
+        // The loser of that benign migration race reuses the winner's column;
+        // every other schema error remains fatal.
+        const message = error instanceof Error ? error.message : String(error)
+        if (!/duplicate column name/i.test(message)) throw error
+    }
 }
 
 function heartbeat(db: Database.Database): void {
@@ -201,6 +275,10 @@ function tryAcquire(
     insert: boolean,
 ): boolean {
     const provider = opts.provider?.trim().toLowerCase() || null
+    const residentProvider = opts.residentProvider?.trim().toLowerCase() || null
+    const residentDepth = residentProvider
+        ? Math.max(0, Math.floor(opts.depth ?? 0))
+        : null
     const transaction = db.transaction(() => {
         heartbeat(db)
         const totals = db.prepare(`
@@ -218,11 +296,32 @@ function tryAcquire(
             `).get(leaseId, provider) as { active: number }
             if (providerRow.active >= opts.limits.provider) return false
         }
+        // A CLI app-server process remains alive while its synchronous tool
+        // call waits for a child. Count that resident process for the run's
+        // whole lifetime. The cap is per depth, so parents waiting at depth N
+        // never consume the capacity their children need at depth N+1.
+        if (insert && residentProvider && residentDepth !== null && opts.limits.residentPerDepth) {
+            const residentRow = db.prepare(`
+                SELECT COUNT(*) AS active
+                FROM leases
+                WHERE residentProvider = ? AND residentDepth = ?
+            `).get(residentProvider, residentDepth) as { active: number }
+            if (residentRow.active >= opts.limits.residentPerDepth) return false
+        }
         if (insert) {
             db.prepare(`
-                INSERT INTO leases (id, ownerId, holdsTotal, holdsMain, provider)
-                VALUES (?, ?, 1, ?, ?)
-            `).run(leaseId, state.ownerId, opts.topLevel ? 1 : 0, provider)
+                INSERT INTO leases (
+                    id, ownerId, holdsTotal, holdsMain, provider,
+                    residentProvider, residentDepth
+                ) VALUES (?, ?, 1, ?, ?, ?, ?)
+            `).run(
+                leaseId,
+                state.ownerId,
+                opts.topLevel ? 1 : 0,
+                provider,
+                residentProvider,
+                residentDepth,
+            )
         } else {
             const result = db.prepare(`
                 UPDATE leases SET holdsTotal = 1, provider = ?
@@ -248,6 +347,24 @@ function noopPermit(): FleetRunPermit {
     }
 }
 
-function delay(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms))
+function fleetAbortError(): Error {
+    const error = new Error('Agent run cancelled while waiting for fleet capacity.')
+    error.name = 'AbortError'
+    return error
+}
+
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+    if (!signal) return new Promise(resolve => setTimeout(resolve, ms))
+    if (signal.aborted) return Promise.reject(fleetAbortError())
+    return new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+            signal.removeEventListener('abort', onAbort)
+            resolve()
+        }, ms)
+        const onAbort = () => {
+            clearTimeout(timer)
+            reject(fleetAbortError())
+        }
+        signal.addEventListener('abort', onAbort, { once: true })
+    })
 }

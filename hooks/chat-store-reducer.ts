@@ -1179,6 +1179,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           (entry) => ({
             ...entry,
             status: action.status,
+            queued: false,
             endedAt: action.endedAt,
             content: action.content ?? entry.content,
             contentSegments: action.contentSegments ?? entry.contentSegments,

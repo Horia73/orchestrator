@@ -13,7 +13,11 @@ import { StreamingBubble } from "@/components/message-bubble"
 import { TodoBar } from "@/components/todo-bar"
 import { useTrapWheel } from "@/components/use-trap-wheel"
 import { useRevealOnScroll } from "@/hooks/use-reveal-on-scroll"
-import { agentRoleAndName } from "@/lib/agent-label"
+import {
+  agentRoleAndName,
+  distinctAgentRoleAndNames,
+} from "@/lib/agent-label"
+import { directChildAgentRuns } from "@/lib/agent-hierarchy"
 import { copyTextToClipboard } from "@/lib/clipboard"
 import { cn } from "@/lib/utils"
 import type {
@@ -29,13 +33,13 @@ type SelectedAgentTool = {
 
 export function AgentWorkspacePanel({
   run,
-  childRuns,
+  allRuns,
   onClose,
   onAttachmentClick,
   onLoadToolCallDetails,
 }: {
   run: AgentCallReasoningEntry
-  childRuns?: AgentCallReasoningEntry[]
+  allRuns: AgentCallReasoningEntry[]
   onClose: () => void
   onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
   onLoadToolCallDetails?: (toolCallId: string) => Promise<ToolCallReasoningEntry>
@@ -61,8 +65,12 @@ export function AgentWorkspacePanel({
     setSelectedChildRunId(null)
   }, [run.runId])
 
-  const children = (childRuns ?? []).filter(
-    (child) => !dismissedRunIds.has(child.runId)
+  const children = React.useMemo(
+    () =>
+      directChildAgentRuns(allRuns, run.runId).filter(
+        (child) => !dismissedRunIds.has(child.runId)
+      ),
+    [allRuns, dismissedRunIds, run.runId]
   )
   const dismissChild = React.useCallback((runId: string) => {
     setDismissedRunIds((prev) => {
@@ -124,14 +132,11 @@ export function AgentWorkspacePanel({
   }, [run.content])
 
   const splitTool = selectedTool && !childRun ? selectedTool.artifact : null
-  const parentInlineTool =
-    !splitTool && selectedTool?.runId === run.runId
-      ? selectedTool.artifact
-      : null
-  const childInlineTool =
-    !splitTool && childRun && selectedTool?.runId === childRun.runId
-      ? selectedTool.artifact
-      : null
+  const selectRunTool = React.useCallback(
+    (runId: string, artifact: ArtifactPayload) =>
+      setSelectedTool({ runId, artifact }),
+    []
+  )
 
   return (
     <div
@@ -191,10 +196,8 @@ export function AgentWorkspacePanel({
       >
         <AgentRunPane
           run={run}
-          selectedArtifact={parentInlineTool}
-          onArtifactClick={(artifact) =>
-            setSelectedTool({ runId: run.runId, artifact })
-          }
+          selectedTool={splitTool ? null : selectedTool}
+          onRunArtifactClick={selectRunTool}
           onSelectedArtifactClose={() => setSelectedTool(null)}
           onAttachmentClick={onAttachmentClick}
           onLoadToolCallDetails={onLoadToolCallDetails}
@@ -212,6 +215,7 @@ export function AgentWorkspacePanel({
           <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
             {showChildSelector && (
               <ChildAgentSelector
+                parentRun={run}
                 runs={children}
                 activeRunId={childRun.runId}
                 onSelect={selectChild}
@@ -223,10 +227,10 @@ export function AgentWorkspacePanel({
               run={childRun}
               compact
               hideNestedLabel={showChildSelector}
-              selectedArtifact={childInlineTool ?? null}
-              onArtifactClick={(artifact) =>
-                setSelectedTool({ runId: childRun.runId, artifact })
-              }
+              allRuns={allRuns}
+              showNestedChildren
+              selectedTool={selectedTool}
+              onRunArtifactClick={selectRunTool}
               onSelectedArtifactClose={() => setSelectedTool(null)}
               onAttachmentClick={onAttachmentClick}
               onLoadToolCallDetails={onLoadToolCallDetails}
@@ -309,11 +313,13 @@ function AgentToolResultPreview({
 }
 
 function ChildAgentSelector({
+  parentRun,
   runs,
   activeRunId,
   onSelect,
   onDismiss,
 }: {
+  parentRun: AgentCallReasoningEntry
   runs: AgentCallReasoningEntry[]
   activeRunId: string
   /** Load a sub-agent into this panel's nested preview pane. */
@@ -321,14 +327,15 @@ function ChildAgentSelector({
   /** Hide a sub-agent from this panel (view-only; the run keeps going). */
   onDismiss?: (runId: string) => void
 }) {
+  const labels = distinctAgentRoleAndNames(runs, [parentRun])
   return (
     <div className="agent-scroll flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-border px-3 py-2">
       <span className="mr-1 shrink-0 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
         {runs.length === 1 ? "Sub-agent" : "Sub-agents"}
       </span>
-      {runs.map((run) => {
+      {runs.map((run, index) => {
         const active = run.runId === activeRunId
-        const label = agentRoleAndName(run)
+        const label = labels[index]
         return (
           <div
             key={run.runId}
@@ -413,8 +420,11 @@ function AgentRunPane({
   run,
   compact,
   hideNestedLabel,
-  selectedArtifact,
-  onArtifactClick,
+  embedded,
+  allRuns,
+  showNestedChildren,
+  selectedTool,
+  onRunArtifactClick,
   onSelectedArtifactClose,
   onAttachmentClick,
   onLoadToolCallDetails,
@@ -422,13 +432,18 @@ function AgentRunPane({
   run: AgentCallReasoningEntry
   compact?: boolean
   hideNestedLabel?: boolean
-  selectedArtifact?: ArtifactPayload | null
-  onArtifactClick?: (artifact: ArtifactPayload) => void
+  embedded?: boolean
+  allRuns?: AgentCallReasoningEntry[]
+  showNestedChildren?: boolean
+  selectedTool?: SelectedAgentTool | null
+  onRunArtifactClick?: (runId: string, artifact: ArtifactPayload) => void
   onSelectedArtifactClose?: () => void
   onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
   onLoadToolCallDetails?: (toolCallId: string) => Promise<ToolCallReasoningEntry>
 }) {
   const isBrowserAgent = run.agentId === "browser_agent"
+  const selectedArtifact =
+    selectedTool?.runId === run.runId ? selectedTool.artifact : null
 
   // Primary browser runs get the dedicated workspace: live view locked to the
   // stream aspect + Console/Network/Transcript tabs filling the rest. Nested
@@ -438,7 +453,13 @@ function AgentRunPane({
   }
 
   return (
-    <div className="agent-scroll min-h-0 overflow-auto px-4 py-4">
+    <div
+      className={cn(
+        embedded
+          ? "border-t border-border/70 px-3 py-4"
+          : "agent-scroll min-h-0 overflow-auto px-4 py-4"
+      )}
+    >
       {compact && !hideNestedLabel && (
         <div className="mb-3 text-[12px] font-medium tracking-wide text-muted-foreground uppercase">
           Nested agent: {agentRoleAndName(run)}
@@ -490,7 +511,11 @@ function AgentRunPane({
           showCursor={
             run.status === "running" && !run.content && !run.reasoning?.length
           }
-          onArtifactClick={onArtifactClick}
+          onArtifactClick={
+            onRunArtifactClick
+              ? (artifact) => onRunArtifactClick(run.runId, artifact)
+              : undefined
+          }
           onAttachmentClick={onAttachmentClick}
           onLoadToolCallDetails={onLoadToolCallDetails}
         />
@@ -502,6 +527,89 @@ function AgentRunPane({
           onClose={onSelectedArtifactClose}
         />
       )}
+      {showNestedChildren && allRuns && (
+        <NestedAgentSection
+          parentRun={run}
+          allRuns={allRuns}
+          selectedTool={selectedTool}
+          onRunArtifactClick={onRunArtifactClick}
+          onSelectedArtifactClose={onSelectedArtifactClose}
+          onAttachmentClick={onAttachmentClick}
+          onLoadToolCallDetails={onLoadToolCallDetails}
+        />
+      )}
+    </div>
+  )
+}
+
+/**
+ * Render one more generation inside the selected child's transcript. Each
+ * generation derives only direct parentRunId edges, so a grandchild can never
+ * leak into the root selector or a sibling branch. MAX_AGENT_DEPTH keeps this
+ * recursion shallow and bounded.
+ */
+function NestedAgentSection({
+  parentRun,
+  allRuns,
+  selectedTool,
+  onRunArtifactClick,
+  onSelectedArtifactClose,
+  onAttachmentClick,
+  onLoadToolCallDetails,
+}: {
+  parentRun: AgentCallReasoningEntry
+  allRuns: AgentCallReasoningEntry[]
+  selectedTool?: SelectedAgentTool | null
+  onRunArtifactClick?: (runId: string, artifact: ArtifactPayload) => void
+  onSelectedArtifactClose?: () => void
+  onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
+  onLoadToolCallDetails?: (toolCallId: string) => Promise<ToolCallReasoningEntry>
+}) {
+  const children = React.useMemo(
+    () => directChildAgentRuns(allRuns, parentRun.runId),
+    [allRuns, parentRun.runId]
+  )
+  const [selectedRunId, setSelectedRunId] = React.useState<string | null>(null)
+  const selectedRun =
+    children.find((child) => child.runId === selectedRunId) ?? null
+  const activeRun =
+    selectedRun ??
+    children.find((child) => child.status === "running") ??
+    children[children.length - 1]
+
+  React.useEffect(() => {
+    if (
+      selectedRunId &&
+      !children.some((child) => child.runId === selectedRunId)
+    ) {
+      setSelectedRunId(null)
+    }
+  }, [children, selectedRunId])
+
+  if (!activeRun) return null
+
+  return (
+    <div className="mt-5 overflow-hidden rounded-md border border-border/80 bg-background">
+      <ChildAgentSelector
+        parentRun={parentRun}
+        runs={children}
+        activeRunId={activeRun.runId}
+        onSelect={(entry) => setSelectedRunId(entry.runId)}
+      />
+      <AgentRunPane
+        key={activeRun.runId}
+        run={activeRun}
+        compact
+        embedded
+        hideNestedLabel
+        allRuns={allRuns}
+        showNestedChildren
+        selectedTool={selectedTool}
+        onRunArtifactClick={onRunArtifactClick}
+        onSelectedArtifactClose={onSelectedArtifactClose}
+        onAttachmentClick={onAttachmentClick}
+        onLoadToolCallDetails={onLoadToolCallDetails}
+      />
     </div>
   )
 }

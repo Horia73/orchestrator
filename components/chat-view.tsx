@@ -518,16 +518,6 @@ export function ChatView() {
     setActiveAgentRunId(null)
     if (sidebarWasOpenRef.current) setSidebarOpen(true)
   }, [activePanelAgentRun, setSidebarOpen])
-  const activeChildAgentRuns = React.useMemo(
-    () =>
-      activePanelAgentRun
-        ? agentRuns.filter(
-            (run) => run.parentRunId === activePanelAgentRun.runId
-          )
-        : [],
-    [agentRuns, activePanelAgentRun]
-  )
-
   React.useEffect(() => {
     if (activeAgentRun) {
       setCachedActiveAgentRun((current) =>
@@ -3635,7 +3625,7 @@ export function ChatView() {
             {activePanelAgentRun ? (
               <AgentWorkspacePanel
                 run={activePanelAgentRun}
-                childRuns={activeChildAgentRuns}
+                allRuns={agentRuns}
                 onClose={handleAgentClose}
                 onAttachmentClick={openPreview}
                 onLoadToolCallDetails={
@@ -3671,7 +3661,7 @@ export function ChatView() {
             {activePanelAgentRun ? (
               <AgentWorkspacePanel
                 run={activePanelAgentRun}
-                childRuns={activeChildAgentRuns}
+                allRuns={agentRuns}
                 onClose={handleAgentClose}
                 onAttachmentClick={openPreview}
                 onLoadToolCallDetails={
