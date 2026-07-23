@@ -24,9 +24,10 @@ import { agentFullLabel } from "@/lib/agent-label"
 import { isNestedAgentRun } from "@/lib/agent-hierarchy"
 import {
     browserAgentRunPauseKind,
-    browserSessionIdFromRunContent,
+    browserSessionIdFromRun,
     isBrowserAgentRunLive,
     isBrowserAgentRunAwaitingUser,
+    isBrowserAgentRunWaitingInQueue,
     latestBrowserAgentRunsFromReasoning,
 } from "@/lib/browser-agent-run-state"
 import { isDesktopViewport } from "@/lib/desktop-viewport"
@@ -1673,7 +1674,7 @@ function ToolCallBlock({
 }
 
 function formatAgentStatus(status: AgentCallReasoningEntry["status"], queued?: boolean): string {
-    if (queued) return "queued"
+    if (queued) return "waiting for global capacity"
     if (status === "running") return "running"
     if (status === "error") return "failed"
     if (status === "aborted") return "stopped"
@@ -1710,6 +1711,7 @@ function GenericAgentCallBlock({
     const statusText = formatAgentStatus(entry.status, entry.queued)
     const outputChars = entry.content.length
     const details = [
+        entry.async ? "async" : "",
         statusText,
         toolCount > 0 ? `${toolCount} child tool${toolCount === 1 ? "" : "s"}` : "",
         outputChars > 0 ? `${formatCompactCount(outputChars)} output` : "",
@@ -1757,7 +1759,13 @@ function BrowserAgentCallBlock({
     onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
 }) {
     const pauseKind = browserAgentRunPauseKind(entry)
-    const browserSessionId = browserSessionIdFromRunContent(entry.content)
+    const browserSessionId = browserSessionIdFromRun(entry)
+    const waitingInQueue = isBrowserAgentRunWaitingInQueue(entry)
+    const pendingStatus = waitingInQueue
+        ? "waiting in queue"
+        : entry.status === "running"
+            ? "starting"
+            : formatAgentStatus(entry.status, entry.queued)
     const { panelRunId } = useBrowserPanelState()
     // While the desktop side panel hosts this run, collapse the inline block
     // to a chip so only one live-view (noVNC) connection is mounted at a time.
@@ -1765,7 +1773,19 @@ function BrowserAgentCallBlock({
     return (
         <div className="relative z-10 flex max-w-full flex-col gap-2 py-1 text-left">
             <div className="ml-7 grid w-[calc(100%_-_1.75rem)] max-w-[760px] gap-2">
-                {shownInPanel ? (
+                {!browserSessionId ? (
+                    <button
+                        type="button"
+                        onClick={onOpen ? () => onOpen(entry) : undefined}
+                        className="group flex w-full items-center gap-3 rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-left text-[12px] text-muted-foreground transition-colors hover:border-border hover:bg-muted/35 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                        aria-label={`Browser agent ${pendingStatus}`}
+                    >
+                        {entry.status === "running" ? <Loader2 className="size-4 shrink-0 animate-spin" /> : <Monitor className="size-4 shrink-0" />}
+                        <span className="min-w-0 flex-1 truncate">
+                            Browser agent · {entry.async ? "async · " : ""}{pendingStatus}
+                        </span>
+                    </button>
+                ) : shownInPanel ? (
                     <button
                         type="button"
                         onClick={onOpen ? () => onOpen(entry) : undefined}
@@ -1775,14 +1795,14 @@ function BrowserAgentCallBlock({
                     >
                         <Monitor className="size-4 shrink-0" />
                         <span className="min-w-0 flex-1 truncate">
-                            Browser agent · {formatAgentStatus(entry.status, entry.queued)}
+                            Browser agent · {entry.async ? "async · " : ""}{formatAgentStatus(entry.status, entry.queued)}
                         </span>
                         <span className="shrink-0 rounded bg-sky-500/10 px-1.5 py-0.5 text-sky-700 dark:text-sky-300">
                             live in side panel
                         </span>
                     </button>
                 ) : (
-                    <BrowserAgentLiveView active={isBrowserAgentRunLive(entry)} sessionId={browserSessionId} onOpenDetails={onOpen ? () => onOpen(entry) : undefined} />
+                    <BrowserAgentLiveView key={browserSessionId} active={isBrowserAgentRunLive(entry)} async={entry.async} sessionId={browserSessionId} onOpenDetails={onOpen ? () => onOpen(entry) : undefined} />
                 )}
                 {pauseKind === "takeover" && (
                     <div className="rounded-md border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-800 dark:text-amber-200">

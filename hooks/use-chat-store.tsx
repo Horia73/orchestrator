@@ -337,9 +337,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     pathnameRef.current = pathname
   }, [pathname])
 
-  // Web Push is delivered in the service worker, whose WindowClient.focused
-  // flag is unreliable in some installed macOS PWAs. Let it ask the live page
-  // which conversation is actually open before showing a "Chat finished"
+  // Web Push is delivered in the service worker, whose focus signals are
+  // unreliable in some installed macOS PWAs. Let it ask the live page which
+  // conversation is actually open and visible before showing a "Chat finished"
   // notification. MessageChannel keeps the reply scoped to that push event.
   React.useEffect(() => {
     if (!("serviceWorker" in navigator)) return
@@ -3218,6 +3218,21 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                       runId,
                       chunk,
                       phase,
+                    })
+                  }
+                } else if (data.type === "agent_browser_session") {
+                  const runId = typeof data.runId === "string" ? data.runId : ""
+                  const sessionId =
+                    typeof data.sessionId === "string" ? data.sessionId : ""
+                  if (runId && sessionId) {
+                    const agent = findAgent(runId)
+                    if (agent?.type === "agent_call") {
+                      agent.browserSessionId = sessionId
+                    }
+                    dispatch({
+                      type: "SET_STREAMING_AGENT_BROWSER_SESSION",
+                      runId,
+                      sessionId,
                     })
                   }
                 } else if (data.type === "agent_content") {

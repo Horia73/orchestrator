@@ -1,7 +1,7 @@
 import type { ProviderBuiltin, ToolDef } from "@/lib/ai/agents/types"
 import { listDirTool } from "./list-dir"
 import { readFileTool } from "./read-file"
-import { delegateParallelTool, delegateToTool, manageDelegationsTool } from "./delegate-to"
+import { delegateAsyncTool, delegateParallelTool, delegateToTool, manageDelegationsTool } from "./delegate-to"
 import { readTool } from "./read"
 import { writeTool } from "./write"
 import { editTool } from "./edit"
@@ -97,6 +97,7 @@ export const ALL_TOOL_DEFS: ToolDef[] = [
   readFileTool,
   delegateToTool,
   delegateParallelTool,
+  delegateAsyncTool,
   manageDelegationsTool,
   requestOwnerAgentHelpTool,
   completeOwnerAgentHelpTool,

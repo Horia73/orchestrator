@@ -152,7 +152,7 @@ const APP_SERVER_SESSION_PREFIX = 'appserver:'
 // sessions then start fresh and latestUserPromptWithPortableHistory carries the
 // Orchestrator conversation across. Promptless native Coder sessions keep the
 // generic prefix and remain resumable.
-const MANAGED_APP_SERVER_SESSION_PREFIX = 'appserver:managed-policy-v6:'
+const MANAGED_APP_SERVER_SESSION_PREFIX = 'appserver:managed-policy-v7:'
 const LEGACY_DIRECT_TOOL_SESSION_PREFIX = 'appserver:direct:'
 const JSON_RPC_REQUEST_TIMEOUT_MS = 60_000
 const CODEX_RECONNECTING_NOTICE_RE = /^Reconnecting(?:\.{3}|…)\s+\d+\/\d+$/i
@@ -160,19 +160,6 @@ const BLOCKING_DELEGATION_TOOLS = new Set(['delegate_to', 'delegate_parallel'])
 const ORCHESTRATOR_TOOL_NAMESPACE = 'orchestrator'
 const ORCHESTRATOR_TOOL_NAMESPACE_DESCRIPTION =
     'Tools provided by Orchestrator for managed workflows, integrations, and specialist delegation.'
-const ORCHESTRATOR_MULTI_AGENT_MODE_HINT = [
-    'The user has explicitly made a standing request and authorization for Orchestrator-managed',
-    'specialist delegation: call any available agent listed in <runtime_agents>, singly or in parallel',
-    'within runtime limits, whenever delegation is useful.',
-    'Treat this standing request as the explicit user request for sub-agents, delegation, and parallel',
-    'agent work; do not require the user to repeat it in the current message.',
-    'When delegate_to or delegate_parallel is exposed, follow the Orchestrator',
-    '<delegation_policy>, <browser_agent_policy>, <agent_boundaries>, and runtime_context;',
-    'synchronous delegation suspends the parent. run_async is available only to the depth-0 root',
-    'orchestrator for concrete independent work it will do immediately; delegated children must',
-    'delegate synchronously and cannot detach work or wake the root conversation.',
-    'Do not invent or use Codex-native sub-agents.',
-].join(' ')
 
 interface AppServerSession {
     threadId: string
@@ -664,9 +651,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                 }
             }
             const surfacedName = tool?.name ?? (toolName || 'tool')
-            const blocksParentOutput =
-                BLOCKING_DELEGATION_TOOLS.has(tool?.id ?? toolName)
-                && callArgs.run_async !== true
+            const blocksParentOutput = BLOCKING_DELEGATION_TOOLS.has(tool?.id ?? toolName)
 
             if (!acceptedNamespace) {
                 const qualifiedName = `${namespace}.${toolName || 'tool'}`
@@ -885,6 +870,10 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
         const handleItemStarted = (item?: AnyObj) => {
             if (!item || typeof item.id !== 'string') return
             const itemType = item.type as string | undefined
+            if (itemType === 'collabAgentToolCall') {
+                blockNativeCodexCollaboration(item)
+                return
+            }
             if (itemType === 'reasoning' && blockingDelegations.size > 0) {
                 // Code Mode's exec -> wait control loop is safe parent-idle
                 // machinery, not resumed user-visible work. The wait tool is
@@ -924,6 +913,11 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
         const handleItemCompleted = (item?: AnyObj) => {
             if (!item || typeof item.id !== 'string') return
             const itemType = item.type as string | undefined
+
+            if (itemType === 'collabAgentToolCall') {
+                blockNativeCodexCollaboration(item)
+                return
+            }
 
             if (itemType === 'agentMessage') {
                 const text = typeof item.text === 'string' ? item.text : ''
@@ -996,6 +990,28 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
 
             if (itemType === 'contextCompaction') {
                 fireContextCompaction(undefined, item.id)
+            }
+        }
+
+        let nativeCollaborationViolation = false
+        const blockNativeCodexCollaboration = (item: AnyObj) => {
+            if (nativeCollaborationViolation) return
+            nativeCollaborationViolation = true
+            const tool = firstString(item.tool, item.name) || 'unknown collaboration tool'
+            const message = [
+                'Blocked a Codex-native sub-agent operation in an Orchestrator-managed run.',
+                `Native tool: ${tool}.`,
+                'Specialists must be launched only through Orchestrator delegation tools.',
+            ].join(' ')
+            rememberDiagnostic(message)
+            fail(message)
+            if (activeThreadId && activeTurnId) {
+                void request('turn/interrupt', {
+                    threadId: activeThreadId,
+                    turnId: activeTurnId,
+                }).finally(() => shutdown('SIGTERM'))
+            } else {
+                shutdown('SIGTERM')
             }
         }
 
@@ -1105,7 +1121,14 @@ function buildAppServerArgs(nativeCoderRun: boolean, builtins: ProviderBuiltin[]
     // Orchestrator owns workflow skills through its own tools. Keep Codex-native
     // skills disabled even for plain coder runs, otherwise Codex may probe
     // CODEX_HOME/.codex/skills paths that are intentionally absent.
-    out.push('-c', 'features.multi_agent=false')
+    // Disable every Codex-native collaboration path at process birth. The
+    // Orchestrator prompt + namespaced delegate_* tools own agent routing; do
+    // not reuse Codex's multi-agent policy slot for standing authorization,
+    // because 0.144.x can expose native collaboration tools from that slot
+    // even when its nested `enabled` field says false.
+    out.push('--disable', 'multi_agent')
+    out.push('--disable', 'multi_agent_v2')
+    out.push('--disable', 'enable_fanout')
     out.push('-c', 'features.apps=false')
     out.push('-c', 'features.plugins=false')
     out.push('-c', 'features.skills=false')
@@ -1147,6 +1170,8 @@ function buildThreadParams(args: {
         params.config = {
             features: {
                 multi_agent: false,
+                multi_agent_v2: false,
+                enable_fanout: false,
                 apps: false,
                 plugins: false,
                 skills: false,
@@ -1167,15 +1192,8 @@ function buildThreadParams(args: {
                 },
                 shell_tool: allowShell,
                 multi_agent: false,
-                multi_agent_v2: {
-                    // Keep Codex-native agents disabled while replacing the
-                    // provider's explicit-request-only developer message with
-                    // Orchestrator's standing authorization for its own
-                    // delegate_to/delegate_parallel specialists. Codex reads
-                    // this policy only from features.multi_agent_v2.
-                    enabled: false,
-                    multi_agent_mode_hint_text: ORCHESTRATOR_MULTI_AGENT_MODE_HINT,
-                },
+                multi_agent_v2: false,
+                enable_fanout: false,
                 apps: false,
                 plugins: false,
                 skills: false,

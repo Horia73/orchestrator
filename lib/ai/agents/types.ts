@@ -73,6 +73,11 @@ export interface ToolExecutionContext {
   callerAssignedName?: string
   /** Emits agent-run lifecycle/transcript events to the chat route. */
   onAgentEvent?: (event: AgentRunEvent) => void | Promise<void>
+  /** True only for a direct child launched by root-only delegate_async. */
+  asyncDelegation?: boolean
+  /** Async-batch hook fired exactly when the child clears concurrency
+   * admission. Until then its durable job remains queued, not running. */
+  onAgentAdmitted?: () => void
   /** Emits live tool output before the final tool result is available. */
   onToolDelta?: (
     toolCallId: string,
@@ -309,6 +314,7 @@ export type AgentRunEvent =
       kind: AgentKind
       agentThreadId?: string
       depth: number
+      async?: boolean
       startedAt: number
     }
   | {
@@ -326,6 +332,7 @@ export type AgentRunEvent =
       agentThreadId?: string
       prompt: string
       depth: number
+      async?: boolean
       startedAt: number
     }
   | {
@@ -333,6 +340,11 @@ export type AgentRunEvent =
       runId: string
       phase?: number
       content: string
+    }
+  | {
+      type: "agent_browser_session"
+      runId: string
+      sessionId: string
     }
   | {
       type: "agent_thinking_done"
@@ -393,6 +405,8 @@ export interface StreamCallbacks {
   onThinking: (text: string) => void
   onThinkingDone: (seconds: number) => void
   onContent: (text: string) => void
+  /** Browser provider acquired the concrete runtime session for this run. */
+  onBrowserSession?: (sessionId: string) => void
   onToolCall: (toolCall: ToolCallInfo) => void
   onToolDelta?: (
     toolCallId: string,

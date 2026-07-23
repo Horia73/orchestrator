@@ -69,9 +69,15 @@ function isStandaloneApp(): boolean {
 
 async function registerServiceWorker(): Promise<ServiceWorkerRegistration> {
   const existing = await navigator.serviceWorker.getRegistration("/")
+  if (existing) {
+    await existing.update().catch(() => undefined)
+  }
   const registration =
     existing ??
-    (await navigator.serviceWorker.register("/sw.js", { scope: "/" }))
+    (await navigator.serviceWorker.register("/sw.js", {
+      scope: "/",
+      updateViaCache: "none",
+    }))
   return navigator.serviceWorker.ready.catch(() => registration)
 }
 

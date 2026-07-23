@@ -247,6 +247,7 @@ export function agentCallEntryFromStartEvent(
     title: agentName,
     prompt: typeof data.prompt === "string" ? data.prompt : "",
     status: "running",
+    async: data.async === true,
     startedAt: typeof data.startedAt === "number" ? data.startedAt : now,
     content: "",
     contentSegments: [],

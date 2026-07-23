@@ -93,7 +93,7 @@ export async function acquireFleetRun(opts: FleetAcquireOptions): Promise<FleetR
         releaseForChildren() {
             if (disposed || !holdsTotalAndProvider) return
             holdsTotalAndProvider = false
-            db.prepare(`UPDATE leases SET holdsTotal = 0, provider = NULL WHERE id = ? AND ownerId = ?`)
+            db.prepare(`UPDATE leases SET holdsTotal = 0, holdsMain = 0, provider = NULL WHERE id = ? AND ownerId = ?`)
                 .run(leaseId, state.ownerId)
         },
         async reacquireForResume() {
@@ -107,7 +107,7 @@ export async function acquireFleetRun(opts: FleetAcquireOptions): Promise<FleetR
             }
             if (opts.signal?.aborted) {
                 db.prepare(`
-                    UPDATE leases SET holdsTotal = 0, provider = NULL
+                    UPDATE leases SET holdsTotal = 0, holdsMain = 0, provider = NULL
                     WHERE id = ? AND ownerId = ?
                 `).run(leaseId, state.ownerId)
                 throw fleetAbortError()
@@ -324,9 +324,9 @@ function tryAcquire(
             )
         } else {
             const result = db.prepare(`
-                UPDATE leases SET holdsTotal = 1, provider = ?
+                UPDATE leases SET holdsTotal = 1, holdsMain = ?, provider = ?
                 WHERE id = ? AND ownerId = ?
-            `).run(provider, leaseId, state.ownerId)
+            `).run(opts.topLevel ? 1 : 0, provider, leaseId, state.ownerId)
             if (result.changes !== 1) return false
         }
         return true

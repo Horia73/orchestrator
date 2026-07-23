@@ -33,9 +33,9 @@
 // slam the loop and drop the user's SSE. Resume re-acquisitions skip the ramp.
 //
 // Deadlock freedom: a parent that called delegate_to and is AWAITING its
-// children is idle (its model turn is paused). It RELEASES its total + provider
-// slots for the duration (`releaseForChildren`) and re-acquires them at the
-// highest priority before resuming (`reacquireForResume`). The slots are thus
+// children is idle (its model turn is paused). It RELEASES its active total +
+// provider + main slots for the duration (`releaseForChildren`) and re-acquires
+// them at the highest priority before resuming (`reacquireForResume`). The slots are thus
 // always available to the agents actually doing work — no hold-and-wait cycle.
 // All acquisitions use the same order (resident-depth → provider → main →
 // total), so there is no lock-ordering deadlock either.
@@ -206,12 +206,20 @@ function providerCap(provider: string): number {
  * tool loop, so they do not need this second, lifetime-long admission pool. */
 function providerResidentDepthCap(provider: string): number | null {
     const key = provider.toLowerCase()
-    const defaults: Record<string, number> = {
-        codex: 2,
-        'claude-code': 2,
-    }
-    const fallback = defaults[key]
-    if (!fallback) return null
+    if (key !== 'codex' && key !== 'claude-code') return null
+    // This is a process-memory safety budget, not an active-agent throttle.
+    // A synchronous CLI parent keeps its app-server resident while awaiting a
+    // child even though it releases every active slot. Size the per-depth
+    // backstop from RAM and keep it above the provider's active cap, so normal
+    // model work is governed only by active concurrency (on the 16 GB
+    // production host this is 9, versus Codex's active cap of 3). Separate
+    // depth pools preserve deadlock freedom for nested delegation.
+    const totalMB = Math.max(1024, Math.floor(os.totalmem() / (1024 * 1024)))
+    const reserveMB = envInt('AGENT_RESIDENT_RESERVE_MB', 2500)
+    const perProcessMB = envInt('AGENT_RESIDENT_PROCESS_MB', 350)
+    const depthPools = envInt('AGENT_RESIDENT_DEPTH_POOLS', 4)
+    const ramBackstop = Math.max(1, Math.floor((totalMB - reserveMB) / perProcessMB / depthPools))
+    const fallback = Math.max(providerCap(key), ramBackstop)
     const envName = `AGENT_MAX_RESIDENT_${key.replace(/[^a-z0-9]+/g, '_').toUpperCase()}_PER_DEPTH`
     return envInt(envName, fallback)
 }
@@ -336,8 +344,8 @@ function reserveRampSlot(): number {
 
 /** A held slot for one agent run. Always `dispose()` it in a finally. */
 export interface RunPermit {
-    /** Release active total + provider slots while this agent awaits delegated
-     *  children. A process-resident CLI slot stays held. Idempotent. */
+    /** Release active total + provider + main slots while this agent awaits
+     *  delegated children. A process-memory CLI slot stays held. Idempotent. */
     releaseForChildren(): void
     /** Re-acquire the total + provider slots (highest priority) before resuming
      *  the agent's own turn after its children finished. No-op if still held. */
@@ -452,17 +460,27 @@ export async function acquireRun(opts: AcquireOpts): Promise<RunPermit> {
                 holdsProvider = false
                 providerSem.release()
             }
+            if (holdsMain) {
+                holdsMain = false
+                state.main.release()
+            }
         },
         async reacquireForResume() {
             if (opts.signal?.aborted) throw gateAbortError()
             // Same order as acquisition: provider before total.
             let acquiredProviderNow = false
+            let acquiredMainNow = false
             let acquiredTotalNow = false
             try {
                 if (providerSem && !holdsProvider) {
                     await providerSem.acquire(PRIORITY.resume, opts.signal)
                     holdsProvider = true
                     acquiredProviderNow = true
+                }
+                if (opts.topLevel && !holdsMain) {
+                    await state.main.acquire(PRIORITY.resume, opts.signal)
+                    holdsMain = true
+                    acquiredMainNow = true
                 }
                 if (!holdsTotal) {
                     await state.total.acquire(PRIORITY.resume, opts.signal)
@@ -478,6 +496,10 @@ export async function acquireRun(opts: AcquireOpts): Promise<RunPermit> {
                 if (acquiredProviderNow && holdsProvider && providerSem) {
                     holdsProvider = false
                     providerSem.release()
+                }
+                if (acquiredMainNow && holdsMain) {
+                    holdsMain = false
+                    state.main.release()
                 }
                 throw error
             }

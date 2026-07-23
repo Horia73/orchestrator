@@ -75,6 +75,10 @@ export interface AcquireBrowserSessionOptions {
     sessionMode?: BrowserSessionMode
     onStatus: (message: string) => void
     onEvidence: (capture: BrowserEvidenceCapture) => void | Promise<void>
+    /** Called once when this request must wait before it can own a browser session. */
+    onCapacityWait?: () => void
+    /** Called after browser capacity is acquired, before session setup begins. */
+    onCapacityAdmitted?: () => void | Promise<void>
 }
 
 interface ManagedBrowserSession {
@@ -183,7 +187,14 @@ class BrowserSessionManager {
     }
 
     async acquire(options: AcquireBrowserSessionOptions): Promise<BrowserSessionLease> {
+        let waitedForCapacity = false
+        const markCapacityWait = () => {
+            if (waitedForCapacity) return
+            waitedForCapacity = true
+            options.onCapacityWait?.()
+        }
         if (durableAiFleetHasOverlap()) {
+            markCapacityWait()
             options.onStatus('⏳ A previous app generation is still finishing browser work. This browser task will start automatically after the safe handoff completes.')
             while (durableAiFleetHasOverlap()) {
                 await new Promise(resolve => setTimeout(resolve, 500))
@@ -191,11 +202,15 @@ class BrowserSessionManager {
         }
         const maxConcurrent = getEffectiveMaxConcurrent()
         if (this.runSlots.isSaturated(maxConcurrent)) {
+            markCapacityWait()
             options.onStatus('⏳ The browser is busy with another conversation. Your task is queued and will start automatically as soon as it is free.')
         }
         const releaseRunSlot = await this.runSlots.acquire(maxConcurrent)
 
         try {
+            if (waitedForCapacity) {
+                await options.onCapacityAdmitted?.()
+            }
             const sessionMode = this.resolveSessionMode(options)
             await this.cleanupExpiredSessions()
 
@@ -358,14 +373,27 @@ class BrowserSessionManager {
 
     async getLiveViewState(sessionId?: string | null): Promise<BrowserLiveViewClientState> {
         const selectedSession = this.getHumanInteractionSession(sessionId)
-        const liveViewManager = selectedSession?.browserManager ?? this.browserManager
+        const exactSessionRequested = Boolean(sessionId)
+        const anotherSessionIsRunning = Boolean(selectedSession && [...this.sessions.values()].some(
+            session => session.id !== selectedSession.id && session.status === 'running'
+        ))
+        // A shared persistent browser manager exposes one display. Never return
+        // that display for an unknown session, or for a paused/finished session
+        // while another conversation currently owns the browser slot.
+        const viewSession = anotherSessionIsRunning ? null : selectedSession
+        const liveViewManager = viewSession?.browserManager
+            ?? (exactSessionRequested ? null : this.browserManager)
         const base = liveViewManager?.getLiveViewState() ?? {
             enabled: process.platform === 'linux' || process.platform === 'darwin',
             available: false,
             ready: false,
             mode: process.platform === 'darwin' ? ('mac-headful' as const) : ('disabled' as const),
             platform: process.platform,
-            reason: 'Browser has not been started yet.',
+            reason: exactSessionRequested
+                ? selectedSession
+                    ? 'This browser session is waiting while another conversation uses the browser.'
+                    : 'This browser session is no longer available.'
+                : 'Browser has not been started yet.',
         }
 
         const sessionStates = await Promise.all([...this.sessions.values()].map(async session => {
@@ -392,7 +420,7 @@ class BrowserSessionManager {
 
         let cursor: BrowserPointerState | null = null
         try {
-            cursor = selectedSession?.pageSession.getPointerState() ?? null
+            cursor = viewSession?.pageSession.getPointerState() ?? null
         } catch {
             cursor = null
         }
@@ -401,9 +429,15 @@ class BrowserSessionManager {
             ...base,
             selectedSessionId: selectedSession?.id ?? null,
             cursor,
-            running: sessionStates.some(session => session.running),
-            paused: sessionStates.some(session => session.paused),
-            sessions: sessionStates,
+            running: exactSessionRequested
+                ? Boolean(sessionStates.find(session => session.id === selectedSession?.id)?.running)
+                : sessionStates.some(session => session.running),
+            paused: exactSessionRequested
+                ? Boolean(sessionStates.find(session => session.id === selectedSession?.id)?.paused)
+                : sessionStates.some(session => session.paused),
+            sessions: exactSessionRequested
+                ? sessionStates.filter(session => session.id === selectedSession?.id)
+                : sessionStates,
         }
     }
 

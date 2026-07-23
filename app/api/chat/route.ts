@@ -1141,6 +1141,7 @@ export async function POST(request: Request) {
             existing.assignedName = event.assignedName
             existing.taskLabel = event.taskLabel
             existing.status = "running"
+            existing.async = event.async
             existing.startedAt = event.startedAt
             existing.queued = event.type === "agent_queued"
             if (event.type === "agent_start") existing.prompt = event.prompt
@@ -1164,6 +1165,7 @@ export async function POST(request: Request) {
                   ? event.prompt
                   : (event.taskLabel ?? "Waiting for an available agent slot."),
               status: "running",
+              async: event.async,
               queued: event.type === "agent_queued",
               startedAt: event.startedAt,
               content: "",
@@ -1173,6 +1175,11 @@ export async function POST(request: Request) {
           }
         } else if (event.type === "agent_thinking") {
           appendAgentThinking(event.runId, event.content, event.phase)
+        } else if (event.type === "agent_browser_session") {
+          const entry = findAgentEntry(event.runId)
+          if (entry?.type === "agent_call") {
+            entry.browserSessionId = event.sessionId
+          }
         } else if (event.type === "agent_content") {
           appendAgentContent(event.runId, event.content, event.phase)
         } else if (event.type === "agent_tool_call") {
@@ -1252,6 +1259,7 @@ export async function POST(request: Request) {
         const forceSnapshot =
           event.type === "agent_queued" ||
           event.type === "agent_start" ||
+          event.type === "agent_browser_session" ||
           event.type === "agent_done"
         persistAssistantProgress({ force: forceSnapshot })
         if (

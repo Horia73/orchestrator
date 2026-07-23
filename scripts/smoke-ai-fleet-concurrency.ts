@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import Database from 'better-sqlite3'
 
 interface ChildMessage {
     type: 'acquired' | 'active_released' | 'released' | 'error'
@@ -16,7 +17,7 @@ async function childMain() {
     const workerId = process.env.ORCHESTRATOR_AI_WORKER_ID || 'unknown'
     try {
         const permit = await acquireFleetRun({
-            topLevel: false,
+            topLevel: true,
             provider: 'codex',
             depth: 1,
             residentProvider: 'codex',
@@ -102,6 +103,18 @@ async function parentMain() {
 
         blue.send('release-active')
         assert.deepEqual(await nextMessage(blue), { type: 'active_released', workerId: 'blue' })
+        const db = new Database(gatePath, { readonly: true })
+        const released = db.prepare(`
+            SELECT COALESCE(SUM(holdsTotal), 0) total, COALESCE(SUM(holdsMain), 0) main,
+                   COUNT(provider) provider, COUNT(residentProvider) resident
+            FROM leases
+        `).get() as { total: number; main: number; provider: number; resident: number }
+        db.close()
+        assert.deepEqual(
+            released,
+            { total: 0, main: 0, provider: 0, resident: 1 },
+            'A synchronous parent waiting on children must release every active slot and retain only process-memory residency',
+        )
         await new Promise(resolve => setTimeout(resolve, 350))
         assert.equal(
             greenAcquired,

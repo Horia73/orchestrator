@@ -7,8 +7,9 @@ import { TodoBar } from "@/components/todo-bar"
 import { appPath } from "@/lib/app-path"
 import {
   browserAgentRunPauseKind,
-  browserSessionIdFromRunContent,
+  browserSessionIdFromRun,
   isBrowserAgentRunLive,
+  isBrowserAgentRunWaitingInQueue,
 } from "@/lib/browser-agent-run-state"
 import { cn } from "@/lib/utils"
 import type {
@@ -89,12 +90,14 @@ function useBrowserDiagnostics(
   const [data, setData] = React.useState<BrowserDiagnosticsResponse | null>(null)
 
   React.useEffect(() => {
+    if (!sessionId) {
+      setData(null)
+      return
+    }
     let cancelled = false
     const tick = async () => {
       try {
-        const url = sessionId
-          ? `/api/browser-agent/diagnostics?sessionId=${encodeURIComponent(sessionId)}`
-          : "/api/browser-agent/diagnostics"
+        const url = `/api/browser-agent/diagnostics?sessionId=${encodeURIComponent(sessionId)}`
         const res = await fetch(url, { cache: "no-store" })
         if (!res.ok) return
         const payload = (await res.json()) as BrowserDiagnosticsResponse
@@ -127,7 +130,8 @@ export function BrowserAgentWorkspace({
   onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
 }) {
   const pauseKind = browserAgentRunPauseKind(run)
-  const sessionId = browserSessionIdFromRunContent(run.content)
+  const sessionId = browserSessionIdFromRun(run)
+  const waitingInQueue = isBrowserAgentRunWaitingInQueue(run)
   const active = isBrowserAgentRunLive(run)
 
   return (
@@ -166,13 +170,22 @@ export function BrowserAgentWorkspace({
           on short windows. Before the stream is ready there is no viewport,
           so the wrapper still collapses to the availability/status chip. */}
       <div className="min-h-0 min-w-0 shrink-0 has-[.browser-agent-live-viewport]:h-[min(calc(56.25cqw+4.75rem),calc(100dvh-14.5rem))] has-[.browser-agent-live-viewport]:min-h-[200px]">
-        <BrowserAgentLiveView
-          variant="panel"
-          active={active}
-          sessionId={sessionId}
-        />
+        {sessionId ? (
+          <BrowserAgentLiveView
+            key={sessionId}
+            variant="panel"
+            active={active}
+            sessionId={sessionId}
+          />
+        ) : (
+          <div className="flex items-center gap-2 rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-[12px] text-muted-foreground">
+            {run.status === "running" && <span className="size-2 shrink-0 animate-pulse rounded-full bg-sky-500" />}
+            <span>Browser agent · {waitingInQueue ? "waiting in queue" : run.status === "running" ? "starting" : run.status}</span>
+          </div>
+        )}
       </div>
       <BrowserAgentDiagnosticsTabs
+        key={sessionId ?? run.runId}
         run={run}
         sessionId={sessionId}
         active={active}

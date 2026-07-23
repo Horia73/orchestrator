@@ -252,6 +252,8 @@ export interface AgentCallReasoningEntry {
   runId: string
   /** Persistent parent↔agent thread id, when this run continues one. */
   agentThreadId?: string
+  /** Browser runtime session owned by this run, available once its queue wait ends. */
+  browserSessionId?: string
   /** Parent agent run id when this is a nested sub-agent. */
   parentRunId?: string
   agentId: string
@@ -264,6 +266,8 @@ export interface AgentCallReasoningEntry {
   title: string
   prompt: string
   status: AgentRunStatus
+  /** True when this direct child was launched by root-only delegate_async. */
+  async?: boolean
   /** True while the run is waiting in the concurrency-gate queue (admitted but
    *  not yet started). Cleared when the matching agent_start arrives. */
   queued?: boolean

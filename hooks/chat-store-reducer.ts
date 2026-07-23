@@ -152,6 +152,11 @@ export type ChatAction =
     }
   | { type: "UPSERT_STREAMING_AGENT_CALL"; entry: AgentCallReasoningEntry }
   | {
+      type: "SET_STREAMING_AGENT_BROWSER_SESSION"
+      runId: string
+      sessionId: string
+    }
+  | {
       type: "APPEND_STREAMING_AGENT_THINKING"
       runId: string
       chunk: string
@@ -1073,6 +1078,16 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           (entry) => appendAgentThought(entry, action.chunk, action.phase)
         ),
         streamingMode: "reasoning",
+        streamingStatus: null,
+      }
+    case "SET_STREAMING_AGENT_BROWSER_SESSION":
+      return {
+        ...state,
+        streamingReasoning: updateAgentEntry(
+          state.streamingReasoning,
+          action.runId,
+          (entry) => ({ ...entry, browserSessionId: action.sessionId })
+        ),
         streamingStatus: null,
       }
     case "APPEND_STREAMING_AGENT_CONTENT":

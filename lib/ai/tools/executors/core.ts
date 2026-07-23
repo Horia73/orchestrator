@@ -6,6 +6,7 @@ import { executeTranscribeAudio } from "../transcribe-audio"
 import { executeCreateBackup } from "../create-backup"
 import { executeHostStatus } from "../host-status"
 import {
+  executeDelegateAsync,
   executeDelegateParallel,
   executeDelegateTo,
   executeManageDelegations,
@@ -62,6 +63,7 @@ export const coreToolExecutors: Record<string, ToolExecutor> = {
   host_status: executeHostStatus,
   delegate_to: executeDelegateTo,
   delegate_parallel: executeDelegateParallel,
+  delegate_async: executeDelegateAsync,
   manage_delegations: executeManageDelegations,
   request_owner_agent_help: executeRequestOwnerAgentHelp,
   complete_owner_agent_help: executeCompleteOwnerAgentHelp,

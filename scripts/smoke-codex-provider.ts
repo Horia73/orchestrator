@@ -9,7 +9,7 @@ import {
   isTransientCodexAppServerError,
   mapEffortForCodex,
 } from "@/lib/ai/providers/codex"
-import { delegateToTool } from "@/lib/ai/tools/delegate-to"
+import { delegateAsyncTool, delegateToTool } from "@/lib/ai/tools/delegate-to"
 import { codexImageTestHooks, generateCodexImage } from "@/lib/ai/providers/codex-image"
 import { imageGenerator } from "@/lib/ai/agents/image-generator"
 import { migrateLegacyAgentModelSelection } from "@/lib/config"
@@ -64,11 +64,19 @@ assert.equal(mapEffortForCodex("max"), "max", "Codex max effort must not be down
 assert.equal(mapEffortForCodex("ultra"), "ultra", "New Codex effort ids should pass through")
 
 const managedAppServerArgs = codexProviderTestHooks.buildAppServerArgs(false, ["web_search"])
+for (const feature of ["multi_agent", "multi_agent_v2", "enable_fanout"]) {
+  const index = managedAppServerArgs.findIndex((arg, offset) => arg === "--disable" && managedAppServerArgs[offset + 1] === feature)
+  assert.ok(index >= 0, `Managed Codex process must hard-disable ${feature}`)
+}
 assert.ok(
   managedAppServerArgs.includes('features.code_mode.direct_only_tool_namespaces=["orchestrator"]'),
   "Managed Codex runs must keep the Orchestrator namespace direct and blocking"
 )
 const nativeCoderAppServerArgs = codexProviderTestHooks.buildAppServerArgs(true, [])
+for (const feature of ["multi_agent", "multi_agent_v2", "enable_fanout"]) {
+  const index = nativeCoderAppServerArgs.findIndex((arg, offset) => arg === "--disable" && nativeCoderAppServerArgs[offset + 1] === feature)
+  assert.ok(index >= 0, `Native coder process must hard-disable ${feature}`)
+}
 assert.equal(
   nativeCoderAppServerArgs.some(arg => arg.includes("direct_only_tool_namespaces")),
   false,
@@ -84,12 +92,10 @@ const managedThreadParams = codexProviderTestHooks.buildThreadParams({
 type CodexThreadConfig = {
   features?: {
     code_mode?: { direct_only_tool_namespaces?: string[] }
-    multi_agent_v2?: {
-      enabled?: boolean
-      multi_agent_mode_hint_text?: string
-    }
+    multi_agent?: boolean
+    multi_agent_v2?: boolean
+    enable_fanout?: boolean
   }
-  multi_agent_v2?: { multi_agent_mode_hint_text?: string }
 }
 const managedThreadConfig = managedThreadParams.config as CodexThreadConfig
 assert.deepEqual(
@@ -98,14 +104,19 @@ assert.deepEqual(
   "Managed thread configuration must keep Orchestrator tools direct even when the model forces code_mode_only"
 )
 assert.equal(
-  managedThreadConfig.features?.multi_agent_v2?.enabled,
+  managedThreadConfig.features?.multi_agent,
   false,
-  "Managed threads must keep Codex-native multi-agent tools disabled"
+  "Managed threads must disable stable Codex-native multi-agent tools"
 )
 assert.equal(
-  managedThreadConfig.multi_agent_v2,
-  undefined,
-  "Codex ignores a top-level multi_agent_v2 policy; the override must live under features"
+  managedThreadConfig.features?.multi_agent_v2,
+  false,
+  "Managed threads must disable Codex-native multi-agent v2 as a boolean feature"
+)
+assert.equal(
+  managedThreadConfig.features?.enable_fanout,
+  false,
+  "Managed threads must disable Codex-native fan-out"
 )
 assert.deepEqual(
   managedThreadParams.dynamicTools,
@@ -122,26 +133,6 @@ assert.deepEqual(
   }],
   "Managed dynamic tools must use the official namespaced app-server schema"
 )
-assert.match(
-  managedThreadConfig.features?.multi_agent_v2?.multi_agent_mode_hint_text ?? "",
-  /delegate_to or delegate_parallel/,
-  "Managed Codex runs must receive the Orchestrator delegation policy override"
-)
-assert.match(
-  managedThreadConfig.features?.multi_agent_v2?.multi_agent_mode_hint_text ?? "",
-  /user has explicitly made a standing request and authorization/,
-  "Managed Codex runs must carry the user's standing delegation authorization"
-)
-assert.match(
-  managedThreadConfig.features?.multi_agent_v2?.multi_agent_mode_hint_text ?? "",
-  /Treat this standing request as the explicit user request for sub-agents, delegation, and parallel agent work/,
-  "Codex must not suppress Orchestrator-managed delegation on non-Ultra runs"
-)
-assert.match(
-  managedThreadConfig.features?.multi_agent_v2?.multi_agent_mode_hint_text ?? "",
-  /run_async is available only to the depth-0 root[\s\S]*delegated children must[\s\S]*delegate synchronously/,
-  "Managed Codex runs must keep detached completion wakes at the root"
-)
 const nativeCoderThreadParams = codexProviderTestHooks.buildThreadParams({
   model: "gpt-5.6-sol",
   tools: [],
@@ -155,9 +146,9 @@ assert.equal(
   "Native coder thread configuration should not override Codex tool exposure"
 )
 assert.equal(
-  nativeCoderThreadConfig.multi_agent_v2,
-  undefined,
-  "Native coder runs must retain Codex's own multi-agent policy"
+  nativeCoderThreadConfig.features?.multi_agent_v2,
+  false,
+  "Native coder runs must not expose Codex-native collaboration"
 )
 
 assert.equal(
@@ -166,7 +157,7 @@ assert.equal(
   "Managed sessions born before the standing delegation policy must refresh with portable history"
 )
 const managedSessionId = codexProviderTestHooks.encodeAppServerSessionId("managed-thread", false)
-assert.equal(managedSessionId, "appserver:managed-policy-v6:managed-thread")
+assert.equal(managedSessionId, "appserver:managed-policy-v7:managed-thread")
 assert.deepEqual(
   codexProviderTestHooks.decodeAppServerSessionId(managedSessionId, false),
   { threadId: "managed-thread" },
@@ -217,6 +208,7 @@ import { writeFileSync } from "node:fs"
 const send = value => process.stdout.write(JSON.stringify(value) + "\\n")
 const parentViolation = process.env.FAKE_PARENT_VIOLATION === "1"
 const asyncDelegation = process.env.FAKE_ASYNC_DELEGATION === "1"
+const nativeCollaboration = process.env.FAKE_NATIVE_COLLABORATION === "1"
 const codeModeWait = process.env.FAKE_CODE_MODE_WAIT === "1"
 const interleavedMessages = process.env.FAKE_INTERLEAVED_MESSAGES === "1"
 const rl = readline.createInterface({ input: process.stdin })
@@ -224,7 +216,7 @@ rl.on("line", line => {
   const message = JSON.parse(line)
   if (message.id === 700 && !message.method) {
     send({ method: "item/completed", params: { item: {
-      id: "delegate-call", type: "dynamicToolCall", namespace: "orchestrator", tool: "delegate_to",
+      id: "delegate-call", type: "dynamicToolCall", namespace: "orchestrator", tool: asyncDelegation ? "delegate_async" : "delegate_to",
       status: "completed", success: false, contentItems: [{ type: "inputText", text: "diagnostic failure" }],
     } } })
     if (asyncDelegation) {
@@ -269,6 +261,12 @@ rl.on("line", line => {
   if (message.method === "turn/start") {
     send({ id: message.id, result: { turn: { id: "fake-turn" } } })
     send({ method: "turn/started", params: { turn: { id: "fake-turn" } } })
+    if (nativeCollaboration) {
+      send({ method: "item/started", params: { turnId: "fake-turn", item: {
+        id: "native-agent-call", type: "collabAgentToolCall", tool: "spawnAgent", status: "inProgress",
+      } } })
+      return
+    }
     if (interleavedMessages) {
       send({ method: "item/started", params: { turnId: "fake-turn", item: {
         id: "message-a", type: "agentMessage",
@@ -300,13 +298,17 @@ rl.on("line", line => {
     send({ method: "item/reasoning/summaryTextDelta", params: {
       itemId: "pre-delegation-reasoning", delta: "Delegate synchronously.",
     } })
+    const delegationTool = asyncDelegation ? "delegate_async" : "delegate_to"
+    const delegationArgs = asyncDelegation
+      ? { jobs: [{ agent_id: "browser_agent", prompt: "diagnostic" }], independent_parent_work: "inspect repository status" }
+      : { agent_id: "browser_agent", prompt: "diagnostic" }
     send({ method: "item/started", params: { item: {
-      id: "delegate-call", type: "dynamicToolCall", namespace: "orchestrator", tool: "delegate_to",
-      status: "inProgress", arguments: { agent_id: "browser_agent", prompt: "diagnostic", ...(asyncDelegation ? { run_async: true } : {}) },
+      id: "delegate-call", type: "dynamicToolCall", namespace: "orchestrator", tool: delegationTool,
+      status: "inProgress", arguments: delegationArgs,
     } } })
     send({ id: 700, method: "item/tool/call", params: {
-      callId: "delegate-call", namespace: "orchestrator", tool: "delegate_to",
-      arguments: { agent_id: "browser_agent", prompt: "diagnostic", ...(asyncDelegation ? { run_async: true } : {}) },
+      callId: "delegate-call", namespace: "orchestrator", tool: delegationTool,
+      arguments: delegationArgs,
     } })
     // Codex 0.144.4 can close the already-started reasoning item after the
     // direct client tool request is in flight. This is stream tail, not the
@@ -376,7 +378,7 @@ rl.on("line", line => {
   assert.deepEqual(errors, [], "A direct namespaced delegation must finish without provider errors")
   assert.equal(content.join(""), "DONE", "The parent may resume only after the delegation item completes")
   assert.deepEqual(toolCalls, ["delegate_to"], "The direct path must not create an exec/wait/shell wrapper")
-  assert.deepEqual(sessions, ["appserver:managed-policy-v6:legacy-thread"])
+  assert.deepEqual(sessions, ["appserver:managed-policy-v7:legacy-thread"])
   const capture = JSON.parse(readFileSync(capturePath, "utf8")) as {
     method: string
     params: {
@@ -509,7 +511,7 @@ rl.on("line", line => {
       bin: fakeCodex,
       prompt: "Exercise explicit async delegation.",
       model: "gpt-5.6-sol",
-      tools: [delegateToTool],
+      tools: [delegateAsyncTool],
       builtins: [],
       nativeCoderRun: false,
       spawnEnv: { FAKE_ASYNC_DELEGATION: "1" },
@@ -526,13 +528,37 @@ rl.on("line", line => {
   } finally {
     delete process.env.FAKE_ASYNC_DELEGATION
   }
-  assert.deepEqual(asyncErrors, [], "run_async delegation must permit subsequent parent activity")
+  assert.deepEqual(asyncErrors, [], "delegate_async must permit subsequent parent activity")
   assert.equal(asyncContent.join(""), "DONE")
   assert.deepEqual(
     asyncToolCalls,
-    ["delegate_to", "shell"],
+    ["delegate_async", "shell"],
     "Explicit async delegation must attribute and surface both child launch and later parent tool work"
   )
+
+  const nativeCollaborationErrors: string[] = []
+  const nativeCollaborationTools: string[] = []
+  await codexProviderTestHooks.runCodexAppServer({
+    bin: fakeCodex,
+    prompt: "Attempt a forbidden native Codex sub-agent.",
+    model: "gpt-5.6-sol",
+    tools: [delegateToTool],
+    builtins: [],
+    nativeCoderRun: false,
+    spawnEnv: { FAKE_NATIVE_COLLABORATION: "1" },
+    callbacks: {
+      onThinking() {},
+      onThinkingDone() {},
+      onContent() {},
+      onToolCall(call) { nativeCollaborationTools.push(call.name) },
+      onToolResult() {},
+      onDone() {},
+      onError(error) { nativeCollaborationErrors.push(error) },
+    },
+  })
+  assert.equal(nativeCollaborationErrors.length, 1, "Native Codex collaboration must fail closed exactly once")
+  assert.match(nativeCollaborationErrors[0] ?? "", /Blocked a Codex-native sub-agent operation/)
+  assert.deepEqual(nativeCollaborationTools, [], "A native Codex agent call must never surface as an allowed tool")
 } finally {
   rmSync(directToolFixtureRoot, { recursive: true, force: true })
 }

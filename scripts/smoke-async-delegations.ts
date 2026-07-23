@@ -2,8 +2,8 @@
  * Smoke test for detached specialist batches.
  *
  * Proves that one or many child jobs return control immediately, respect the
- * requested batch concurrency, persist results, can be cancelled, and emit at
- * most one completion wake only after an explicit detach.
+ * requested batch concurrency, persist truthful queued/admitted state, can be
+ * cancelled, and emit at most one completion wake.
  */
 import fs from 'fs'
 import os from 'os'
@@ -35,7 +35,13 @@ async function main(): Promise<void> {
     const { clearChatStream, registerChatStream } = await import('@/lib/chat-streams')
     const { clearFollowUps, peekFollowUps } = await import('@/lib/chat-followups')
     const { getActiveProfileId } = await import('@/lib/profiles/context')
-    const { executeDelegateTo } = await import('@/lib/ai/tools/delegate-to')
+    const {
+        delegateAsyncTool,
+        delegateParallelTool,
+        delegateToTool,
+        executeDelegateTo,
+        executeManageDelegations,
+    } = await import('@/lib/ai/tools/delegate-to')
 
     const conversationId = 'async_delegation_smoke'
     createConversation({
@@ -56,6 +62,16 @@ async function main(): Promise<void> {
         createdByAgentId: 'orchestrator',
         title,
     })
+
+    check(!('run_async' in (delegateToTool.input_schema.properties ?? {})), 'delegate_to schema is structurally synchronous')
+    check(!('run_async' in (delegateParallelTool.input_schema.properties ?? {})), 'delegate_parallel schema is structurally synchronous')
+    check(delegateAsyncTool.input_schema.required?.includes('independent_parent_work') === true, 'delegate_async requires explicit independent parent work')
+    const legacyAsyncRejected = await executeDelegateTo({
+        agent_id: 'researcher',
+        prompt: 'legacy async flag',
+        run_async: true,
+    }, ctx)
+    check(!legacyAsyncRejected.success && /synchronous/.test(legacyAsyncRejected.error ?? ''), 'legacy run_async cannot bypass synchronous delegate_to')
 
     // Detached batches are conversation-level wakes, so only the root may own
     // one. A sub-agent must wait synchronously for its direct children.
@@ -132,7 +148,10 @@ async function main(): Promise<void> {
     // One child: the launch must resolve while the child is still blocked.
     let releaseSingle!: () => void
     const singleGate = new Promise<void>(resolve => { releaseSingle = resolve })
+    let admitSingle!: () => void
+    const singleAdmissionGate = new Promise<void>(resolve => { admitSingle = resolve })
     let singleStarted = false
+    let singleMarkedAsync = false
     const singleThread = makeThread('single async child')
     const single = await startAsyncDelegationBatch({
         ctx,
@@ -141,8 +160,11 @@ async function main(): Promise<void> {
             agentThreadId: singleThread.id,
             taskLabel: singleThread.title,
             prompt: 'single',
-            run: async () => {
+            run: async childCtx => {
                 singleStarted = true
+                singleMarkedAsync = childCtx.asyncDelegation === true
+                await singleAdmissionGate
+                childCtx.onAgentAdmitted?.()
                 await singleGate
                 return { success: true, data: { output: 'single-result' } }
             },
@@ -151,7 +173,12 @@ async function main(): Promise<void> {
     })
     await eventually(() => singleStarted)
     check(asyncDelegationTestHooks.getBatch(single.batchId)?.status === 'running', 'single launch returns before child completion')
+    check(asyncDelegationTestHooks.getJobs(single.batchId)[0]?.status === 'queued', 'async job remains queued before concurrency admission')
+    check(singleMarkedAsync, 'async child execution context is marked for UI lifecycle events')
     check(listAgentRuns().some(run => run.id === single.batchId && run.kind === 'delegation'), 'live async batch participates in worker drain')
+    admitSingle()
+    await eventually(() => asyncDelegationTestHooks.getJobs(single.batchId)[0]?.status === 'running')
+    check(asyncDelegationTestHooks.getJobs(single.batchId)[0]?.status === 'running', 'async job flips to running only on admission')
     releaseSingle()
     const singleDone = await waitForAsyncDelegationBatch(single.batchId, ctx, 2_000)
     check(singleDone?.status === 'ok', 'single async child settles successfully')
@@ -170,7 +197,8 @@ async function main(): Promise<void> {
             agentThreadId: thread.id,
             taskLabel: thread.title,
             prompt: `job-${index}`,
-            run: async () => {
+            run: async childCtx => {
+                childCtx.onAgentAdmitted?.()
                 live += 1
                 peak = Math.max(peak, live)
                 await sleep(35)
@@ -196,14 +224,19 @@ async function main(): Promise<void> {
             taskLabel: cancelThread.title,
             prompt: 'wait until cancelled',
             run: async childCtx => new Promise(resolve => {
+                childCtx.onAgentAdmitted?.()
                 childCtx.signal?.addEventListener('abort', () => {
                     resolve({ success: false, error: 'cancelled by smoke' })
                 }, { once: true })
             }),
         }],
         maxConcurrency: 1,
+        wakeOnComplete: true,
     })
     await eventually(() => asyncDelegationTestHooks.getJobs(cancellable.batchId)[0]?.status === 'running')
+    const runningCollect = await executeManageDelegations({ action: 'collect', batch_id: cancellable.batchId }, ctx)
+    check(runningCollect.success, 'running async batch can be inspected without blocking')
+    check(asyncDelegationTestHooks.getBatch(cancellable.batchId)?.wakeOnComplete === 1, 'collecting a running batch preserves its automatic completion wake')
     check(cancelAsyncDelegationBatch(cancellable.batchId, ctx).ok, 'cancel signal accepted')
     const cancelled = await waitForAsyncDelegationBatch(cancellable.batchId, ctx, 2_000)
     check(cancelled?.status === 'aborted', 'cancelled batch becomes aborted')
@@ -219,6 +252,7 @@ async function main(): Promise<void> {
             taskLabel: stopThread.title,
             prompt: 'stop with parent',
             run: async childCtx => new Promise(resolve => {
+                childCtx.onAgentAdmitted?.()
                 childCtx.signal?.addEventListener('abort', () => {
                     resolve({ success: false, error: 'parent stopped' })
                 }, { once: true })
@@ -234,7 +268,8 @@ async function main(): Promise<void> {
     check(stoppedDone?.wakeOnComplete === 0, 'parent Stop suppresses detached completion wake')
     check(!peekFollowUps(conversationId).some(item => item.source === 'async-delegation'), 'parent Stop queues no async follow-up')
 
-    // Detach after settlement: one system notice, never a duplicate wake.
+    // Legacy detach after settlement: defer while the launching root stream is
+    // active, then post one notice when that stream ends (never a duplicate).
     const wakeController = new AbortController()
     check(registerChatStream(conversationId, 'wake_guard', wakeController), 'wake guard stream registered')
     const detachedThread = makeThread('detached async child')
@@ -245,7 +280,10 @@ async function main(): Promise<void> {
             agentThreadId: detachedThread.id,
             taskLabel: detachedThread.title,
             prompt: 'finish for wake',
-            run: async () => ({ success: true, data: { output: 'detached-result' } }),
+            run: async childCtx => {
+                childCtx.onAgentAdmitted?.()
+                return { success: true, data: { output: 'detached-result' } }
+            },
         }],
         maxConcurrency: 1,
     })
@@ -254,6 +292,15 @@ async function main(): Promise<void> {
     check(Boolean(setAsyncDelegationWake(detached.batchId, ctx, true)), 'detach enables completion wake')
     await notifyAsyncDelegationCompletion(getActiveProfileId(), detached.batchId)
     await notifyAsyncDelegationCompletion(getActiveProfileId(), detached.batchId)
+    const noticesBeforeEnd = getConversation(conversationId)?.messages.filter(message =>
+        message.content.includes(`<async-delegation-notice>`) && message.content.includes(detached.batchId)
+    ) ?? []
+    check(noticesBeforeEnd.length === 0, 'completion notice waits until the launching root stream ends')
+    check(asyncDelegationTestHooks.deferredCompletionNotices.size === 1, 'only one deferred completion listener is registered')
+    clearChatStream(conversationId, 'wake_guard')
+    await eventually(() => (getConversation(conversationId)?.messages ?? []).some(message =>
+        message.content.includes(`<async-delegation-notice>`) && message.content.includes(detached.batchId)
+    ))
     const notices = getConversation(conversationId)?.messages.filter(message =>
         message.content.includes(`<async-delegation-notice>`) && message.content.includes(detached.batchId)
     ) ?? []
@@ -261,9 +308,39 @@ async function main(): Promise<void> {
     const queued = peekFollowUps(conversationId).filter(item => item.source === 'async-delegation')
     check(queued.length === 1, `detach queues exactly one async follow-up (count=${queued.length})`)
     clearFollowUps(conversationId)
-    clearChatStream(conversationId, 'wake_guard')
+
+    // Automatic wake + terminal inline collect: collecting before the root
+    // stream ends must cancel the deferred notice and avoid a duplicate turn.
+    const collectController = new AbortController()
+    check(registerChatStream(conversationId, 'collect_guard', collectController), 'terminal collect guard stream registered')
+    const collectedThread = makeThread('collected before root end')
+    const collectedBatch = await startAsyncDelegationBatch({
+        ctx,
+        jobs: [{
+            agentId: 'researcher',
+            agentThreadId: collectedThread.id,
+            taskLabel: collectedThread.title,
+            prompt: 'finish before inline collect',
+            run: async childCtx => {
+                childCtx.onAgentAdmitted?.()
+                return { success: true, data: { output: 'inline-result' } }
+            },
+        }],
+        maxConcurrency: 1,
+        wakeOnComplete: true,
+    })
+    const collectedDone = await waitForAsyncDelegationBatch(collectedBatch.batchId, ctx, 2_000)
+    check(collectedDone?.status === 'ok', 'automatic-wake fixture settles during root stream')
+    const inlineCollect = await executeManageDelegations({ action: 'collect', batch_id: collectedBatch.batchId }, ctx)
+    check(inlineCollect.success, 'terminal result is collected inline')
+    clearChatStream(conversationId, 'collect_guard')
+    await sleep(20)
     check(
-        pruneExpiredAsyncDelegations(Date.now() + 15 * 24 * 60 * 60_000) >= 4,
+        !(getConversation(conversationId)?.messages ?? []).some(message => message.content.includes(collectedBatch.batchId)),
+        'terminal inline collect suppresses the deferred completion notice',
+    )
+    check(
+        pruneExpiredAsyncDelegations(Date.now() + 15 * 24 * 60 * 60_000) >= 5,
         'terminal async bookkeeping prunes after retention window',
     )
 

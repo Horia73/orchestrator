@@ -148,13 +148,13 @@ function main() {
   )
   assert.match(
     orchestrator,
-    /Choose `run_async=true` only when you can name useful parent work[\s\S]*action="detach"[\s\S]*Do not babysit the child[\s\S]*repeated short `wait` calls/,
-    "orchestrator must reserve async delegation for real overlap and detach after its parent slice"
+    /structurally synchronous by default[\s\S]*separate `delegate_async` tool[\s\S]*independent_parent_work[\s\S]*completion wake[\s\S]*Do not babysit children/,
+    "orchestrator must make sync structural and reserve the separate async tool for real overlap"
   )
   for (const [name, prompt] of [["researcher", RESEARCHER_PROMPT], ["concierge", CONCIERGE_PROMPT]] as const) {
     assert.match(
       prompt,
-      /synchronous(?: only| from)[\s\S]*Nested `run_async`[\s\S]*direct parent/,
+      /synchronous(?: only| from)[\s\S]*`delegate_async`[\s\S]*unavailable[\s\S]*direct parent/,
       `${name} must keep nested delegation synchronous and parent-scoped`
     )
   }

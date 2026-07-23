@@ -43,7 +43,7 @@ export const delegateToTool: ToolDef = {
     name: 'delegate_to',
     description: [
         'Delegate a task to a specialist sub-agent and wait for its final answer.',
-        'The depth-0 root orchestrator may set run_async=true only when it has concrete useful work on a different independent slice that it will do immediately. Delegated agents must use the synchronous default: nested async batches are rejected so completion cannot escape the direct parent thread.',
+        'This tool is always synchronous: the parent is suspended until the child returns. Use delegate_async instead only from the depth-0 root when concrete independent parent work will run at the same time.',
         'Use this when the task is outside your remit, when a specialist would do better, or when you want a fresh perspective on your own output.',
         'Returns the sub-agent\'s complete response, output length metadata, and agent_thread_id. The complete response is also persisted in the agent thread; if a UI preview is clipped, do not treat that as data loss. Pass thread_id to continue an existing parent↔agent thread; omit it to create a new one.',
         'To let the sub-agent see a file directly (image, PDF, document), pass attachment_ids — upload ids from the current user message or from find_past_uploads; the files are forwarded into its turn for providers that support them.',
@@ -95,14 +95,6 @@ export const delegateToTool: ToolDef = {
                 enum: ['persistent', 'incognito'],
                 description: 'Only for browser_agent. This is a parent-controlled launch parameter: persistent uses the saved browser profile; incognito starts a fresh temporary isolated profile with no saved cookies/logins/localStorage. browser_agent cannot switch modes inside its session. Reuse the same thread_id only for same-mode continuations.',
             },
-            run_async: {
-                type: 'boolean',
-                description: 'When true, launch the child and return immediately for concrete useful independent parent work you will do now. Do not use merely because the child may be slow. Default false waits synchronously for the complete result.',
-            },
-            wake_on_complete: {
-                type: 'boolean',
-                description: 'Async mode only. When true, completion posts an automated follow-up and wakes this conversation. Default false; when your independent parent slice ends and the batch still runs, use manage_delegations action="detach" to enable this and end the turn.',
-            },
         },
         required: ['agent_id', 'prompt'],
     },
@@ -114,7 +106,7 @@ export const delegateParallelTool: ToolDef = {
     name: 'delegate_parallel',
     description: [
         'Delegate multiple independent tasks to specialist sub-agents concurrently and wait for all final answers.',
-        'Only the depth-0 root orchestrator may set run_async=true, and only while doing concrete useful work on a different independent slice. Delegated agents must use the synchronous default: nested async batches are rejected so completion cannot escape the direct parent thread.',
+        'This tool is always synchronous: the parent is suspended until every child returns. Use delegate_async instead only from the depth-0 root when concrete independent parent work will run at the same time.',
         'Use only for workstreams that do not depend on each other and do not mutate the same files or external systems.',
         'Each job returns its complete response, output length metadata, and agent_thread_id. The complete response is also persisted in the agent thread; if a UI preview is clipped, do not treat that as data loss. Each job may pass thread_id to continue an existing parent↔agent thread, or omit it to create a new one.',
         'Prefer researcher for open web discovery, availability checks, comparisons, rankings, and vendor/product lookup. Browser_agent jobs must be bounded execution/verification tasks on known pages/sites, not open-ended research/discovery/comparison; include a complete action contract and stop boundary. For loading/API diagnostics, request inspectDiagnostics and same-origin fetchUrl results. Reuse thread_id for the same browser flow; use separate threads only for independent flows. For browser_agent only, incognito is a parent-controlled launch mode: start a fresh thread with browser_session_mode="incognito" on the job when clean/private state is required. Never ask a persistent browser_agent job to switch modes from inside the browser. Do not parallelize browser jobs that can create duplicate orders/bookings/sends or mutate the same external account.',
@@ -177,16 +169,32 @@ export const delegateParallelTool: ToolDef = {
                 type: 'integer',
                 description: 'Optional concurrency limit. Defaults to 6 and is capped at 6.',
             },
-            run_async: {
-                type: 'boolean',
-                description: 'When true, launch the batch and return immediately for concrete useful independent parent work you will do now. Do not use merely because the jobs may be slow. Default false waits synchronously for all results.',
-            },
-            wake_on_complete: {
-                type: 'boolean',
-                description: 'Async mode only. When true, wake the conversation once the entire batch settles. Default false; action="detach" enables this when the independent parent slice ends before the batch.',
-            },
         },
         required: ['jobs'],
+    },
+    tags: ['delegation'],
+}
+
+export const delegateAsyncTool: ToolDef = {
+    id: 'delegate_async',
+    name: 'delegate_async',
+    description: [
+        'Explicitly launch one or more specialist jobs asynchronously and return immediately. This tool is available only to the depth-0 root orchestrator; delegated children never receive it.',
+        'Use it only when independent_parent_work names concrete useful work on a different slice that the parent will start immediately. If the parent only needs the specialist result, use synchronous delegate_to or delegate_parallel.',
+        'Completion wake-up is armed automatically. The parent may collect a settled result, wait once for a concrete same-turn dependency, or cancel through manage_delegations; it must not poll or babysit the batch.',
+        'Jobs must be independent and must not mutate the same files or external systems. Each job supports the same agent/thread/context/attachment/browser launch fields as delegate_parallel.',
+    ].join(' '),
+    input_schema: {
+        type: 'object',
+        properties: {
+            jobs: delegateParallelTool.input_schema.properties!.jobs!,
+            max_concurrency: delegateParallelTool.input_schema.properties!.max_concurrency!,
+            independent_parent_work: {
+                type: 'string',
+                description: 'Required concrete work on a different independent slice that the root parent will start immediately after launch. A vague promise to continue or merely waiting for children is rejected.',
+            },
+        },
+        required: ['jobs', 'independent_parent_work'],
     },
     tags: ['delegation'],
 }
@@ -195,9 +203,9 @@ export const manageDelegationsTool: ToolDef = {
     id: 'manage_delegations',
     name: 'manage_delegations',
     description: [
-        'Manage async specialist batches launched by delegate_to/delegate_parallel with run_async=true.',
-        'list shows recent batches in this caller/thread scope. collect returns current state and persisted results without blocking. wait blocks efficiently for up to max_wait_ms and returns results if settled. detach enables one automatic completion follow-up/wake so you may end the turn safely. cancel stops queued/running children.',
-        'Lifecycle rule: once your independent parent work ends, detach a still-running batch and end the turn so completion wakes the original task; do not poll, babysit with status checks, or chain short waits. Collect settled results, use one intentional bounded wait only for a concrete same-turn dependency, or cancel obsolete work. Do not silently abandon a running batch.',
+        'Manage async specialist batches launched by delegate_async.',
+        'list shows recent batches in this caller/thread scope. collect returns current state and persisted results without blocking. wait blocks efficiently for up to max_wait_ms and returns results if settled. cancel stops queued/running children. detach remains for older unarmed batches; new delegate_async batches arm one completion wake automatically.',
+        'Do not poll, babysit with status checks, or chain short waits. Collect settled results, use one intentional bounded wait only for a concrete same-turn dependency, or cancel obsolete work.',
     ].join(' '),
     input_schema: {
         type: 'object',
@@ -225,73 +233,31 @@ export async function executeDelegateTo(
     args: Record<string, unknown>,
     ctx?: ToolExecutionContext
 ): Promise<ToolResult> {
-    const plan = planDelegation(args, ctx)
-    if (!plan.ok) return { success: false, error: plan.error }
-    if (args.run_async === true && ctx!.depth > 0) {
+    if (!ctx) {
+        return { success: false, error: 'delegate_to requires an execution context (caller agent + depth).' }
+    }
+    if (args.run_async === true || args.wake_on_complete === true) {
         return {
             success: false,
-            error: 'Nested async delegation is not allowed. Delegate synchronously so the result returns only to this direct parent agent.',
+            error: 'delegate_to is synchronous. Use the root-only delegate_async tool for explicit asynchronous work.',
         }
     }
+    const plan = planDelegation(args, ctx)
+    if (!plan.ok) return { success: false, error: plan.error }
     const prepared = materializeDelegation(plan)
-
-    if (args.run_async === true) {
-        try {
-            const launched = await startAsyncDelegationBatch({
-                ctx: ctx!,
-                jobs: [{
-                    agentId: prepared.target.id,
-                    agentThreadId: prepared.thread.id,
-                    assignedName: prepared.assignedName,
-                    taskLabel: prepared.thread.title,
-                    prompt: prepared.prompt,
-                    run: async asyncCtx => decoratePreparedDelegationResult(
-                        await runPreparedDelegation(prepared, asyncCtx),
-                        prepared,
-                    ),
-                }],
-                maxConcurrency: 1,
-                wakeOnComplete: args.wake_on_complete === true,
-            })
-            return {
-                success: true,
-                data: {
-                    mode: 'async',
-                    batch_id: launched.batchId,
-                    jobs: launched.jobs.map(job => ({
-                        job_id: job.jobId,
-                        agent_id: job.agentId,
-                        agent_name: job.assignedName,
-                        agent_thread_id: job.agentThreadId,
-                        task: job.taskLabel,
-                    })),
-                    wake_on_complete: args.wake_on_complete === true,
-                    note: args.wake_on_complete === true
-                        ? 'Child launched. The parent may continue now; the conversation will be woken once it settles.'
-                        : 'Child launched. Continue useful independent parent work, then call manage_delegations to collect/wait; detach before ending the turn if completion should wake the conversation.',
-                },
-            }
-        } catch (error) {
-            return {
-                success: false,
-                error: `${error instanceof Error ? error.message : String(error)} (agent_thread_id: ${prepared.thread.id})`,
-                data: { agent_thread_id: prepared.thread.id },
-            }
-        }
-    }
 
     // Release-while-waiting: this agent is now idle awaiting its child, so give
     // up its active slot for the duration and reclaim it before resuming. This
     // is what makes a small global concurrency cap deadlock-free under nested
     // delegation. See lib/ai/concurrency-gate.ts.
-    ctx?.permit?.releaseForChildren()
+    ctx.permit?.releaseForChildren()
     try {
         return decoratePreparedDelegationResult(
-            await runPreparedDelegation(prepared, ctx!),
+            await runPreparedDelegation(prepared, ctx),
             prepared,
         )
     } finally {
-        await ctx?.permit?.reacquireForResume()
+        await ctx.permit?.reacquireForResume()
     }
 }
 
@@ -300,103 +266,17 @@ export async function executeDelegateParallel(
     ctx?: ToolExecutionContext
 ): Promise<ToolResult> {
     if (!ctx) {
-        return { success: false, error: 'delegate_parallel requires an execution context (caller agent + depth)' }
+        return { success: false, error: 'delegate_parallel requires an execution context (caller agent + depth).' }
     }
-    if (ctx.depth >= MAX_AGENT_DEPTH) {
+    if (args.run_async === true || args.wake_on_complete === true) {
         return {
             success: false,
-            error: `Delegation refused: depth ${ctx.depth} would exceed cap of ${MAX_AGENT_DEPTH}. Solve the task directly.`,
+            error: 'delegate_parallel is synchronous. Use the root-only delegate_async tool for explicit asynchronous work.',
         }
     }
-    if (args.run_async === true && ctx.depth > 0) {
-        return {
-            success: false,
-            error: 'Nested async delegation is not allowed. Delegate synchronously so every result returns only to its direct parent agent.',
-        }
-    }
-
-    const rawJobs = args.jobs
-    if (!Array.isArray(rawJobs) || rawJobs.length === 0) {
-        return { success: false, error: 'delegate_parallel expects a non-empty jobs array.' }
-    }
-    if (rawJobs.length > MAX_PARALLEL_DELEGATIONS) {
-        return { success: false, error: `delegate_parallel accepts at most ${MAX_PARALLEL_DELEGATIONS} jobs per call.` }
-    }
-
-    const plans = rawJobs.map((job, index) => {
-        if (!job || typeof job !== 'object') {
-            return { ok: false as const, error: `Job ${index + 1} must be an object.` }
-        }
-        return planDelegation(job as Record<string, unknown>, ctx)
-    })
-    const invalid = plans.find(item => !item.ok)
-    if (invalid && !invalid.ok) return { success: false, error: invalid.error }
-
-    const validPlans = plans.filter((item): item is Extract<DelegationPlan, { ok: true }> => item.ok)
-    const reservedNames = new Set<string | undefined>([ctx.callerAssignedName])
-    for (const plan of validPlans) {
-        plan.assignedName = distinctAssignedName(plan.assignedName, reservedNames)
-        if (plan.assignedName) reservedNames.add(plan.assignedName)
-    }
-    const seenThreadIds = new Set<string>()
-    for (const plan of validPlans) {
-        if (!plan.thread?.id) continue
-        if (seenThreadIds.has(plan.thread.id)) {
-            return { success: false, error: `delegate_parallel cannot run multiple jobs against the same agent thread (${plan.thread.id}) at the same time.` }
-        }
-        seenThreadIds.add(plan.thread.id)
-    }
-    const jobs = validPlans.map(materializeDelegation)
-    const requestedConcurrency = typeof args.max_concurrency === 'number'
-        ? Math.floor(args.max_concurrency)
-        : MAX_PARALLEL_DELEGATIONS
-    const concurrency = Math.max(1, Math.min(requestedConcurrency, MAX_PARALLEL_DELEGATIONS, jobs.length))
-
-    if (args.run_async === true) {
-        try {
-            const launched = await startAsyncDelegationBatch({
-                ctx,
-                jobs: jobs.map(job => ({
-                    agentId: job.target.id,
-                    agentThreadId: job.thread.id,
-                    assignedName: job.assignedName,
-                    taskLabel: job.thread.title,
-                    prompt: job.prompt,
-                    run: async asyncCtx => decoratePreparedDelegationResult(
-                        await runPreparedDelegation(job, asyncCtx),
-                        job,
-                    ),
-                })),
-                maxConcurrency: concurrency,
-                wakeOnComplete: args.wake_on_complete === true,
-            })
-            return {
-                success: true,
-                data: {
-                    mode: 'async',
-                    batch_id: launched.batchId,
-                    max_concurrency: concurrency,
-                    jobs: launched.jobs.map(job => ({
-                        job_id: job.jobId,
-                        agent_id: job.agentId,
-                        agent_name: job.assignedName,
-                        agent_thread_id: job.agentThreadId,
-                        task: job.taskLabel,
-                    })),
-                    wake_on_complete: args.wake_on_complete === true,
-                    note: args.wake_on_complete === true
-                        ? 'Batch launched. The parent may continue now; one completion wake will fire after every job settles.'
-                        : 'Batch launched. Continue useful independent parent work, then collect/wait; detach before ending the turn if completion should wake the conversation.',
-                },
-            }
-        } catch (error) {
-            return {
-                success: false,
-                error: error instanceof Error ? error.message : String(error),
-                data: { agent_thread_ids: jobs.map(job => job.thread.id) },
-            }
-        }
-    }
+    const preparedBatch = prepareDelegationBatch(args, ctx, 'delegate_parallel')
+    if (!preparedBatch.ok) return { success: false, error: preparedBatch.error }
+    const { jobs, concurrency } = preparedBatch
 
     // Release-while-waiting: the delegating agent is idle until every job
     // returns, so it gives up its active slot for the duration (reclaimed in the
@@ -444,6 +324,73 @@ export async function executeDelegateParallel(
     }
 }
 
+export async function executeDelegateAsync(
+    args: Record<string, unknown>,
+    ctx?: ToolExecutionContext,
+): Promise<ToolResult> {
+    if (!ctx || ctx.depth !== 0 || ctx.agentThreadId) {
+        return {
+            success: false,
+            error: 'delegate_async is available only to the depth-0 root orchestrator.',
+        }
+    }
+    const independentParentWork = typeof args.independent_parent_work === 'string'
+        ? args.independent_parent_work.trim()
+        : ''
+    if (independentParentWork.length < 12) {
+        return {
+            success: false,
+            error: 'delegate_async requires concrete independent_parent_work that the root will start immediately. Use synchronous delegation when there is no separate parent slice.',
+        }
+    }
+    const preparedBatch = prepareDelegationBatch(args, ctx, 'delegate_async')
+    if (!preparedBatch.ok) return { success: false, error: preparedBatch.error }
+    const { jobs, concurrency } = preparedBatch
+
+    try {
+        const launched = await startAsyncDelegationBatch({
+            ctx,
+            jobs: jobs.map(job => ({
+                agentId: job.target.id,
+                agentThreadId: job.thread.id,
+                assignedName: job.assignedName,
+                taskLabel: job.thread.title,
+                prompt: job.prompt,
+                run: async asyncCtx => decoratePreparedDelegationResult(
+                    await runPreparedDelegation(job, asyncCtx),
+                    job,
+                ),
+            })),
+            maxConcurrency: concurrency,
+            wakeOnComplete: true,
+        })
+        return {
+            success: true,
+            data: {
+                mode: 'async',
+                batch_id: launched.batchId,
+                max_concurrency: concurrency,
+                independent_parent_work: independentParentWork,
+                jobs: launched.jobs.map(job => ({
+                    job_id: job.jobId,
+                    agent_id: job.agentId,
+                    agent_name: job.assignedName,
+                    agent_thread_id: job.agentThreadId,
+                    task: job.taskLabel,
+                })),
+                wake_on_complete: true,
+                note: 'Batch launched with one automatic completion wake armed. Start the declared independent parent work now; collect if already settled, otherwise end the turn without polling.',
+            },
+        }
+    } catch (error) {
+        return {
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+            data: { agent_thread_ids: jobs.map(job => job.thread.id) },
+        }
+    }
+}
+
 export async function executeManageDelegations(
     args: Record<string, unknown>,
     ctx?: ToolExecutionContext,
@@ -473,7 +420,6 @@ export async function executeManageDelegations(
     if (!batch) return { success: false, error: `Unknown async delegation batch in this caller/thread scope: ${batchId}` }
 
     if (action === 'collect') {
-        setAsyncDelegationWake(batchId, ctx, false)
         if (batch.status !== 'running') markAsyncDelegationCollected(batchId, ctx)
         const refreshed = getAsyncDelegationBatchForCaller(batchId, ctx) ?? batch
         return {
@@ -481,14 +427,13 @@ export async function executeManageDelegations(
             data: {
                 ...serializeAsyncDelegationBatch(refreshed, { includeResults: true }),
                 note: refreshed.status === 'running'
-                    ? 'Some jobs are still running. Continue independent work, wait, detach, or cancel.'
+                    ? 'Some jobs are still running. The automatic completion wake remains armed; continue independent work, wait once for a concrete dependency, or cancel.'
                     : 'Persisted results collected. Full child output also remains in each agent_thread_id.',
             },
         }
     }
 
     if (action === 'wait') {
-        setAsyncDelegationWake(batchId, ctx, false)
         const requested = typeof args.max_wait_ms === 'number' && Number.isFinite(args.max_wait_ms)
             ? Math.floor(args.max_wait_ms)
             : ASYNC_DELEGATION_WAIT_DEFAULT_MS
@@ -511,7 +456,7 @@ export async function executeManageDelegations(
             data: {
                 ...serializeAsyncDelegationBatch(refreshed, { includeResults: true }),
                 note: refreshed.status === 'running'
-                    ? 'Still running when the wait window closed. Wait again, continue independent work, detach, or cancel.'
+                    ? 'Still running when the wait window closed. The automatic completion wake remains armed; continue independent work or end the turn instead of polling.'
                     : 'The batch settled while you waited; act on these results now.',
             },
         }
@@ -556,6 +501,66 @@ export async function executeManageDelegations(
 // (lib/ai/concurrency-gate.ts) is what actually bounds how many run at once, so
 // this is just the per-call request ceiling.
 const MAX_PARALLEL_DELEGATIONS = 6
+
+type PreparedDelegationBatch =
+    | { ok: true; jobs: PreparedDelegation[]; concurrency: number }
+    | { ok: false; error: string }
+
+function prepareDelegationBatch(
+    args: Record<string, unknown>,
+    ctx: ToolExecutionContext | undefined,
+    toolName: 'delegate_parallel' | 'delegate_async',
+): PreparedDelegationBatch {
+    if (!ctx) {
+        return { ok: false, error: `${toolName} requires an execution context (caller agent + depth).` }
+    }
+    if (ctx.depth >= MAX_AGENT_DEPTH) {
+        return {
+            ok: false,
+            error: `Delegation refused: depth ${ctx.depth} would exceed cap of ${MAX_AGENT_DEPTH}. Solve the task directly.`,
+        }
+    }
+    const rawJobs = args.jobs
+    if (!Array.isArray(rawJobs) || rawJobs.length === 0) {
+        return { ok: false, error: `${toolName} expects a non-empty jobs array.` }
+    }
+    if (rawJobs.length > MAX_PARALLEL_DELEGATIONS) {
+        return { ok: false, error: `${toolName} accepts at most ${MAX_PARALLEL_DELEGATIONS} jobs per call.` }
+    }
+
+    const plans = rawJobs.map((job, index) => {
+        if (!job || typeof job !== 'object') {
+            return { ok: false as const, error: `Job ${index + 1} must be an object.` }
+        }
+        return planDelegation(job as Record<string, unknown>, ctx)
+    })
+    const invalid = plans.find(item => !item.ok)
+    if (invalid && !invalid.ok) return { ok: false, error: invalid.error }
+
+    const validPlans = plans.filter((item): item is Extract<DelegationPlan, { ok: true }> => item.ok)
+    const reservedNames = new Set<string | undefined>([ctx.callerAssignedName])
+    for (const plan of validPlans) {
+        plan.assignedName = distinctAssignedName(plan.assignedName, reservedNames)
+        if (plan.assignedName) reservedNames.add(plan.assignedName)
+    }
+    const seenThreadIds = new Set<string>()
+    for (const plan of validPlans) {
+        if (!plan.thread?.id) continue
+        if (seenThreadIds.has(plan.thread.id)) {
+            return {
+                ok: false,
+                error: `${toolName} cannot run multiple jobs against the same agent thread (${plan.thread.id}) at the same time.`,
+            }
+        }
+        seenThreadIds.add(plan.thread.id)
+    }
+    const jobs = validPlans.map(materializeDelegation)
+    const requestedConcurrency = typeof args.max_concurrency === 'number'
+        ? Math.floor(args.max_concurrency)
+        : MAX_PARALLEL_DELEGATIONS
+    const concurrency = Math.max(1, Math.min(requestedConcurrency, MAX_PARALLEL_DELEGATIONS, jobs.length))
+    return { ok: true, jobs, concurrency }
+}
 
 function decoratePreparedDelegationResult(
     result: ToolResult,

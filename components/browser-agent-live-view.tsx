@@ -42,7 +42,10 @@ interface BrowserAgentLiveState {
 
 interface BrowserAgentLiveViewProps {
     active?: boolean
-    sessionId?: string | null
+    /** Labels root delegate_async browser delegations in the inline live card. */
+    async?: boolean
+    /** Required so this card can never fall back to another conversation's browser. */
+    sessionId: string
     onOpenDetails?: () => void
     /**
      * "inline" (default) renders in the message thread with a hard height cap.
@@ -60,7 +63,7 @@ interface BrowserClipboardResponse {
 const BROWSER_VIEWPORT_CLASS =
     "browser-agent-live-viewport overflow-hidden rounded-xl border border-white/70 bg-white/55 shadow-[0_14px_36px_rgba(30,25,20,0.14),0_2px_6px_rgba(30,25,20,0.08)] ring-1 ring-black/[0.06] backdrop-blur-[6px] dark:border-white/15 dark:bg-white/[0.08] dark:ring-white/[0.06]"
 
-export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenDetails, variant = "inline" }: BrowserAgentLiveViewProps) {
+export function BrowserAgentLiveView({ active = false, async: isAsync = false, sessionId, onOpenDetails, variant = "inline" }: BrowserAgentLiveViewProps) {
     const isPanel = variant === "panel"
     const liveViewRef = React.useRef<HTMLDivElement>(null)
     const fitAreaRef = React.useRef<HTMLDivElement>(null)
@@ -154,9 +157,7 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
     }, [focusRfb, showInputMessage])
 
     const refresh = React.useCallback(async () => {
-        const url = sessionId
-            ? `/api/browser-agent/live?sessionId=${encodeURIComponent(sessionId)}`
-            : "/api/browser-agent/live"
+        const url = `/api/browser-agent/live?sessionId=${encodeURIComponent(sessionId)}`
         const res = await fetch(url, { cache: "no-store" })
         if (!res.ok) throw new Error(`Live view status failed: ${res.status}`)
         setState(await res.json() as BrowserAgentLiveState)
@@ -283,7 +284,7 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
         const res = await fetch("/api/browser-agent/live", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(sessionId ? { ...body, sessionId } : body),
+            body: JSON.stringify({ ...body, sessionId }),
         })
         if (!res.ok) {
             const message = await res.text().catch(() => "")
@@ -300,7 +301,7 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
             const res = await fetch("/api/browser-agent/live", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(sessionId ? { action: "copy_from_browser", key, sessionId } : { action: "copy_from_browser", key }),
+                body: JSON.stringify({ action: "copy_from_browser", key, sessionId }),
             })
             if (!res.ok) {
                 const message = await res.text().catch(() => "")
@@ -480,6 +481,7 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
             <>
                 <Monitor className="size-4 shrink-0" />
                 <span className="min-w-0 flex-1">Patchright is running in a local headful browser window on this Mac.</span>
+                {isAsync && <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-violet-700 dark:text-violet-300">async</span>}
                 <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-emerald-700 dark:text-emerald-300">headful</span>
             </>
         )
@@ -508,6 +510,7 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
             <>
                 <WifiOff className="size-4 shrink-0" />
                 <span className="min-w-0 flex-1">{state.reason || "Live browser view is not available."}</span>
+                {isAsync && <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-violet-700 dark:text-violet-300">async</span>}
             </>
         )
         if (onOpenDetails) {
@@ -531,10 +534,7 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
     }
 
     const hasRealDimensions = Boolean(state.width && state.width > 0 && state.height && state.height > 0)
-    const selectedSession =
-        state.sessions.find((session) => session.id === (sessionId ?? state.selectedSessionId)) ??
-        state.sessions.find((session) => session.running) ??
-        state.sessions[0]
+    const selectedSession = state.sessions.find((session) => session.id === sessionId)
     const currentUrl = selectedSession?.currentUrl ?? ""
     const statusLabel = state.paused
         ? "paused"
@@ -571,12 +571,14 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
                     >
                         <Monitor className="size-3.5 shrink-0" />
                         <span className="truncate font-medium text-foreground/80 transition-colors group-hover:text-foreground">Browser agent</span>
+                        {isAsync && <span className="shrink-0 rounded bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 dark:text-violet-300">async</span>}
                         <span className="truncate">{statusLabel}</span>
                     </button>
                 ) : (
                     <span className="inline-flex min-w-0 flex-1 items-center gap-2 text-[12px] text-muted-foreground">
                         <Monitor className="size-3.5 shrink-0" />
                         <span className="truncate font-medium text-foreground/80">Browser agent</span>
+                        {isAsync && <span className="shrink-0 rounded bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 dark:text-violet-300">async</span>}
                         <span className="truncate">{statusLabel}</span>
                     </span>
                 )}

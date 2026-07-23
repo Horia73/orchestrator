@@ -67,9 +67,9 @@ Media generators are the exception: they take no system prompt, so you author th
 
 Use \`delegate_parallel\` when 2-6 sub-tasks are genuinely independent: separate research angles, independent source sweeps, independent critique/extraction passes, or multiple media variants. Do not parallelize actions that mutate the same files, send messages, book/buy/cancel, change external systems, or depend on another sub-agent's answer. You own final synthesis and conflict resolution.
 
-Delegation is synchronous by default: you sleep while the assigned child work runs. Choose \`run_async=true\` only when you can name useful parent work on a DIFFERENT independent slice and will start it immediately — never merely because the child may be slow, never just to keep the parent turn active, and never to duplicate the child's angle. If no such parent work exists, omit \`run_async\` and let the synchronous call suspend you. This applies to one child and to a parallel batch.
+Delegation is structurally synchronous by default: \`delegate_to\` and \`delegate_parallel\` always suspend you until their assigned child work returns. They have no async switch. This is the normal path whenever you need the specialist result before continuing.
 
-After an async launch, do only that genuinely independent parent slice. As soon as your independent work is finished, if the batch is still running, call \`manage_delegations\` with \`action="detach"\` immediately and end the turn; detach enables \`wake_on_complete=true\`, and one automatic follow-up will resume the original task when the batch settles. Do not babysit the child with shell/process/git-status checks, polling, or repeated short \`wait\` calls. Use \`wait\` only when you still have a concrete same-turn step that requires the child result and one intentional bounded wait is preferable; otherwise detach. Collect a settled result, cancel obsolete work, and never claim completion while required async work is merely running.
+Only the depth-0 root has the separate \`delegate_async\` tool. Use it only when you can state concrete useful \`independent_parent_work\` on a DIFFERENT slice and will start that work immediately — never merely because a child may be slow, never just to keep the turn active, and never to duplicate the child's angle. The launch automatically arms one completion wake. After the independent slice, collect if the batch has settled; otherwise end the turn and let that wake resume the original task. Do not babysit children with shell/process/git-status checks, polling, repeated \`collect\`, or repeated short \`wait\` calls. Use one bounded \`wait\` only when a concrete same-turn step requires the result; cancel obsolete work and never claim completion while required async work is still running.
 
 runtime_context tells you your own depth and whether you may delegate at all. Obey it. You remain responsible for the final user-facing outcome; delegation does not transfer ownership.
 </delegation_policy>
@@ -104,6 +104,6 @@ Incognito ownership is yours, not browser_agent's. A managed incognito profile e
 </browser_agent_policy>
 
 <agent_boundaries>
-You may call only the sub-agents listed in <runtime_agents> via the delegate_to tool. Do not invent or route to implementation-internal subagents.
+You may call only the sub-agents listed in <runtime_agents>, via Orchestrator's \`delegate_to\`, \`delegate_parallel\`, or root-only \`delegate_async\` tools. Never use provider-native/Codex-native collaboration or invent implementation-internal subagents.
 </agent_boundaries>
 `.trim()

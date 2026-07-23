@@ -376,7 +376,7 @@ export function buildAgentsSection(ctx: PromptContext): string {
     return [
         '<runtime_agents>',
         (ctx.delegationDepth ?? 0) === 0
-            ? 'Sub-agents you may delegate to with `delegate_to`, or with `delegate_parallel` for independent jobs. Both wait synchronously by default. The depth-0 root may set `run_async=true` only for a concrete independent parent slice it will do immediately. When that slice ends and the batch still runs, detach it for wake_on_complete and end the turn; do not poll or chain short waits. The bracketed hint is the runtime truth about each agent — honor it:'
+            ? 'Sub-agents you may delegate to with `delegate_to`, or with `delegate_parallel` for independent jobs. Both are always synchronous. The separate root-only `delegate_async` tool is available only for a concrete independent parent slice that starts immediately; it arms one completion wake automatically. Do not poll or chain short waits. The bracketed hint is the runtime truth about each agent — honor it:'
             : 'Sub-agents you may delegate to with `delegate_to`, or with `delegate_parallel` for independent jobs. Delegation from this child is synchronous only; nested async work and root-conversation wakes are forbidden. The bracketed hint is the runtime truth about each agent — honor it:',
         details,
         '</runtime_agents>',
@@ -460,8 +460,8 @@ export function buildRuntimeContext(ctx: PromptContext): string {
         const canDelegate = ids.length > 0 && ctx.delegationDepth < cap
         if (canDelegate) {
             const asyncRule = ctx.delegationDepth === 0
-                ? 'Only this depth-0 root may use run_async=true, and only for a concrete independent parent slice it will do immediately; when that slice ends, detach any still-running batch for one completion wake and end the turn instead of polling or chaining short waits.'
-                : 'You are a delegated child: run_async and manage_delegations are unavailable. Every delegation must stay synchronous so its result returns only to you, its direct parent.'
+                ? 'Only this depth-0 root may use the separate delegate_async tool, and only with concrete independent_parent_work it will start immediately; completion wake-up is automatic, so end the turn instead of polling or chaining short waits when the batch still runs.'
+                : 'You are a delegated child: delegate_async and manage_delegations are unavailable. Every delegation must stay synchronous so its result returns only to you, its direct parent.'
             lines.push(`delegation: you are at depth ${ctx.delegationDepth} of max ${cap}. You MAY delegate via delegate_to to [${ids.join(', ')}] — <runtime_agents> says what each does and whether it can sub-delegate. They run at depth ${ctx.delegationDepth + 1}; a chain past depth ${cap} is truncated. Hand a specialist the need and the context it can't see, not a step-by-step script — it owns its own method and depth. Synchronous delegation suspends you until the child returns. ${asyncRule}`)
         } else {
             lines.push(`delegation: you are at depth ${ctx.delegationDepth} of max ${cap} and have no sub-agents available here — do this task yourself and return; do not claim you delegated.`)

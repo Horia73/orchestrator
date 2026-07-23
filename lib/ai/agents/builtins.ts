@@ -29,6 +29,13 @@ export const LEGACY_WORKSPACE_TOOL_IDS: string[] = [
 export const DELEGATE_TOOL_IDS: string[] = [
     'delegate_to',
     'delegate_parallel',
+]
+
+/** Detached work is a root-conversation lifecycle capability. Delegated
+ * specialists receive only DELEGATE_TOOL_IDS, so nested work always returns
+ * synchronously to its direct parent. */
+export const ROOT_ASYNC_DELEGATE_TOOL_IDS: string[] = [
+    'delegate_async',
     'manage_delegations',
 ]
 

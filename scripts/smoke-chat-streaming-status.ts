@@ -92,6 +92,7 @@ const liveAgentStart = agentCallEntryFromStartEvent(
     taskLabel: "Romania B2B cold email legality",
     kind: "text",
     prompt: "Check Romanian B2B cold email rules.",
+    async: true,
     startedAt: 3_000,
   },
   1
@@ -100,6 +101,7 @@ const liveAgentStart = agentCallEntryFromStartEvent(
 assert.ok(liveAgentStart)
 assert.equal(liveAgentStart.assignedName, "Lena")
 assert.equal(liveAgentStart.taskLabel, "Romania B2B cold email legality")
+assert.equal(liveAgentStart.async, true)
 assert.equal(
   agentFullLabel(liveAgentStart),
   "Researcher Lena (Romania B2B cold email legality)"

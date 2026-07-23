@@ -5,6 +5,7 @@ import { clearAgentRun, registerAgentRun } from '@/lib/agent-runs'
 import { getDatabaseForProfile, getConversation, addMessage } from '@/lib/db'
 import { enqueueFollowUp } from '@/lib/chat-followups'
 import { getActiveChatStream } from '@/lib/chat-streams'
+import { chatEventEmitter, type ChatEvent } from '@/lib/events'
 import {
     getActiveProfileContext,
     getActiveProfileId,
@@ -73,14 +74,25 @@ interface RuntimeBatch {
     promise: Promise<void>
 }
 
+interface DeferredCompletionNotice {
+    listener: (event: ChatEvent) => void
+    timer: ReturnType<typeof setTimeout>
+}
+
 const globalForAsyncDelegations = globalThis as unknown as {
     __orchestratorAsyncDelegations?: Map<string, RuntimeBatch>
+    __orchestratorAsyncDelegationDeferredNotices?: Map<string, DeferredCompletionNotice>
     __orchestratorAsyncDelegationBootStarted?: boolean
 }
 
 const runtimeBatches = globalForAsyncDelegations.__orchestratorAsyncDelegations ?? new Map<string, RuntimeBatch>()
 if (!globalForAsyncDelegations.__orchestratorAsyncDelegations) {
     globalForAsyncDelegations.__orchestratorAsyncDelegations = runtimeBatches
+}
+const deferredCompletionNotices = globalForAsyncDelegations.__orchestratorAsyncDelegationDeferredNotices
+    ?? new Map<string, DeferredCompletionNotice>()
+if (!globalForAsyncDelegations.__orchestratorAsyncDelegationDeferredNotices) {
+    globalForAsyncDelegations.__orchestratorAsyncDelegationDeferredNotices = deferredCompletionNotices
 }
 
 const ASYNC_DELEGATION_NOTICE_TAG = 'async-delegation-notice'
@@ -276,18 +288,23 @@ export async function startAsyncDelegationBatch(args: {
                     return
                 }
 
-                activeDb().prepare(`
-                    UPDATE async_delegation_jobs
-                    SET status = 'running', startedAt = @startedAt
-                    WHERE id = @id AND status = 'queued'
-                `).run({ id: row.id, startedAt: Date.now() })
-
                 let result: ToolResult
                 try {
+                    let admitted = false
                     result = await job.run({
                         ...args.ctx,
                         signal: controller.signal,
                         permit: undefined,
+                        asyncDelegation: true,
+                        onAgentAdmitted: () => {
+                            if (admitted) return
+                            admitted = true
+                            activeDb().prepare(`
+                                UPDATE async_delegation_jobs
+                                SET status = 'running', startedAt = @startedAt
+                                WHERE id = @id AND status = 'queued'
+                            `).run({ id: row.id, startedAt: Date.now() })
+                        },
                     })
                 } catch (error) {
                     result = {
@@ -520,6 +537,17 @@ export async function notifyAsyncDelegationCompletion(profileId: string, batchId
             return
         }
 
+        // Do not persist/queue the automatic completion notice while the root
+        // turn that launched the batch is still live. It may collect the
+        // terminal result inline before ending; delaying until stream end lets
+        // that collect disarm the wake and prevents a duplicate autonomous
+        // turn. If the root ends without collecting, the stream-ended event
+        // retries immediately and delivers exactly one notice.
+        if (getActiveChatStream(batch.conversationId)) {
+            deferCompletionNotice(profileId, batchId, batch.conversationId)
+            return
+        }
+
         const claimedAt = Date.now()
         const claimed = activeDb().prepare(`
             UPDATE async_delegation_batches
@@ -553,6 +581,35 @@ export async function notifyAsyncDelegationCompletion(profileId: string, batchId
             })
         }
     })
+}
+
+function deferCompletionNotice(profileId: string, batchId: string, conversationId: string): void {
+    const key = runtimeKey(profileId, batchId)
+    if (deferredCompletionNotices.has(key)) return
+
+    const retry = () => {
+        const deferred = deferredCompletionNotices.get(key)
+        if (!deferred) return
+        chatEventEmitter.off('chat:update', deferred.listener)
+        clearTimeout(deferred.timer)
+        deferredCompletionNotices.delete(key)
+        void notifyAsyncDelegationCompletion(profileId, batchId).catch(error => {
+            console.error(`[async-delegations] deferred wake for ${batchId} failed`, error)
+        })
+    }
+    const listener = (event: ChatEvent) => {
+        if (
+            event.type === 'chat_stream_ended'
+            && event.profileId === profileId
+            && event.payload.conversationId === conversationId
+        ) {
+            retry()
+        }
+    }
+    const timer = setTimeout(retry, 15 * 60_000)
+    timer.unref?.()
+    deferredCompletionNotices.set(key, { listener, timer })
+    chatEventEmitter.on('chat:update', listener)
 }
 
 export function pruneExpiredAsyncDelegations(now = Date.now()): number {
@@ -600,6 +657,15 @@ export function startAsyncDelegationRecovery(): void {
                     `).run({ id, endedAt })
                     await notifyAsyncDelegationCompletion(profile.id, id)
                 }
+                const pendingNotices = activeDb().prepare(`
+                    SELECT id FROM async_delegation_batches
+                    WHERE status != 'running'
+                      AND wakeOnComplete = 1
+                      AND notifiedAt IS NULL
+                `).all() as Array<{ id: string }>
+                for (const { id } of pendingNotices) {
+                    await notifyAsyncDelegationCompletion(profile.id, id)
+                }
                 pruneExpiredAsyncDelegations()
             })
         }
@@ -628,4 +694,5 @@ export const asyncDelegationTestHooks = {
     getBatch,
     getJobs,
     runtimeBatches,
+    deferredCompletionNotices,
 }

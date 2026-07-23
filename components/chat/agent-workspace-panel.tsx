@@ -155,6 +155,7 @@ export function AgentWorkspacePanel({
             title={run.agentThreadId ? `Agent thread ${run.agentThreadId}` : undefined}
           >
             {[
+              run.async ? "async" : null,
               run.status === "aborted" ? "stopped" : run.status,
               outputDetail,
               run.agentThreadId ? `thread ${shortThreadId(run.agentThreadId)}` : null,

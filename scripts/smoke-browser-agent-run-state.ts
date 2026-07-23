@@ -2,10 +2,12 @@ import assert from 'node:assert/strict'
 
 import {
     browserAgentPauseKindFromContent,
+    browserSessionIdFromRun,
     browserSessionIdFromRunContent,
     isBrowserAgentRunAwaitingUser,
     isBrowserAgentRunCheckpointed,
     isBrowserAgentRunLive,
+    isBrowserAgentRunWaitingInQueue,
     latestBrowserAgentRuns,
     latestBrowserAgentRunsFromReasoning,
     shouldAutoCloseBrowserAgentPanel,
@@ -53,6 +55,27 @@ assert.equal(shouldAutoCloseBrowserAgentPanel(run('Session status: awaiting_user
 assert.equal(shouldAutoCloseBrowserAgentPanel(run('completed', 'ok')), true)
 assert.equal(browserSessionIdFromRunContent('Browser session: browser:abc-123'), 'browser:abc-123')
 assert.equal(browserSessionIdFromRunContent('No session here.'), null)
+assert.equal(browserSessionIdFromRun({ ...run('', 'running'), browserSessionId: 'browser:owned' }), 'browser:owned')
+assert.equal(isBrowserAgentRunWaitingInQueue({ ...run('', 'running'), queued: true }), true)
+assert.equal(isBrowserAgentRunWaitingInQueue({
+  ...run('', 'running'),
+  reasoning: [{
+    type: 'thought',
+    id: 'browser-queue',
+    phase: 0,
+    content: '⏳ The browser is busy with another conversation. Your task is queued and will start automatically.',
+  }],
+}), true)
+assert.equal(isBrowserAgentRunWaitingInQueue({
+  ...run('', 'running'),
+  browserSessionId: 'browser:started',
+  reasoning: [{
+    type: 'thought',
+    id: 'old-browser-queue',
+    phase: 0,
+    content: 'The browser is busy with another conversation.',
+  }],
+}), false)
 
 const oldTakeover = run(
     'Session status: awaiting_user\nFinal action: ask',

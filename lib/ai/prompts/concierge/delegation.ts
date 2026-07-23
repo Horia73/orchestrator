@@ -91,7 +91,7 @@ When runtime permits and the work splits cleanly, run independent channels in pa
 
 Prefer \`delegate_parallel\` for 2-6 independent channels. Each job still needs its own stop boundary and thread choice.
 
-Delegation from concierge is synchronous only. Nested \`run_async\` and \`manage_delegations\` are unavailable: wait for the child or batch so every result returns only to you, its direct parent, before you continue the workflow.
+Delegation from concierge is synchronous only. \`delegate_async\` and \`manage_delegations\` are unavailable: wait for the child or batch so every result returns only to you, its direct parent, before you continue the workflow.
 
 Do not parallelize actions that could create duplicate bookings/orders or inconsistent external state.
 </parallelism_policy>

@@ -75,8 +75,7 @@ function probeClientForActiveChat(client, chatId) {
         state.type === "orchestrator:chat-presence-state" &&
           state.chatId === chatId &&
           state.active === true &&
-          state.visible === true &&
-          (state.focused === true || client.focused === true)
+          state.visible === true
       )
     }
 
@@ -95,7 +94,7 @@ function probeClientForActiveChat(client, chatId) {
   })
 }
 
-async function hasFocusedActiveChatClient(chatId) {
+async function hasVisibleActiveChatClient(chatId) {
   if (typeof chatId !== "string" || !chatId) return false
   const windowClients = await self.clients.matchAll({
     type: "window",
@@ -178,7 +177,7 @@ self.addEventListener("push", (event) => {
     (async () => {
       if (
         isChat &&
-        (await hasFocusedActiveChatClient(
+        (await hasVisibleActiveChatClient(
           typeof data.chatId === "string" ? data.chatId : ""
         ))
       ) {

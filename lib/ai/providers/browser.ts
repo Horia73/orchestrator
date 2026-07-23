@@ -81,6 +81,15 @@ export class BrowserProvider implements AIProvider {
             config: runtimeConfig,
             prevSession: options.prevSession,
             sessionMode: options.browserSessionMode,
+            // A browser task can face a second, profile-local queue after the
+            // global agent gate. Do not consume active total/provider/main
+            // capacity while it waits for that concrete browser session.
+            onCapacityWait() {
+                options.toolContext?.permit?.releaseForChildren()
+            },
+            async onCapacityAdmitted() {
+                await options.toolContext?.permit?.reacquireForResume()
+            },
             onStatus(message) {
                 if (!recordStatus(message)) return
                 const safeMessage = redactBrowserAgentText(message)
@@ -92,6 +101,7 @@ export class BrowserProvider implements AIProvider {
             },
         })
         const runtime = lease.runtime
+        callbacks.onBrowserSession?.(lease.id)
 
         if (options.prevSession && !lease.resumed) {
             const message = 'Previous browser session is no longer available; started a fresh browser session for this thread.'

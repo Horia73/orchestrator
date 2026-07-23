@@ -113,8 +113,8 @@ assert.equal(
   "a terminal frame newer than the read watermark remains unread"
 )
 
-// Reproduce the installed-macOS PWA case where WindowClient.focused is false
-// even though the page itself reports that the exact conversation is focused.
+// Reproduce the installed-macOS PWA case where both focus APIs are false even
+// though the exact conversation is active and visible in the foreground PWA.
 const serviceWorkerHandlers = new Map<
   string,
   (event: {
@@ -123,7 +123,7 @@ const serviceWorkerHandlers = new Map<
   }) => void
 >()
 const shownNotifications: Array<{ title: string; options: unknown }> = []
-let pagePresence = { active: true, visible: true, focused: true }
+let pagePresence = { active: true, visible: true, focused: false }
 const pageClient = {
   url: "https://orchestrator.example/",
   focused: false,
@@ -203,7 +203,7 @@ await dispatchChatPush("conversation-open-on-mac")
 assert.equal(
   shownNotifications.length,
   0,
-  "the exact focused conversation suppresses its redundant completion push"
+  "the exact visible conversation suppresses its redundant completion push"
 )
 
 pagePresence = { active: false, visible: true, focused: true }

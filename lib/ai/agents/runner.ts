@@ -150,6 +150,7 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
                     kind: args.target.kind,
                     agentThreadId: args.agentThreadId,
                     depth: args.parentCtx.depth + 1,
+                    async: args.parentCtx.asyncDelegation === true,
                     startedAt: Date.now(),
                 })
             },
@@ -167,6 +168,20 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
             })
         }
         return { success: false, error: message }
+    }
+    // Async jobs stay durably queued while acquireRun waits. Browser runs have
+    // one additional profile-local session gate, so their durable state flips
+    // to running only from onBrowserSession after that gate also admits them.
+    if (runtimes[0]?.provider !== 'browser') {
+        try {
+            args.parentCtx.onAgentAdmitted?.()
+        } catch (error) {
+            permit.dispose()
+            return {
+                success: false,
+                error: `Could not mark admitted sub-agent ${args.target.id}: ${error instanceof Error ? error.message : String(error)}`,
+            }
+        }
     }
     try {
         let lastResult: ToolResult | null = null
@@ -311,6 +326,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
         agentThreadId,
         prompt,
         depth: subDepth,
+        async: parentCtx.asyncDelegation === true,
         startedAt,
     })
 
@@ -319,7 +335,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
     const canDelegate = (runtimeTarget.canCallAgents?.length ?? 0) > 0 && subDepth < MAX_AGENT_DEPTH
     const baseTools = getToolsForAgent(runtimeTarget.tools).filter(tool => {
         // Do not advertise an unusable delegation tool at the depth cap.
-        if (tool.id === 'manage_delegations') return false
+        if (tool.id === 'manage_delegations' || tool.id === 'delegate_async') return false
         if (tool.id !== 'delegate_to' && tool.id !== 'delegate_parallel') return true
         return canDelegate
     })
@@ -511,6 +527,10 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
                 accContent += text
                 appendContent(contentSegments, phase, text)
                 emitAgent(parentCtx, { type: 'agent_content', runId: subRequestId, phase, content: text })
+            },
+            onBrowserSession(sessionId) {
+                parentCtx.onAgentAdmitted?.()
+                emitAgent(parentCtx, { type: 'agent_browser_session', runId: subRequestId, sessionId })
             },
             onToolCall(tc) {
                 if (streamMode === 'content') {
@@ -811,6 +831,15 @@ export async function runMediaSubAgent(args: RunMediaSubAgentArgs): Promise<Tool
         signal: args.parentCtx.signal,
     })
     try {
+        args.parentCtx.onAgentAdmitted?.()
+    } catch (error) {
+        permit.dispose()
+        return {
+            success: false,
+            error: `Could not mark admitted sub-agent ${args.target.id}: ${error instanceof Error ? error.message : String(error)}`,
+        }
+    }
+    try {
         return await runMediaSubAgentInner(args)
     } finally {
         permit.dispose()
@@ -871,6 +900,7 @@ async function runMediaSubAgentInner(args: RunMediaSubAgentArgs): Promise<ToolRe
         agentThreadId,
         prompt,
         depth: subDepth,
+        async: parentCtx.asyncDelegation === true,
         startedAt,
     })
 
@@ -1234,14 +1264,15 @@ function buildToolTitle(toolName: string, args: Record<string, unknown> | undefi
     if (toolName === 'list_dir') return pathArg ? `List ${pathArg}` : 'List directory'
     if (toolName === 'delegate_to') {
         const agentId = typeof args?.agent_id === 'string' ? args.agent_id : 'agent'
-        return args?.run_async === true ? `Launch ${agentId} asynchronously` : `Delegate to ${agentId}`
+        return `Delegate to ${agentId}`
     }
     if (toolName === 'delegate_parallel') {
         const count = Array.isArray(args?.jobs) ? args.jobs.length : 0
-        if (args?.run_async === true) {
-            return count > 0 ? `Launch ${count} async agent jobs` : 'Launch async agent jobs'
-        }
         return count > 0 ? `Delegate ${count} jobs in parallel` : 'Delegate in parallel'
+    }
+    if (toolName === 'delegate_async') {
+        const count = Array.isArray(args?.jobs) ? args.jobs.length : 0
+        return count > 0 ? `Launch ${count} async agent job${count === 1 ? '' : 's'}` : 'Launch async agent jobs'
     }
     if (toolName === 'manage_delegations') {
         const action = typeof args?.action === 'string' ? args.action : 'manage'

@@ -4,6 +4,7 @@ export type BrowserAgentPauseKind = "none" | "checkpoint" | "takeover"
 
 const AWAITING_USER_RE = /\bSession status:\s*awaiting_user\b/i
 const FINAL_ACTION_RE = /\bFinal action:\s*(ask|checkpoint)\b/gi
+const BROWSER_QUEUE_RE = /\b(?:browser is busy with another conversation|previous app generation is still finishing browser work)\b/i
 
 export function browserAgentPauseKindFromContent(
   content: string
@@ -106,4 +107,23 @@ export function shouldAutoCloseBrowserAgentPanel(
 export function browserSessionIdFromRunContent(content: string): string | null {
   const match = content.match(/\bBrowser session:\s*([A-Za-z0-9_.:-]+)/i)
   return match?.[1] ?? null
+}
+
+/** Runtime session for this exact run; content parsing keeps older rows usable. */
+export function browserSessionIdFromRun(
+  entry: AgentCallReasoningEntry
+): string | null {
+  return entry.browserSessionId?.trim()
+    || browserSessionIdFromRunContent(entry.content)
+}
+
+/** Covers both the global agent gate and the browser manager's per-profile queue. */
+export function isBrowserAgentRunWaitingInQueue(
+  entry: AgentCallReasoningEntry
+): boolean {
+  if (browserSessionIdFromRun(entry)) return false
+  if (entry.queued) return true
+  return (entry.reasoning ?? []).some(
+    item => item.type === "thought" && BROWSER_QUEUE_RE.test(item.content)
+  )
 }

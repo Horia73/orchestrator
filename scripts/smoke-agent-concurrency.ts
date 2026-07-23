@@ -19,6 +19,10 @@
 // Disable the staggered-admission ramp so the smoke runs fast (the ramp adds
 // real setTimeout spacing between fresh starts in production).
 process.env.AGENT_RAMP_MS = '0'
+// Exercise the explicit process-memory backstop independently from the
+// production RAM-derived default (which intentionally stays above Codex's
+// active provider cap).
+process.env.AGENT_MAX_RESIDENT_CODEX_PER_DEPTH = '2'
 
 import {
     acquireRun,
@@ -108,12 +112,17 @@ async function simulateAgent(opts: {
             if (children.length > 0) {
                 // delegate_parallel: release-while-waiting, then reclaim.
                 leaveTotal()
+                if (opts.isTopLevel) liveMain--
                 permit.releaseForChildren()
                 try {
                     await Promise.all(children.map(run => run()))
                 } finally {
                     await permit.reacquireForResume()
                     enterTotal()
+                    if (opts.isTopLevel) {
+                        liveMain++
+                        if (liveMain > maxMain) maxMain = liveMain
+                    }
                 }
                 await sleep(2) // post-delegation "model work"
             }
@@ -211,7 +220,7 @@ async function main() {
     check('all 111 runs completed', completedRuns === 111, `completed=${completedRuns}`)
     check('total-active never exceeded cap (8)', maxTotal <= 8, `peak=${maxTotal}`)
     check(
-        'Codex resident processes stayed at ≤2 per depth',
+        'explicit Codex process-memory backstop stayed at ≤2 per depth',
         Array.from(maxResidentsByDepth.values()).every(peak => peak <= 2),
         JSON.stringify(Object.fromEntries(maxResidentsByDepth)),
     )

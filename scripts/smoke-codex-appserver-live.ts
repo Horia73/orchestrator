@@ -76,6 +76,7 @@ try {
       nativeCoderRun: false,
       cwd: fixtureRoot,
       signal: controller.signal,
+      spawnEnv: { MOCK_API_KEY: "offline-smoke-key" },
       callbacks: {
         onThinking() {},
         onThinkingDone() {},
@@ -120,6 +121,13 @@ try {
     "delegate_to must never fall back to a flat dynamic tool"
   )
   const visibleToolNames = new Set(firstTools.map(tool => tool.name).filter((name): name is string => typeof name === "string"))
+  for (const forbidden of ["spawn_agent", "spawnAgent", "send_input", "sendInput", "resume_agent", "resumeAgent", "close_agent", "closeAgent"]) {
+    assert.equal(
+      visibleToolNames.has(forbidden),
+      false,
+      `Managed Codex request must not expose native collaboration tool ${forbidden}`
+    )
+  }
   assert.ok(visibleToolNames.has("exec"), "The fixture must actually exercise code_mode_only")
   assert.ok(visibleToolNames.has("wait"), "The fixture must actually exercise the code-mode host")
 
