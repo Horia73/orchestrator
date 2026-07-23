@@ -466,14 +466,14 @@ function AgentRunPane({
           Nested agent: {agentRoleAndName(run)}
         </div>
       )}
-      <div className="mb-4 rounded-md border border-border bg-muted/30 p-3">
-        <div className="mb-1 text-[12px] font-medium tracking-wide text-muted-foreground uppercase">
+      <details className="mb-4 rounded-md border border-border bg-muted/30">
+        <summary className="cursor-pointer px-3 py-2 text-[12px] font-medium tracking-wide text-muted-foreground uppercase">
           Prompt
-        </div>
-        <div className="agent-scroll max-h-44 overflow-auto text-[13px] break-words whitespace-pre-wrap text-muted-foreground">
+        </summary>
+        <div className="agent-scroll max-h-44 overflow-auto px-3 pb-3 text-[13px] break-words whitespace-pre-wrap text-muted-foreground">
           {run.prompt}
         </div>
-      </div>
+      </details>
       {!!run.attachments?.length && !isBrowserAgent && (
         <div className="mb-4 flex flex-wrap gap-2">
           {run.attachments.map((att) => (
