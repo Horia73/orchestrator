@@ -39,6 +39,7 @@ async function main(): Promise<void> {
     const { codexUsageForCurrentTurn } = await import('@/lib/ai/providers/codex-helpers')
     const { default: Database } = await import('better-sqlite3')
     const { initializeDatabaseSchema } = await import('@/lib/db-schema')
+    const { retryTransientSqliteRecovery } = await import('@/lib/observability/recovery-retry')
 
     let failures = 0
     function check(label: string, cond: unknown, detail?: unknown) {
@@ -48,6 +49,44 @@ async function main(): Promise<void> {
     }
 
     updateConfig({ timezone: 'Europe/Bucharest' })
+
+    const recoverySleeps: number[] = []
+    let recoveryAttempts = 0
+    const recoveredAfterContention = await retryTransientSqliteRecovery(
+        () => {
+            recoveryAttempts++
+            if (recoveryAttempts < 3) {
+                throw Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' })
+            }
+            return 'sealed'
+        },
+        {
+            initialDelayMs: 25,
+            sleep: async delayMs => { recoverySleeps.push(delayMs) },
+        },
+    )
+    check(
+        'startup recovery retries transient SQLite contention with backoff',
+        recoveredAfterContention === 'sealed'
+        && recoveryAttempts === 3
+        && recoverySleeps.join(',') === '25,50',
+        { recoveredAfterContention, recoveryAttempts, recoverySleeps },
+    )
+    let permanentAttempts = 0
+    await retryTransientSqliteRecovery(
+        () => {
+            permanentAttempts++
+            throw new Error('schema mismatch')
+        },
+        { sleep: async () => undefined },
+    ).then(
+        () => check('startup recovery surfaces non-contention errors', false),
+        error => check(
+            'startup recovery surfaces non-contention errors without retrying',
+            permanentAttempts === 1 && error instanceof Error && error.message === 'schema mismatch',
+            { permanentAttempts, error: String(error) },
+        ),
+    )
 
     const now = Date.now()
     const legacyUsageDb = new Database(path.join(tmpRoot, 'legacy-codex-usage.db'))

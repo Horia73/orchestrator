@@ -449,6 +449,9 @@ export function sealInterruptedStreamingRequestLogs(options?: {
     now?: number
     activeRequestIds?: ReadonlySet<string>
     startedBefore?: number | null
+    /** Startup recovery opts into throwing so transient SQLite contention can
+     * be retried. Ad-hoc callers retain the historical best-effort behavior. */
+    throwOnError?: boolean
 }): number {
     const now = options?.now ?? Date.now()
     const activeIds = options?.activeRequestIds ?? activeRequestLogIds
@@ -480,6 +483,7 @@ export function sealInterruptedStreamingRequestLogs(options?: {
         })
         tx()
     } catch (err) {
+        if (options?.throwOnError) throw err
         console.error('[observability] failed to seal interrupted streams:', err)
         return 0
     }

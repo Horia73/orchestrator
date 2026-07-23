@@ -79,7 +79,29 @@ async function initializeBackgroundRuntime(): Promise<void> {
     // logs or detached jobs that are still alive in the old process.
     try {
         const { sealInterruptedStreamingRequestLogs } = await import('@/lib/observability/store')
-        await forEachProfile(() => sealInterruptedStreamingRequestLogs())
+        const { retryTransientSqliteRecovery } = await import('@/lib/observability/recovery-retry')
+        await forEachProfile(async (profileId) => {
+            try {
+                await retryTransientSqliteRecovery(
+                    () => sealInterruptedStreamingRequestLogs({ throwOnError: true }),
+                    {
+                        onRetry: (_error, attempt, delayMs) => {
+                            console.warn(
+                                `[observability] profile ${profileId} recovery hit SQLite contention; `
+                                + `retrying after ${delayMs}ms (attempt ${attempt + 1}).`,
+                            )
+                        },
+                    },
+                )
+            } catch (error) {
+                // One damaged profile must not suppress recovery and all
+                // background machinery for every other profile.
+                console.error(
+                    `[observability] failed to seal interrupted streams for profile ${profileId}`,
+                    error,
+                )
+            }
+        })
     } catch (err) {
         console.error('[observability] failed to seal interrupted profile streams', err)
     }
