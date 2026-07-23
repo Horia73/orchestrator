@@ -13,15 +13,14 @@ interface ChildMessage {
 }
 
 async function childMain() {
-    const { acquireFleetRun } = await import('@/lib/ai/fleet-concurrency')
+    const { acquireRun } = await import('@/lib/ai/concurrency-gate')
     const workerId = process.env.ORCHESTRATOR_AI_WORKER_ID || 'unknown'
     try {
-        const permit = await acquireFleetRun({
+        const permit = await acquireRun({
             topLevel: true,
+            priority: 'background',
             provider: 'codex',
             depth: 1,
-            residentProvider: 'codex',
-            limits: { total: 1, main: 1, provider: 1, residentPerDepth: 1 },
         })
         process.send?.({ type: 'acquired', workerId } satisfies ChildMessage)
         await new Promise<void>(resolve => {
@@ -60,6 +59,9 @@ function spawnWorker(workerId: 'blue' | 'green', gatePath: string): ChildProcess
             ORCHESTRATOR_AI_WORKER_PROCESS: '1',
             ORCHESTRATOR_AI_WORKER_ID: workerId,
             ORCHESTRATOR_AI_FLEET_GATE_PATH: gatePath,
+            AGENT_TOTAL_CONCURRENCY: '1',
+            AGENT_MAX_RESIDENT_CODEX_PER_DEPTH: '1',
+            AGENT_RAMP_MS: '0',
         },
         stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
     })
@@ -91,6 +93,18 @@ async function parentMain() {
     try {
         blue = spawnWorker('blue', gatePath)
         assert.deepEqual(await nextMessage(blue), { type: 'acquired', workerId: 'blue' })
+        const admittedDb = new Database(gatePath, { readonly: true })
+        const admitted = admittedDb.prepare(`
+            SELECT holdsTotal total, holdsMain legacyMain, provider legacyProvider,
+                   residentProvider resident
+            FROM leases
+        `).get() as { total: number; legacyMain: number; legacyProvider: string | null; resident: string | null }
+        admittedDb.close()
+        assert.deepEqual(
+            admitted,
+            { total: 1, legacyMain: 0, legacyProvider: null, resident: 'codex' },
+            'Fleet admission must use only the global active slot; legacy main/provider partitions stay empty',
+        )
 
         green = spawnWorker('green', gatePath)
         let greenAcquired = false
@@ -105,15 +119,17 @@ async function parentMain() {
         assert.deepEqual(await nextMessage(blue), { type: 'active_released', workerId: 'blue' })
         const db = new Database(gatePath, { readonly: true })
         const released = db.prepare(`
-            SELECT COALESCE(SUM(holdsTotal), 0) total, COALESCE(SUM(holdsMain), 0) main,
-                   COUNT(provider) provider, COUNT(residentProvider) resident
+            SELECT COALESCE(SUM(holdsTotal), 0) total,
+                   COALESCE(SUM(holdsMain), 0) legacyMain,
+                   COUNT(provider) legacyProvider,
+                   COUNT(residentProvider) resident
             FROM leases
-        `).get() as { total: number; main: number; provider: number; resident: number }
+        `).get() as { total: number; legacyMain: number; legacyProvider: number; resident: number }
         db.close()
         assert.deepEqual(
             released,
-            { total: 0, main: 0, provider: 0, resident: 1 },
-            'A synchronous parent waiting on children must release every active slot and retain only process-memory residency',
+            { total: 0, legacyMain: 0, legacyProvider: 0, resident: 1 },
+            'A waiting parent must release the one global active slot, never populate removed partitions, and retain only process-memory residency',
         )
         await new Promise(resolve => setTimeout(resolve, 350))
         assert.equal(

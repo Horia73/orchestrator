@@ -82,8 +82,8 @@ export class BrowserProvider implements AIProvider {
             prevSession: options.prevSession,
             sessionMode: options.browserSessionMode,
             // A browser task can face a second, profile-local queue after the
-            // global agent gate. Do not consume active total/provider/main
-            // capacity while it waits for that concrete browser session.
+            // global agent gate. Do not consume its global active slot while it
+            // waits for that concrete browser session.
             onCapacityWait() {
                 options.toolContext?.permit?.releaseForChildren()
             },

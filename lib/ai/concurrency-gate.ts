@@ -2,25 +2,16 @@
 //
 // Why this exists: on 2026-06-21 the production box (16 GB, 0 swap) OOM-killed
 // the Node server because ~30 agents ran at once and the main process heap
-// ballooned to 9 GB. There was no global cap. Beyond the crash, even 3-4 agents
-// streaming at once starve the single Node event loop enough that the SSE
-// connection drops ("reconnecting"). This gate bounds concurrency on three
-// independent axes, each guarding a distinct failure mode:
+// ballooned to 9 GB. There was no global cap. Beyond the crash, simultaneous
+// startup bursts can starve the single Node event loop enough that the SSE
+// connection drops ("reconnecting"). This gate now has exactly one active-run
+// budget:
 //
-//   • total pool   — concurrent ACTIVE agents at ANY depth. Guards RAM (crash)
-//     and, with staggered admission, the event loop (lag). Sized ADAPTIVELY
-//     from the machine: min(RAM budget, core budget). Env override:
-//     AGENT_TOTAL_CONCURRENCY.
-//   • main pool    — concurrent TOP-LEVEL runs (parent is synthetic: scheduler,
-//     inbox reply, microscript wake, artifact repair). Defaults to total/2.
-//     Env override: AGENT_MAIN_CONCURRENCY.
-//   • provider pool — concurrent active agents PER backend (claude / codex /
-//     google / browser). Guards the upstream API rate limit (429/529): 10
-//     Claude agents at once tripped a 529, so claude is capped well under that.
-//     Env override: AGENT_MAX_PROVIDER_<NAME> (e.g. AGENT_MAX_PROVIDER_CLAUDE).
+//   • global active pool — 12 concurrent ACTIVE agents overall, regardless of
+//     depth, parentage, or provider. Env override: AGENT_TOTAL_CONCURRENCY.
 //
 // There is deliberately no cumulative per-tree spawn quota. Large trees are
-// backpressured by these active-run semaphores: excess children wait in the
+// backpressured by this one active-run semaphore: excess children wait in the
 // queue and start as capacity returns. Delegation depth and per-call shape stay
 // bounded separately, but completed work never consumes a lifetime allowance.
 // CLI app-server providers also have a small resident-process pool PER DEPTH.
@@ -33,18 +24,22 @@
 // slam the loop and drop the user's SSE. Resume re-acquisitions skip the ramp.
 //
 // Deadlock freedom: a parent that called delegate_to and is AWAITING its
-// children is idle (its model turn is paused). It RELEASES its active total +
-// provider + main slots for the duration (`releaseForChildren`) and re-acquires
-// them at the highest priority before resuming (`reacquireForResume`). The slots are thus
+// children is idle (its model turn is paused). It RELEASES its global active
+// slot for the duration (`releaseForChildren`) and re-acquires it at the highest
+// priority before resuming (`reacquireForResume`). The slots are thus
 // always available to the agents actually doing work — no hold-and-wait cycle.
-// All acquisitions use the same order (resident-depth → provider → main →
-// total), so there is no lock-ordering deadlock either.
+// Durable workers use the SQLite fleet pool directly; standalone processes use
+// the in-memory pool, so a queued run never pre-holds a second active permit.
 //
 // All state lives on globalThis so it survives Next.js hot reloads.
 
 import os from 'os'
 import { monitorEventLoopDelay, type IntervalHistogram } from 'perf_hooks'
-import { acquireFleetRun, getFleetConcurrencyStats } from '@/lib/ai/fleet-concurrency'
+import {
+    acquireFleetRun,
+    getFleetConcurrencyStats,
+    isFleetConcurrencyEnabled,
+} from '@/lib/ai/fleet-concurrency'
 
 /** Parse a positive integer env var; fall back when unset/invalid. */
 function envInt(name: string, fallback: number): number {
@@ -148,57 +143,23 @@ class PrioritySemaphore {
 }
 
 // ---------------------------------------------------------------------------
-// Adaptive limits — derived from the machine, overridable by env.
+// Global limit and host facts.
 // ---------------------------------------------------------------------------
 
-interface AdaptiveLimits {
+interface GateLimits {
     total: number
-    main: number
     cores: number
     totalMB: number
-    ramCap: number
-    coreCap: number
 }
 
-function computeAdaptiveLimits(): AdaptiveLimits {
+function computeGateLimits(): GateLimits {
     const cores = Math.max(1, os.cpus().length)
     const totalMB = Math.max(1024, Math.floor(os.totalmem() / (1024 * 1024)))
-    // Leave headroom for the main Node process, the OS, and neighbour
-    // containers; budget the rest at a conservative per-agent working set.
-    const reserveMB = envInt('AGENT_RESERVE_MB', 2000)
-    const perAgentMB = envInt('AGENT_PER_AGENT_MB', 300)
-    const ramCap = Math.max(2, Math.floor((totalMB - reserveMB) / perAgentMB))
-    // Event-loop budget: agents are mostly API-bound (idle, waiting on the
-    // upstream), but their streaming hits the single loop. ~1.5 per core keeps
-    // the loop responsive; the staggered ramp absorbs the startup spikes.
-    const coreCap = Math.max(2, Math.floor(cores * 1.5))
-    const hardMax = envInt('AGENT_TOTAL_HARD_MAX', 64)
-    const autoTotal = Math.min(ramCap, coreCap, hardMax)
-    const total = Math.max(2, envInt('AGENT_TOTAL_CONCURRENCY', autoTotal))
-    const autoMain = Math.max(1, Math.floor(total / 2))
-    const main = Math.min(total, Math.max(1, envInt('AGENT_MAIN_CONCURRENCY', autoMain)))
-    return { total, main, cores, totalMB, ramCap, coreCap }
-}
-
-/** Per-provider concurrency cap — the rate-limit guard. Claude is capped well
- *  under the level that tripped a 529 (10 concurrent). */
-function providerCap(provider: string): number {
-    const key = provider.toLowerCase()
-    const defaults: Record<string, number> = {
-        claude: 5,
-        'claude-code': 5,
-        anthropic: 5,
-        // Keep simultaneous streaming/model work conservative; the separate
-        // resident-per-depth pool below bounds waiting app-server processes.
-        codex: 3,
-        openai: 6,
-        google: 8,
-        gemini: 8,
-        browser: 2,
+    return {
+        total: envInt('AGENT_TOTAL_CONCURRENCY', 12),
+        cores,
+        totalMB,
     }
-    const envName = `AGENT_MAX_PROVIDER_${key.replace(/[^a-z0-9]+/g, '_').toUpperCase()}`
-    const fallback = defaults[key] ?? envInt('AGENT_MAX_PROVIDER_DEFAULT', 4)
-    return envInt(envName, fallback)
 }
 
 /** CLI providers keep an app-server process alive while a dynamic tool call is
@@ -209,17 +170,18 @@ function providerResidentDepthCap(provider: string): number | null {
     if (key !== 'codex' && key !== 'claude-code') return null
     // This is a process-memory safety budget, not an active-agent throttle.
     // A synchronous CLI parent keeps its app-server resident while awaiting a
-    // child even though it releases every active slot. Size the per-depth
-    // backstop from RAM and keep it above the provider's active cap, so normal
-    // model work is governed only by active concurrency (on the 16 GB
-    // production host this is 9, versus Codex's active cap of 3). Separate
-    // depth pools preserve deadlock freedom for nested delegation.
+    // child even though it releases its global active slot. Size the per-depth
+    // backstop independently from the active pool. Separate depth pools
+    // preserve deadlock freedom for nested delegation.
     const totalMB = Math.max(1024, Math.floor(os.totalmem() / (1024 * 1024)))
     const reserveMB = envInt('AGENT_RESIDENT_RESERVE_MB', 2500)
     const perProcessMB = envInt('AGENT_RESIDENT_PROCESS_MB', 350)
     const depthPools = envInt('AGENT_RESIDENT_DEPTH_POOLS', 4)
     const ramBackstop = Math.max(1, Math.floor((totalMB - reserveMB) / perProcessMB / depthPools))
-    const fallback = Math.max(providerCap(key), ramBackstop)
+    // Never let process residency become a smaller active-agent partition. All
+    // 12 global slots must remain usable by CLI agents at the same depth. The
+    // backstop only becomes observable after suspended parents accumulate.
+    const fallback = Math.max(envInt('AGENT_TOTAL_CONCURRENCY', 12), ramBackstop)
     const envName = `AGENT_MAX_RESIDENT_${key.replace(/[^a-z0-9]+/g, '_').toUpperCase()}_PER_DEPTH`
     return envInt(envName, fallback)
 }
@@ -261,10 +223,8 @@ function loopLagMs(): number {
 // ---------------------------------------------------------------------------
 
 interface GateState {
-    limits: AdaptiveLimits
-    main: PrioritySemaphore
+    limits: GateLimits
     total: PrioritySemaphore
-    providers: Map<string, PrioritySemaphore>
     /** Process-resident CLI runs, keyed by provider + delegation depth. */
     residents: Map<string, PrioritySemaphore>
     /** Timestamp (ms) the next fresh admission is allowed — drives the ramp. */
@@ -276,12 +236,10 @@ const globalForGate = globalThis as unknown as {
 }
 
 function createState(): GateState {
-    const limits = computeAdaptiveLimits()
+    const limits = computeGateLimits()
     return {
         limits,
-        main: new PrioritySemaphore(limits.main),
         total: new PrioritySemaphore(limits.total),
-        providers: new Map<string, PrioritySemaphore>(),
         residents: new Map<string, PrioritySemaphore>(),
         nextAdmitAt: 0,
     }
@@ -296,16 +254,6 @@ if (!globalForGate.__orchestratorAgentGate) {
 // shape. Production workers restart, but keeping HMR compatible prevents a
 // confusing local-only crash after this field was introduced.
 state.residents ??= new Map<string, PrioritySemaphore>()
-
-function getProviderSemaphore(provider: string): PrioritySemaphore {
-    const key = provider.toLowerCase()
-    let sem = state.providers.get(key)
-    if (!sem) {
-        sem = new PrioritySemaphore(providerCap(key))
-        state.providers.set(key, sem)
-    }
-    return sem
-}
 
 function residentKey(provider: string, depth: number): string {
     return `${provider.toLowerCase()}:${Math.max(0, Math.floor(depth))}`
@@ -344,52 +292,52 @@ function reserveRampSlot(): number {
 
 /** A held slot for one agent run. Always `dispose()` it in a finally. */
 export interface RunPermit {
-    /** Release active total + provider + main slots while this agent awaits
-     *  delegated children. A process-memory CLI slot stays held. Idempotent. */
+    /** Release the global active slot while this agent awaits delegated
+     *  children. A process-memory CLI slot stays held. Idempotent. */
     releaseForChildren(): void
-    /** Re-acquire the total + provider slots (highest priority) before resuming
-     *  the agent's own turn after its children finished. No-op if still held. */
+    /** Re-acquire the global active slot (highest priority) before resuming the
+     *  agent's own turn after its children finished. No-op if still held. */
     reacquireForResume(): Promise<void>
     /** Final release of every slot this run holds, including CLI residency. */
     dispose(): void
 }
 
 interface AcquireOpts {
-    /** True for runs whose parent is synthetic (scheduler/inbox/microscript/
-     *  repair) — these consume a `main` slot in addition to a `total` slot. */
+    /** True for runs whose parent is synthetic. Used for queue priority only;
+     *  top-level and nested work share the same global active pool. */
     topLevel: boolean
     priority: GatePriority
-    /** Backend this run will call (claude/codex/google/browser). Gated by the
-     *  per-provider rate-limit cap. Omit for runs with no upstream call. */
+    /** Backend this run will call. Used only to identify process-resident CLI
+     *  runtimes; providers do not have separate active pools. */
     provider?: string
     /** Delegation depth of this run (root conversation is 0, children 1-3). */
     depth?: number
     /** Stop queued admission immediately when the owning tree is cancelled. */
     signal?: AbortSignal
-    /** Fired once if this run has to WAIT before it can start (a pool is at
+    /** Fired once if this run has to WAIT before it can start (the pool is at
      *  capacity, or the staggered ramp is spacing it out). Lets the UI show a
      *  "queued" indicator until the run is admitted. */
     onQueued?: () => void
 }
 
-/** Acquire the slots for one agent run. Resolves once the agent may start.
- *  Acquisition order is fixed (ramp → resident-depth → provider → main →
- *  total) so concurrent acquisitions cannot deadlock on lock ordering. */
+/** Acquire the one global active slot for an agent run. Durable workers acquire
+ *  directly from the cross-process fleet pool; standalone runs acquire from
+ *  the in-memory pool. This avoids double-gate hold-and-wait. */
 export async function acquireRun(opts: AcquireOpts): Promise<RunPermit> {
     const prio = PRIORITY[opts.priority]
-
-    const providerSem = opts.provider ? getProviderSemaphore(opts.provider) : null
-    const residentSem = opts.provider
+    const fleetEnabled = isFleetConcurrencyEnabled()
+    const residentPerDepth = opts.provider
+        ? providerResidentDepthCap(opts.provider) ?? undefined
+        : undefined
+    const residentSem = !fleetEnabled && opts.provider && residentPerDepth
         ? getResidentSemaphore(opts.provider, opts.depth ?? 0)
         : null
 
-    // Will this run have to wait? (a pool is saturated, or the ramp is spacing
-    // it out). If so, tell the caller so the UI can show a "queued" card.
+    // Will this standalone run have to wait? Fleet waiting is reported by the
+    // fleet gate itself. The ramp also counts as queued until admission.
     const willBlock =
-        (providerSem ? providerSem.active >= providerSem.capacity : false) ||
         (residentSem ? residentSem.active >= residentSem.capacity : false) ||
-        (opts.topLevel ? state.main.active >= state.main.capacity : false) ||
-        state.total.active >= state.total.capacity
+        (!fleetEnabled && state.total.active >= state.total.capacity)
     // Stagger fresh starts so a fan-out burst doesn't slam the event loop.
     const rampWait = reserveRampSlot()
     if (opts.onQueued && (willBlock || rampWait > 0)) {
@@ -400,51 +348,36 @@ export async function acquireRun(opts: AcquireOpts): Promise<RunPermit> {
         }
     }
     let holdsResident = false
-    let holdsProvider = false
-    let holdsMain = false
     let holdsTotal = false
 
     let fleetPermit
     try {
         if (rampWait > 0) await abortableDelay(rampWait, opts.signal)
 
-        // A resident lease is held until dispose(), including while the parent
-        // awaits children. Acquire it before the active provider lease.
+        // Standalone CLI runs hold a local resident lease until dispose(),
+        // including while a parent awaits children. Fleet workers account for
+        // the same residency atomically in acquireFleetRun below.
         if (residentSem) {
             await residentSem.acquire(prio, opts.signal)
             holdsResident = true
         }
-        if (providerSem) {
-            await providerSem.acquire(prio, opts.signal)
-            holdsProvider = true
+        if (!fleetEnabled) {
+            await state.total.acquire(prio, opts.signal)
+            holdsTotal = true
         }
-        if (opts.topLevel) {
-            await state.main.acquire(prio, opts.signal)
-            holdsMain = true
-        }
-        await state.total.acquire(prio, opts.signal)
-        holdsTotal = true
 
         fleetPermit = await acquireFleetRun({
-            topLevel: opts.topLevel,
-            provider: opts.provider,
             limits: {
                 total: state.total.capacity,
-                main: state.main.capacity,
-                provider: opts.provider ? providerCap(opts.provider) : state.total.capacity,
-                residentPerDepth: opts.provider
-                    ? providerResidentDepthCap(opts.provider) ?? undefined
-                    : undefined,
+                residentPerDepth,
             },
             depth: opts.depth,
-            residentProvider: residentSem ? opts.provider : undefined,
+            residentProvider: residentPerDepth ? opts.provider : undefined,
             signal: opts.signal,
             onQueued: opts.onQueued,
         })
     } catch (error) {
         if (holdsTotal) state.total.release()
-        if (holdsMain) state.main.release()
-        if (holdsProvider && providerSem) providerSem.release()
         if (holdsResident && residentSem) residentSem.release()
         throw error
     }
@@ -456,33 +389,12 @@ export async function acquireRun(opts: AcquireOpts): Promise<RunPermit> {
                 holdsTotal = false
                 state.total.release()
             }
-            if (holdsProvider && providerSem) {
-                holdsProvider = false
-                providerSem.release()
-            }
-            if (holdsMain) {
-                holdsMain = false
-                state.main.release()
-            }
         },
         async reacquireForResume() {
             if (opts.signal?.aborted) throw gateAbortError()
-            // Same order as acquisition: provider before total.
-            let acquiredProviderNow = false
-            let acquiredMainNow = false
             let acquiredTotalNow = false
             try {
-                if (providerSem && !holdsProvider) {
-                    await providerSem.acquire(PRIORITY.resume, opts.signal)
-                    holdsProvider = true
-                    acquiredProviderNow = true
-                }
-                if (opts.topLevel && !holdsMain) {
-                    await state.main.acquire(PRIORITY.resume, opts.signal)
-                    holdsMain = true
-                    acquiredMainNow = true
-                }
-                if (!holdsTotal) {
+                if (!fleetEnabled && !holdsTotal) {
                     await state.total.acquire(PRIORITY.resume, opts.signal)
                     holdsTotal = true
                     acquiredTotalNow = true
@@ -493,14 +405,6 @@ export async function acquireRun(opts: AcquireOpts): Promise<RunPermit> {
                     holdsTotal = false
                     state.total.release()
                 }
-                if (acquiredProviderNow && holdsProvider && providerSem) {
-                    holdsProvider = false
-                    providerSem.release()
-                }
-                if (acquiredMainNow && holdsMain) {
-                    holdsMain = false
-                    state.main.release()
-                }
                 throw error
             }
         },
@@ -509,14 +413,6 @@ export async function acquireRun(opts: AcquireOpts): Promise<RunPermit> {
             if (holdsTotal) {
                 holdsTotal = false
                 state.total.release()
-            }
-            if (holdsMain) {
-                holdsMain = false
-                state.main.release()
-            }
-            if (holdsProvider && providerSem) {
-                holdsProvider = false
-                providerSem.release()
             }
             if (holdsResident && residentSem) {
                 holdsResident = false
@@ -543,9 +439,6 @@ function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 export const agentGateLimits = {
-    get main() {
-        return state.main.capacity
-    },
     get total() {
         return state.total.capacity
     },
@@ -553,47 +446,31 @@ export const agentGateLimits = {
 
 /** Live snapshot for observability (e.g. the /monitor page). */
 export function getAgentGateStats() {
-    const providers: Record<string, { active: number; queued: number; cap: number }> = {}
-    for (const [name, sem] of state.providers) {
-        providers[name] = { active: sem.active, queued: sem.queued, cap: sem.capacity }
-    }
     const residents: Record<string, { active: number; queued: number; cap: number }> = {}
     for (const [name, sem] of state.residents) {
         residents[name] = { active: sem.active, queued: sem.queued, cap: sem.capacity }
     }
+    const fleet = getFleetConcurrencyStats()
     return {
-        mainActive: state.main.active,
-        mainQueued: state.main.queued,
-        totalActive: state.total.active,
-        totalQueued: state.total.queued,
+        totalActive: fleet.enabled ? fleet.totalActive : state.total.active,
+        totalQueued: fleet.enabled ? 0 : state.total.queued,
         loopLagMs: Math.round(loopLagMs() * 10) / 10,
-        providers,
         residents,
-        fleet: getFleetConcurrencyStats(),
+        fleet,
         limits: {
-            main: state.main.capacity,
             total: state.total.capacity,
             cores: state.limits.cores,
             totalMB: state.limits.totalMB,
-            ramCap: state.limits.ramCap,
-            coreCap: state.limits.coreCap,
         },
     }
 }
 
-/** Test-only: override capacities so a smoke can exercise small pools without
+/** Test-only: override the global capacity so a smoke can exercise a small pool without
  *  touching env. Not used by production code. */
-export function __setGateCapacitiesForTest(main: number, total: number): void {
-    state.main.capacity = main
+export function __setGlobalAgentCapForTest(total: number): void {
     state.total.capacity = total
-    state.providers.clear()
     state.residents.clear()
     state.nextAdmitAt = 0
-}
-
-/** Test-only: set a per-provider cap. */
-export function __setProviderCapForTest(provider: string, cap: number): void {
-    state.providers.set(provider.toLowerCase(), new PrioritySemaphore(cap))
 }
 
 /** Test-only: set the resident cap for one provider/depth pool. */

@@ -113,15 +113,16 @@ const VIDEO_POLL_TIMEOUT_MS = 10 * 60_000
 export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolResult> {
     // Concurrency gate: every agent run (delegations, scheduled tasks, inbox
     // replies, microscript wakes, repairs) flows through here, so this is the
-    // single point that bounds how many agents run at once. depth 0 ⇒ this run's
-    // parent is synthetic, i.e. it is a top-level run that also takes a `main`
-    // slot. The permit threads into nested tool contexts so delegate_to calls
-    // can release/re-acquire active capacity without a cumulative tree quota.
+    // single point that bounds how many agents run at once. Top-level, nested,
+    // and provider-backed runs all take the same global slot. The permit threads
+    // into nested tool contexts so delegate_to calls can release/re-acquire that
+    // capacity without a cumulative tree quota.
     // See lib/ai/concurrency-gate.ts.
     const isTopLevel = args.parentCtx.depth === 0
     const priority: GatePriority = isTopLevel ? 'background' : 'interactive'
-    // Resolve the runtimes up front so the gate can apply the per-provider
-    // rate-limit cap (the primary candidate's backend is what this run hits).
+    // Resolve runtimes up front so CLI-backed runs can be included in the
+    // separate process-memory residency backstop. Provider choice never splits
+    // the global active-agent pool.
     const runtimes = resolveAgentRuntimeCandidates(args.target)
     // Stable id for this run, generated before admission so a "queued" card can
     // be shown while the gate makes us wait; the first attempt reuses it so the
