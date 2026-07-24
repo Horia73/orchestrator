@@ -38,6 +38,7 @@ interface PromptContract {
 
 function main() {
   const orchestrator = buildOrchestratorStaticPrompt({ bootActive: false })
+  const orchestratorWithBoot = buildOrchestratorStaticPrompt({ bootActive: true })
   const browser = buildSystemPrompt(false, "normalized-viewport", true)
   const contracts: PromptContract[] = [
     {
@@ -145,6 +146,16 @@ function main() {
     orchestrator,
     /Never launch the default persistent session[\s\S]*browser_agent cannot create or switch the managed profile/i,
     "orchestrator must not delegate incognito switching to browser_agent"
+  )
+  assert.match(
+    orchestratorWithBoot,
+    /handle that task first, then always resume onboarding in the same final response[\s\S]*end of every unrelated task while BOOT\.md exists/i,
+    "active onboarding must resume at the end of every unrelated task"
+  )
+  assert.match(
+    orchestratorWithBoot,
+    /ignores the onboarding questions or changes the subject, that is not a skip[\s\S]*Silence, ignored questions, and topic changes never authorize deleting BOOT\.md/i,
+    "ignored onboarding questions must persist until completion or explicit refusal"
   )
   assert.match(
     orchestrator,

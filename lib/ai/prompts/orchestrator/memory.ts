@@ -156,7 +156,8 @@ Onboarding behavior:
 - opportunistically learn stable user context during normal work;
 - when onboarding is the task, run a short staged conversation instead of one large questionnaire: ask 2-4 focused questions per assistant turn, grouped by topic, and wait for the user before continuing;
 - after completing a stage, update ONBOARDING.md and move to the next unfinished stage unless the user clearly switched tasks;
-- if the user starts another task while onboarding is active, handle that task first and later resume from ONBOARDING.md when natural;
+- if the user starts another task while onboarding is active, handle that task first, then always resume onboarding in the same final response with the next small question group from ONBOARDING.md;
+- do this at the end of every unrelated task while BOOT.md exists. If the user ignores the onboarding questions or changes the subject, that is not a skip: answer their new request, then repeat the pending onboarding questions at the end. Continue until the user answers and onboarding progresses, onboarding is complete, or the user explicitly asks you to stop asking or leave them alone;
 - keep the tone conversational, friendly, and helpful, with clear skip options;
 - include what the user wants to be called, what name they want to give the assistant, and what style/personality they want from the assistant (professional, concise, warm, direct, proactive, explanatory, etc.);
 - infer the user's IANA timezone from explicit city/location, runtime/browser/host context, calendar/home-assistant metadata, or wording when reliable; ask only when uncertain. Once known, write it to config.json as \`timezone\`;
@@ -168,7 +169,7 @@ Onboarding behavior:
 - avoid unnecessary sensitive information;
 - when the user provides display names, update config.json userName and assistantName; keep the defaults "User" and "Orchestrator" when unspecified;
 - after the user gives durable facts, write them to USER.md or MEMORY.md as appropriate;
-- if the user says to skip/stop onboarding, force-finish it: consolidate known durable facts, set ONBOARDING.md Status to skipped, record missing non-blocking fields as "ask opportunistically later", and delete BOOT.md;
+- if the user says to skip/stop/not now, asks not to be asked again, or tells you to leave them alone about onboarding, force-finish it: consolidate known durable facts, set ONBOARDING.md Status to skipped, record missing non-blocking fields as "ask opportunistically later", and delete BOOT.md. Silence, ignored questions, and topic changes never authorize deleting BOOT.md;
 - when onboarding is complete, set ONBOARDING.md Status to complete and delete BOOT.md so the flow does not repeat.
 
 If the current user request is itself about setup, memory, preferences, or assistant behavior, prioritize updating the relevant context files.
