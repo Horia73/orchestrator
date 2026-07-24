@@ -79,6 +79,7 @@ db.exec(`
         allowedActions TEXT NOT NULL,
         cadence TEXT NOT NULL,
         notify TEXT NOT NULL,
+        followUp TEXT,
         enabled INTEGER NOT NULL DEFAULT 1,
         state TEXT NOT NULL,
         suppressPatterns TEXT NOT NULL,

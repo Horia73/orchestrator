@@ -484,6 +484,18 @@ export function initializeDatabaseSchema(db: SqliteExecutor): void {
   } catch {
     /* column already exists */
   }
+  // Feature-store migration: Smart Monitor tables are created lazily by
+  // lib/monitor/store.ts, but an existing profile database may already have
+  // the pre-follow-up table when it is opened. Running this from the shared
+  // per-profile initializer upgrades every member profile, not only whichever
+  // profile happened to be active when the monitor module was first loaded.
+  // A brand-new database has no monitor table yet, so that harmless failure is
+  // caught here and the feature store creates the current schema afterward.
+  try {
+    db.exec(`ALTER TABLE monitor_watches ADD COLUMN followUp TEXT`)
+  } catch {
+    /* table not created yet, or column already exists */
+  }
   try {
     db.exec(
       `CREATE INDEX IF NOT EXISTS idx_conversations_origin ON conversations(origin, createdAt DESC)`

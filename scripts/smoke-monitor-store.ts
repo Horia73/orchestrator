@@ -17,6 +17,8 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 
+import Database from 'better-sqlite3'
+
 // Force a private DB path BEFORE any module imports lib/db. The DB constructor
 // reads process.cwd() — we cd into a fresh tmpdir, run the test, then exit.
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'smart-monitor-smoke-'))
@@ -47,8 +49,14 @@ async function main(): Promise<void> {
         updateMonitorWatch,
     } = await import('@/lib/monitor/store')
 
-    const { default: db } = await import('@/lib/db')
+    const {
+        default: db,
+        closeDatabaseForProfile,
+        getDatabaseForProfile,
+    } = await import('@/lib/db')
     const { MIN_CADENCE_SECONDS, MAX_CADENCE_SECONDS } = await import('@/lib/monitor/schema')
+    const { runWithProfileContext } = await import('@/lib/profiles/context')
+    const { runtimePathsForProfile } = await import('@/lib/runtime-paths')
 
     let failures = 0
     function check(label: string, cond: unknown, detail?: unknown) {
@@ -390,6 +398,85 @@ async function main(): Promise<void> {
     const signals = listWatchEvents(mainAgain.id, { kinds: ['user_signal'] })
     check('user_signal events recorded + filtered', signals.length === 2 && signals.every((e) => e.kind === 'user_signal'))
     deleteMonitorWatch(mainAgain.id)
+
+    // ---- 14. Per-profile feature schema + legacy migration -----------------
+    // The monitor module is already loaded under the admin profile. A fresh
+    // member DB must still receive the current captured feature schema.
+    const freshMemberId = 'monitor_fresh_member'
+    const freshMemberDb = getDatabaseForProfile(freshMemberId)
+    const freshColumns = freshMemberDb
+        .prepare('PRAGMA table_info(monitor_watches)')
+        .all() as Array<{ name: string }>
+    check(
+        'fresh member monitor schema includes followUp',
+        freshColumns.some((column) => column.name === 'followUp'),
+        freshColumns.map((column) => column.name),
+    )
+    const freshMemberWatch = runWithProfileContext(
+        { profileId: freshMemberId, role: 'member' },
+        () => createMonitorWatch({
+            title: 'Fresh member custom watch',
+            source: 'custom',
+            target: 'fresh member regression coverage',
+            rule: { kind: 'custom_prompt', prompt: 'Check the fresh member regression fixture.' },
+        }),
+    )
+    check('fresh member can create a watch', freshMemberWatch.id.startsWith('mw_'))
+    closeDatabaseForProfile(freshMemberId)
+
+    // Reproduce the production failure: a member profile created an older
+    // monitor_watches table before followUp existed, while the module-level
+    // migration had already run only for admin. Opening that profile must run
+    // the shared migration before any SELECT/INSERT touches followUp.
+    const legacyMemberId = 'monitor_legacy_member'
+    const legacyStateDir = runtimePathsForProfile(legacyMemberId).stateDir
+    fs.mkdirSync(legacyStateDir, { recursive: true })
+    const legacyMemberDb = new Database(path.join(legacyStateDir, 'data.db'))
+    legacyMemberDb.exec(`
+        CREATE TABLE monitor_watches (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            source TEXT NOT NULL,
+            target TEXT NOT NULL,
+            rule TEXT NOT NULL,
+            allowedActions TEXT NOT NULL,
+            cadence TEXT NOT NULL,
+            notify TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            state TEXT NOT NULL,
+            suppressPatterns TEXT NOT NULL,
+            lastCheckedAt INTEGER,
+            nextCheckAt INTEGER,
+            lastFiredAt INTEGER,
+            consecutiveErrors INTEGER NOT NULL DEFAULT 0,
+            lastError TEXT,
+            createdBy TEXT NOT NULL DEFAULT 'orchestrator',
+            createdAt INTEGER NOT NULL,
+            updatedAt INTEGER NOT NULL
+        )
+    `)
+    legacyMemberDb.close()
+
+    const migratedMemberDb = getDatabaseForProfile(legacyMemberId)
+    const migratedColumns = migratedMemberDb
+        .prepare('PRAGMA table_info(monitor_watches)')
+        .all() as Array<{ name: string }>
+    check(
+        'legacy member monitor schema migrates followUp',
+        migratedColumns.some((column) => column.name === 'followUp'),
+        migratedColumns.map((column) => column.name),
+    )
+    const migratedMemberWatch = runWithProfileContext(
+        { profileId: legacyMemberId, role: 'member' },
+        () => createMonitorWatch({
+            title: 'Migrated member Gmail watch',
+            source: 'gmail',
+            target: 'legacy member inbox',
+            rule: { kind: 'gmail_query', q: 'in:inbox' },
+        }),
+    )
+    check('legacy member can create a watch after migration', migratedMemberWatch.id.startsWith('mw_'))
+    closeDatabaseForProfile(legacyMemberId)
 
     console.log(`\n${failures === 0 ? '✅ ALL OK' : `❌ ${failures} failure(s)`}`)
     process.exit(failures === 0 ? 0 : 1)
